@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/netip"
 	"time"
@@ -39,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	ctrlhlp "github.com/stackitcloud/cluster-api-provider-stackit/internal/controller/helpers"
 	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/util"
@@ -47,8 +47,6 @@ import (
 const (
 	// defaultAPIServerPort is used when an LB is created without an explicit port.
 	defaultAPIServerPort int32 = 6443
-
-	bootstrapTargetName = "capi-bootstrap-placeholder"
 
 	cloudInitRefKindSecret = "Secret"
 
@@ -124,108 +122,153 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 	}
 	sc.Status.FailureDomains = stackitFailureDomains(sc.Spec.Region)
 
-	cloudClient, err := r.buildCloudClient(ctx, sc)
+	cloudClient, err := ctrlhlp.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
 	if err != nil {
 		sc.Status.Ready = false
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterCredentialsReadyCondition,
-			metav1.ConditionFalse, "CredentialsInvalid", err.Error(), sc.Generation)
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-			metav1.ConditionFalse, "CredentialsInvalid", err.Error(), sc.Generation)
-		// Auth/invalid input errors should not aggressively requeue.
-		if cloud.IsUnauthorized(err) || cloud.IsInvalidInput(err) || errors.Is(err, util.ErrCredentialsInvalid) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrlhlp.CredentialFailureResult(
+			&sc.Status.Conditions,
+			sc.Generation,
+			err,
+			infrav1.ClusterCredentialsReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 	}
-	util.SetCondition(&sc.Status.Conditions, infrav1.ClusterCredentialsReadyCondition,
-		metav1.ConditionTrue, "Available", "", sc.Generation)
+	ctrlhlp.SetConditions(
+		&sc.Status.Conditions,
+		sc.Generation,
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterCredentialsReadyCondition,
+	)
 
 	network, err := cloudClient.GetNetwork(ctx, sc.Spec.Network.ID)
 	if err != nil {
 		sc.Status.Ready = false
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterNetworkReadyCondition,
-			metav1.ConditionFalse, "NetworkNotFound", err.Error(), sc.Generation)
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-			metav1.ConditionFalse, "NetworkNotFound", err.Error(), sc.Generation)
-		if cloud.IsRetryable(err) {
-			return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
-		}
-		return ctrl.Result{}, nil
+		return ctrlhlp.CloudFailureResult(
+			&sc.Status.Conditions,
+			sc.Generation,
+			"NetworkNotFound",
+			err,
+			retryableErrorRequeueAfter,
+			false,
+			infrav1.ClusterNetworkReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 	}
-	util.SetCondition(&sc.Status.Conditions, infrav1.ClusterNetworkReadyCondition,
-		metav1.ConditionTrue, "Available", "", sc.Generation)
+	ctrlhlp.SetConditions(
+		&sc.Status.Conditions,
+		sc.Generation,
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterNetworkReadyCondition,
+	)
 
 	if sc.Spec.APIServerLoadBalancer.Enabled {
-		lb, err := cloudClient.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-			Name:      sc.Name + "-apiserver",
-			ProjectID: sc.Spec.ProjectID,
-			Region:    sc.Spec.Region,
-			NetworkID: sc.Spec.Network.ID,
-			Port:      defaultAPIServerPort,
-			Tags:      util.ClusterTags(sc.Name, sc.Namespace, sc.Spec.AdditionalLabels),
-			Targets: []cloud.LoadBalancerTargetInput{{
-				Name: bootstrapTargetName,
-				IP:   bootstrapTargetIP(network),
-				Port: defaultAPIServerPort,
-			}},
-		})
+		lb, err := cloudClient.EnsureAPIServerLoadBalancer(
+			ctx,
+			ctrlhlp.APIServerLoadBalancerInput(
+				sc,
+				[]cloud.LoadBalancerTargetInput{ctrlhlp.BootstrapAPIServerLoadBalancerTarget(bootstrapTargetIP(network))},
+			),
+		)
 		if err != nil {
 			sc.Status.Ready = false
-			util.SetCondition(&sc.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition,
-				metav1.ConditionFalse, "LoadBalancerError", err.Error(), sc.Generation)
-			util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-				metav1.ConditionFalse, "LoadBalancerError", err.Error(), sc.Generation)
-			if cloud.IsRetryable(err) {
-				return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
-			}
-			return ctrl.Result{}, nil
+			return ctrlhlp.CloudFailureResult(
+				&sc.Status.Conditions,
+				sc.Generation,
+				"LoadBalancerError",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterLoadBalancerReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
 		}
 		if lb != nil {
 			sc.Status.APIServerLoadBalancerID = lb.ID
 		}
 		if lb == nil || lb.IP == "" {
 			sc.Status.Ready = false
-			util.SetCondition(&sc.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition,
-				metav1.ConditionFalse, "Provisioning", "waiting for API server load balancer IP address", sc.Generation)
-			util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-				metav1.ConditionFalse, "Provisioning", "waiting for API server load balancer IP address", sc.Generation)
+			ctrlhlp.SetConditions(
+				&sc.Status.Conditions,
+				sc.Generation,
+				metav1.ConditionFalse,
+				"Provisioning",
+				"waiting for API server load balancer IP address",
+				infrav1.ClusterLoadBalancerReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		sc.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: lb.IP, Port: defaultAPIServerPort}
-		sc.Status.APIServerEndpoint = sc.Spec.ControlPlaneEndpoint
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition,
-			metav1.ConditionTrue, "Available", "", sc.Generation)
+		if lb == nil {
+			return ctrl.Result{}, fmt.Errorf("%w: API server load balancer is nil", cloud.ErrTransient)
+		}
+		endpoint := clusterv1.APIEndpoint{
+			Host: lb.IP,
+			Port: defaultAPIServerPort,
+		}
+		sc.Spec.ControlPlaneEndpoint = endpoint
+		sc.Status.APIServerEndpoint = endpoint
+		ctrlhlp.SetConditions(
+			&sc.Status.Conditions,
+			sc.Generation,
+			metav1.ConditionTrue,
+			"Available",
+			"",
+			infrav1.ClusterLoadBalancerReadyCondition,
+		)
 	} else if sc.Spec.ControlPlaneEndpoint.Host != "" {
 		sc.Status.APIServerEndpoint = sc.Spec.ControlPlaneEndpoint
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition,
-			metav1.ConditionTrue, "Skipped", "external endpoint provided", sc.Generation)
+		ctrlhlp.SetConditions(
+			&sc.Status.Conditions,
+			sc.Generation,
+			metav1.ConditionTrue,
+			"Skipped",
+			"external endpoint provided",
+			infrav1.ClusterLoadBalancerReadyCondition,
+		)
 	} else {
 		sc.Status.Ready = false
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition,
-			metav1.ConditionFalse, "EndpointMissing", "apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty", sc.Generation)
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-			metav1.ConditionFalse, "EndpointMissing", "apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty", sc.Generation)
+		ctrlhlp.SetConditions(
+			&sc.Status.Conditions,
+			sc.Generation,
+			metav1.ConditionFalse,
+			"EndpointMissing",
+			"apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty",
+			infrav1.ClusterLoadBalancerReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{}, nil
 	}
 
 	if result, ready, err := r.reconcileBastion(ctx, cloudClient, sc); err != nil {
 		sc.Status.Ready = false
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterBastionReadyCondition,
-			metav1.ConditionFalse, "BastionError", err.Error(), sc.Generation)
-		util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-			metav1.ConditionFalse, "BastionError", err.Error(), sc.Generation)
-		if cloud.IsRetryable(err) {
-			return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
-		}
-		return ctrl.Result{}, nil
+		return ctrlhlp.CloudFailureResult(
+			&sc.Status.Conditions,
+			sc.Generation,
+			"BastionError",
+			err,
+			retryableErrorRequeueAfter,
+			false,
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 	} else if !ready {
 		return result, nil
 	}
 
 	sc.Status.Ready = true
 	sc.Status.Initialization.Provisioned = true
-	util.SetCondition(&sc.Status.Conditions, infrav1.ClusterReadyCondition,
-		metav1.ConditionTrue, "Available", "", sc.Generation)
+	ctrlhlp.SetConditions(
+		&sc.Status.Conditions,
+		sc.Generation,
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterReadyCondition,
+	)
 	log.V(1).Info("StackitCluster ready", "endpoint", sc.Status.APIServerEndpoint)
 	return ctrl.Result{}, nil
 }
@@ -282,7 +325,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	cloudClient cloud.Client,
 	sc *infrav1.StackitCluster,
 ) (ctrl.Result, bool, error) {
-	input := bastionInput(sc, nil)
+	input := ctrlhlp.BastionInput(sc, nil)
 	status := cloud.Bastion{
 		ServerID:        sc.Status.Bastion.ServerID,
 		PublicIPID:      sc.Status.Bastion.PublicIPID,
@@ -292,7 +335,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 
 	if !sc.Spec.Bastion.Enabled {
 		if hasBastionStatus(sc.Status.Bastion) {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, nodeSSHAccessTags(sc)); err != nil {
+			if err := cloudClient.DeleteNodeSSHAccess(ctx, ctrlhlp.NodeSSHAccessTags(sc)); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			if err := cloudClient.DeleteBastion(ctx, input, status); err != nil {
@@ -326,7 +369,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	input.CloudInit = cloudInit
 
 	if bastionNeedsRecreate(sc, cloudInit) {
-		if err := cloudClient.DeleteNodeSSHAccess(ctx, nodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
+		if err := cloudClient.DeleteNodeSSHAccess(ctx, ctrlhlp.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
 			return ctrl.Result{}, false, err
 		}
 		if err := cloudClient.DeleteBastion(ctx, input, status); err != nil && !cloud.IsNotFound(err) {
@@ -375,27 +418,37 @@ func (r *StackitClusterReconciler) reconcileBastion(
 
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope.ClusterScope) error {
 	sc := s.StackitCluster
-	if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) {
-		cloudClient, err := r.buildCloudClient(ctx, sc)
+	if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) || sc.Spec.APIServerLoadBalancer.Enabled {
+		cloudClient, err := ctrlhlp.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
 		if err != nil {
 			// If we cannot reach the cloud during delete, surface the condition
 			// but do not block forever; finalizer removal is gated on the LB
 			// deletion succeeding (or being already absent).
-			util.SetCondition(&sc.Status.Conditions, infrav1.ClusterCredentialsReadyCondition,
-				metav1.ConditionFalse, "CredentialsInvalid", err.Error(), sc.Generation)
+			ctrlhlp.SetConditions(
+				&sc.Status.Conditions,
+				sc.Generation,
+				metav1.ConditionFalse,
+				"CredentialsInvalid",
+				err.Error(),
+				infrav1.ClusterCredentialsReadyCondition,
+			)
 			return err
 		}
-		if sc.Status.APIServerLoadBalancerID != "" {
-			if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, sc.Status.APIServerLoadBalancerID); err != nil && !cloud.IsNotFound(err) {
+		loadBalancerID, err := ctrlhlp.ResolveAPIServerLoadBalancerID(ctx, cloudClient, sc)
+		if err != nil {
+			return err
+		}
+		if loadBalancerID != "" {
+			if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
 				return err
 			}
 			sc.Status.APIServerLoadBalancerID = ""
 		}
 		if hasBastionStatus(sc.Status.Bastion) {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, nodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
+			if err := cloudClient.DeleteNodeSSHAccess(ctx, ctrlhlp.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
 				return err
 			}
-			if err := cloudClient.DeleteBastion(ctx, bastionInput(sc, nil), cloud.Bastion{
+			if err := cloudClient.DeleteBastion(ctx, ctrlhlp.BastionInput(sc, nil), cloud.Bastion{
 				ServerID:        sc.Status.Bastion.ServerID,
 				PublicIPID:      sc.Status.Bastion.PublicIPID,
 				PublicIP:        sc.Status.Bastion.PublicIP,
@@ -408,38 +461,6 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 	}
 	controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
 	return nil
-}
-
-func bastionInput(sc *infrav1.StackitCluster, cloudInit []byte) cloud.BastionInput {
-	deleteOnTermination := true
-	if sc.Spec.Bastion.RootVolume.DeleteOnTermination != nil {
-		deleteOnTermination = *sc.Spec.Bastion.RootVolume.DeleteOnTermination
-	}
-	tags := util.ClusterTags(sc.Name, sc.Namespace, sc.Spec.AdditionalLabels)
-	tags[util.LabelResourceRole] = util.ResourceRoleBastion
-	return cloud.BastionInput{
-		Name:         sc.Name + "-bastion",
-		ProjectID:    sc.Spec.ProjectID,
-		Region:       sc.Spec.Region,
-		NetworkID:    sc.Spec.Network.ID,
-		ImageID:      sc.Spec.Bastion.ImageID,
-		MachineType:  sc.Spec.Bastion.MachineType,
-		SSHKeyName:   sc.Spec.Bastion.SSHKeyName,
-		AllowedCIDRs: sc.Spec.Bastion.AllowedCIDRs,
-		Tags:         tags,
-		RootVolume: cloud.RootVolumeInput{
-			SizeGiB:             sc.Spec.Bastion.RootVolume.SizeGiB,
-			PerformanceClass:    sc.Spec.Bastion.RootVolume.PerformanceClass,
-			DeleteOnTermination: deleteOnTermination,
-		},
-		CloudInit: cloudInit,
-	}
-}
-
-func nodeSSHAccessTags(sc *infrav1.StackitCluster) map[string]string {
-	tags := util.ClusterTags(sc.Name, sc.Namespace, sc.Spec.AdditionalLabels)
-	tags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
-	return tags
 }
 
 func validateBastionSpec(spec infrav1.StackitBastionSpec) error {
@@ -519,35 +540,19 @@ func (r *StackitClusterReconciler) resolveBastionCloudInit(ctx context.Context, 
 	}
 }
 
-func (r *StackitClusterReconciler) buildCloudClient(ctx context.Context, sc *infrav1.StackitCluster) (cloud.Client, error) {
-	if r.CloudClientFactory == nil {
-		return nil, errors.New("CloudClientFactory is not configured")
-	}
-	secret := &corev1.Secret{}
-	ns := sc.Spec.CredentialsSecretRef.Namespace
-	if ns == "" {
-		ns = sc.Namespace
-	}
-	key := types.NamespacedName{Namespace: ns, Name: sc.Spec.CredentialsSecretRef.Name}
-	if err := r.Get(ctx, key, secret); err != nil {
-		return nil, fmt.Errorf("get credentials secret %s: %w", key, err)
-	}
-	creds, err := util.ParseCredentialsSecret(secret, sc.Spec.ProjectID, sc.Spec.Region)
-	if err != nil {
-		return nil, err
-	}
-	return r.CloudClientFactory(ctx, creds)
-}
-
 func (r *StackitClusterReconciler) stackitClusterRequestsForCluster(_ context.Context, obj client.Object) []reconcile.Request {
 	cluster, ok := obj.(*clusterv1.Cluster)
-	if !ok || !isStackitClusterRef(cluster.Spec.InfrastructureRef) {
+	if !ok {
+		return nil
+	}
+	ref := cluster.Spec.InfrastructureRef
+	if ref.APIGroup != infrav1.GroupVersion.Group || ref.Kind != "StackitCluster" || ref.Name == "" {
 		return nil
 	}
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{
 			Namespace: cluster.Namespace,
-			Name:      cluster.Spec.InfrastructureRef.Name,
+			Name:      ref.Name,
 		},
 	}}
 }
@@ -583,12 +588,6 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCloudInitRef(ctx con
 		})
 	}
 	return requests
-}
-
-func isStackitClusterRef(ref clusterv1.ContractVersionedObjectReference) bool {
-	return ref.APIGroup == infrav1.GroupVersion.Group &&
-		ref.Kind == "StackitCluster" &&
-		ref.Name != ""
 }
 
 // SetupWithManager registers the controller with the manager.

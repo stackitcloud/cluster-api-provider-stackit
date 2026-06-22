@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
@@ -174,6 +175,20 @@ func enableStackitClusterLoadBalancer(ctx context.Context, name, namespace strin
 	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, stackitCluster)).To(Succeed())
 	stackitCluster.Spec.APIServerLoadBalancer.Enabled = true
 	Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
+}
+
+func reconcileStackitClusterOnce(ctx context.Context, name, namespace string, cloudClient cloud.Client) {
+	reconciler := &StackitClusterReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+		CloudClientFactory: func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return cloudClient, nil
+		},
+	}
+	_, err := reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: name, Namespace: namespace},
+	})
+	Expect(err).NotTo(HaveOccurred())
 }
 
 func expectCondition(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason string) {

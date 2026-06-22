@@ -283,6 +283,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		updateMachineControlPlaneLabel(ctx, machineName, namespace)
 		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
+		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
 		createBootstrapSecret(ctx, bootstrapName)
 
 		result, err := reconciler.Reconcile(ctx, request)
@@ -319,6 +320,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		updateMachineControlPlaneLabel(ctx, machineName, namespace)
 		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
+		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
 		createBootstrapSecret(ctx, bootstrapName)
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())

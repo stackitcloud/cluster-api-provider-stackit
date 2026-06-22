@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	ctrlhlp "github.com/stackitcloud/cluster-api-provider-stackit/internal/controller/helpers"
 	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud/fake"
 )
@@ -151,7 +152,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			Name:                   got.Name + "-node-ssh",
 			ServerID:               got.Status.Bastion.ServerID,
 			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   nodeSSHAccessTags(got),
+			Tags:                   ctrlhlp.NodeSSHAccessTags(got),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
@@ -184,7 +185,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			Name:                   got.Name + "-node-ssh",
 			ServerID:               got.Status.Bastion.ServerID,
 			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   nodeSSHAccessTags(got),
+			Tags:                   ctrlhlp.NodeSSHAccessTags(got),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
@@ -303,7 +304,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			Name:                   got.Name + "-node-ssh",
 			ServerID:               got.Status.Bastion.ServerID,
 			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   nodeSSHAccessTags(got),
+			Tags:                   ctrlhlp.NodeSSHAccessTags(got),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
