@@ -10,4 +10,4 @@ config:
     - cmd
     - internal
     - pkg
-  go_main: cmd/main.go
+  go_main: cmd/manager/main.go
