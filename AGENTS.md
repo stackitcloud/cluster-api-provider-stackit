@@ -15,8 +15,8 @@ STACKIT-VM based clusters (unmanaged), and aims to support SKE clusters (managed
 cmd/main.go                    Manager entry (registers controllers/webhooks)
 api/<version>/*_types.go       CRD schemas (+kubebuilder markers)
 api/<version>/zz_generated.*   Auto-generated (DO NOT EDIT)
-internal/controller/*          Reconciliation logic
-internal/webhook/*             Validation/defaulting (if present)
+controller/*                   Reconciliation logic
+webhook/*                      Validation/defaulting (if present)
 config/crd/bases/*             Generated CRDs (DO NOT EDIT)
 config/rbac/role.yaml          Generated RBAC (DO NOT EDIT)
 config/samples/*               Example CRs (edit these)
@@ -27,8 +27,8 @@ PROJECT                        Kubebuilder metadata Auto-generated (DO NOT EDIT)
 **Multi-group layout** (for projects with multiple API groups):
 ```
 api/<group>/<version>/*_types.go       CRD schemas by group
-internal/controller/<group>/*          Controllers by group
-internal/webhook/<group>/<version>/*   Webhooks by group and version (if present)
+controller/<group>/*                   Controllers by group
+webhook/<group>/<version>/*            Webhooks by group and version (if present)
 ```
 
 Multi-group layout organizes APIs by group name (e.g., `batch`, `apps`). Check the `PROJECT` file for `multigroup: true`.
@@ -36,8 +36,8 @@ Multi-group layout organizes APIs by group name (e.g., `batch`, `apps`). Check t
 **To convert to multi-group layout:**
 1. Run: `kubebuilder edit --multigroup=true`
 2. Move APIs: `mkdir -p api/<group> && mv api/<version> api/<group>/`
-3. Move controllers: `mkdir -p internal/controller/<group> && mv internal/controller/*.go internal/controller/<group>/`
-4. Move webhooks (if present): `mkdir -p internal/webhook/<group> && mv internal/webhook/<version> internal/webhook/<group>/`
+3. Move controllers: `mkdir -p controller/<group> && mv controller/*.go controller/<group>/`
+4. Move webhooks (if present): `mkdir -p webhook/<group> && mv webhook/<version> webhook/<group>/`
 5. Update import paths in all files
 6. Fix `path` in `PROJECT` file for each resource
 7. Update test suite CRD paths (add one more `..` to relative paths)
@@ -200,7 +200,7 @@ kubectl logs -n <project>-system deployment/<project>-controller-manager -c mana
 
 ### Controller Design
 
-**RBAC markers in** `internal/controller/*_controller.go`:
+**RBAC markers in** `controller/*_controller.go`:
 
 ```go
 // +kubebuilder:rbac:groups=mygroup.example.com,resources=mykinds,verbs=get;list;watch;create;update;patch;delete

@@ -7,7 +7,9 @@ config:
     - go.mod
     - go.sum
     - api
+    - cloud
     - cmd
-    - internal
-    - pkg
+    - controller
+    - util
+    - webhook
   go_main: cmd/manager/main.go

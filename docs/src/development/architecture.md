@@ -13,10 +13,10 @@ Key packages:
 
 ```text
 api/v1alpha1/             Provider API types
-internal/controller/      Reconciliation logic
-pkg/cloud/                Cloud client interface and SDK implementation
-pkg/cloud/fake/           In-memory fake for tests
-pkg/util/                 Shared helpers
+controller/               Reconciliation logic
+cloud/                    Cloud client interface and SDK implementation
+cloud/fake/               In-memory fake for tests
+util/                     Shared helpers
 templates/                clusterctl templates
 config/                   Kubebuilder manifests
 ```
