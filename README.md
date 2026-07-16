@@ -1,7 +1,7 @@
 # Kubernetes Cluster API Provider STACKIT (CAPSTK)
 
 <p align="center">
-<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png"  width="100x"><a href="https://stackit.com/"><img width="192x" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
+<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png"  width="100x"><a href="https://stackit.com/"><img width="192x" src="docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
 </p>
 
 <p align="center">
