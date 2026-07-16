@@ -96,11 +96,7 @@ coverage. SDK integration tests are opt-in and require real STACKIT credentials.
 ## STACKIT ProviderID Compatibility
 
 The providerID format is verified against the local `cloud-provider-stackit`
-repository at:
-
-```text
-/Users/c.voigt/go/src/tangled.org/voigt.tngl.sh/cloud-provider-stackit
-```
+repository.
 
 Relevant reference points:
 

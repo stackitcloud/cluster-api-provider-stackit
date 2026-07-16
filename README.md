@@ -1,11 +1,11 @@
 # Kubernetes Cluster API Provider STACKIT (CAPSTK)
 
 <p align="center">
-<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png"  width="100x"><a href="https://stackit.com/"><img width="192x" src="https://raw.githubusercontent.com/voigt/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
+<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png"  width="100x"><a href="https://stackit.com/"><img width="192x" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
 </p>
 
 <p align="center">
-    <a href="https://pkg.go.dev/github.com/voigt/cluster-api-provider-stackit"><img src="https://pkg.go.dev/badge/github.com/voigt/cluster-api-provider-stackit.svg" alt="Go Reference"></a>
+    <a href="https://pkg.go.dev/github.com/stackitcloud/cluster-api-provider-stackit"><img src="https://pkg.go.dev/badge/github.com/stackitcloud/cluster-api-provider-stackit.svg" alt="Go Reference"></a>
 </p>
 
 ------
@@ -30,7 +30,7 @@ Cluster API Provider STACKIT is abbreviated as CAPSTK.
 
 ## Documentation
 
-Please see our [book](https://capstk.voigt.fyi/) for in-depth documentation.
+Please see our [book](https://stackitcloud.github.io/cluster-api-provider-stackit) for in-depth documentation.
 
 Use `make serve-book` to serve the book locally from this repository.
 

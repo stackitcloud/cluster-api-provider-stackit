@@ -39,7 +39,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	infrastructurev1alpha1 "github.com/voigt/cluster-api-provider-stackit/api/v1alpha1"
+	infrastructurev1alpha1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

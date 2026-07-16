@@ -25,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	infrav1 "github.com/voigt/cluster-api-provider-stackit/api/v1alpha1"
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 )
 
 const (

@@ -5,8 +5,8 @@ src = "src"
 title = "Cluster API Provider STACKIT"
 
 [output.html]
-git-repository-url = "https://github.com/voigt/cluster-api-provider-stackit"
-edit-url-template = "https://github.com/voigt/cluster-api-provider-stackit/edit/main/docs/{path}"
+git-repository-url = "https://github.com/stackitcloud/cluster-api-provider-stackit"
+edit-url-template = "https://github.com/stackitcloud/cluster-api-provider-stackit/edit/main/docs/{path}"
 no-section-label = true
 admonitions = true
 

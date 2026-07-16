@@ -18,7 +18,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/patch"
 
-	infrav1 "github.com/voigt/cluster-api-provider-stackit/api/v1alpha1"
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 )
 
 // MachineScope holds the per-reconcile state for a StackitMachine.

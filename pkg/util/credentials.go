@@ -16,7 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/voigt/cluster-api-provider-stackit/pkg/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud"
 )
 
 // Keys expected in the credentials Secret. The format mirrors the existing

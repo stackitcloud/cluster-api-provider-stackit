@@ -7,7 +7,7 @@ domain: cluster.x-k8s.io
 layout:
 - go.kubebuilder.io/v4
 projectName: cluster-api-provider-stackit
-repo: github.com/voigt/cluster-api-provider-stackit
+repo: github.com/stackitcloud/cluster-api-provider-stackit
 resources:
 - api:
     crdVersion: v1
@@ -16,7 +16,7 @@ resources:
   domain: cluster.x-k8s.io
   group: infrastructure
   kind: StackitCluster
-  path: github.com/voigt/cluster-api-provider-stackit/api/v1alpha1
+  path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true
@@ -29,7 +29,7 @@ resources:
   domain: cluster.x-k8s.io
   group: infrastructure
   kind: StackitMachine
-  path: github.com/voigt/cluster-api-provider-stackit/api/v1alpha1
+  path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true
@@ -41,7 +41,7 @@ resources:
   domain: cluster.x-k8s.io
   group: infrastructure
   kind: StackitClusterTemplate
-  path: github.com/voigt/cluster-api-provider-stackit/api/v1alpha1
+  path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true
@@ -53,7 +53,7 @@ resources:
   domain: cluster.x-k8s.io
   group: infrastructure
   kind: StackitMachineTemplate
-  path: github.com/voigt/cluster-api-provider-stackit/api/v1alpha1
+  path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true

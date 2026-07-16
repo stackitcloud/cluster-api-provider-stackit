@@ -21,8 +21,8 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
-	infrav1 "github.com/voigt/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/voigt/cluster-api-provider-stackit/pkg/cloud"
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud"
 )
 
 const (

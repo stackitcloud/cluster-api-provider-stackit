@@ -25,9 +25,9 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	infrav1 "github.com/voigt/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/voigt/cluster-api-provider-stackit/pkg/cloud"
-	cloudfake "github.com/voigt/cluster-api-provider-stackit/pkg/cloud/fake"
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud"
+	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/pkg/cloud/fake"
 )
 
 var _ = Describe("StackitCluster Controller", func() {

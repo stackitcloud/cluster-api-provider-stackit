@@ -19,7 +19,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/voigt/cluster-api-provider-stackit/pkg/util"
+	"github.com/stackitcloud/cluster-api-provider-stackit/pkg/util"
 )
 
 func reconciliationPaused(cluster *clusterv1.Cluster, obj client.Object) (bool, string) {
