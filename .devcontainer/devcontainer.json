@@ -1,6 +1,6 @@
 {
   "name": "Kubebuilder DevContainer",
-  "image": "golang:1.25",
+  "image": "ls",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "moby": false,
@@ -13,6 +13,10 @@
   },
 
   "runArgs": ["--privileged", "--init"],
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-bashhistory,target=/commandhistory,type=volume",
+    "source=${localWorkspaceFolderBasename}-docker,target=/var/lib/docker,type=volume"
+  ],
 
   "customizations": {
     "vscode": {
@@ -27,7 +31,8 @@
   },
 
   "remoteEnv": {
-    "GO111MODULE": "on"
+    "GO111MODULE": "on",
+    "HISTFILE": "/commandhistory/.bash_history"
   },
 
   "onCreateCommand": "bash .devcontainer/post-install.sh"
