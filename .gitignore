@@ -2,6 +2,13 @@
 .env
 .stackit
 
+# Local dev/debug artifacts
+.DS_Store
+/cluster*.yaml
+/kind-config.yaml
+.devcontainer/devcontainer-lock.json
+.ssh/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
