@@ -125,6 +125,25 @@ if command -v clusterctl &> /dev/null; then
   fi
 fi
 
+# Install Cilium CLI
+if ! command -v cilium &> /dev/null; then
+  echo "Installing Cilium CLI..."
+  CILIUM_CLI_VERSION=$(curl -Ls https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+  curl -Lo /tmp/cilium-linux-${ARCH}.tar.gz "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${ARCH}.tar.gz"
+  tar xzfC /tmp/cilium-linux-${ARCH}.tar.gz /usr/local/bin
+  rm -f /tmp/cilium-linux-${ARCH}.tar.gz
+  echo "Cilium CLI installed successfully"
+fi
+
+# Generate Cilium CLI bash completion
+if command -v cilium &> /dev/null; then
+  if cilium completion bash > "${BASH_COMPLETIONS_DIR}/cilium" 2>/dev/null; then
+    echo "Cilium CLI completion installed"
+  else
+    echo "WARNING: Failed to generate Cilium CLI completion"
+  fi
+fi
+
 # Install stackit CLI
 if ! command -v stackit &> /dev/null; then
   echo "Installing stackit CLI..."
@@ -190,6 +209,7 @@ kind version
 kubebuilder version
 kubectl version --client
 clusterctl version
+cilium version --client
 stackit --version
 docker --version
 go version
