@@ -56,7 +56,7 @@ Save this as `kind-config.yaml` in the repo root before running `kind create clu
 you are not behind such a proxy, drop the `--config kind-config.yaml` flag from the command.
 
 ```sh
-kind create cluster --name capi-stackit --config kind-config.yaml
+kind create cluster --name capi-stackit
 kubectl config use-context kind-capi-stackit
 
 clusterctl init \
@@ -116,8 +116,9 @@ clusterctl init \
  After the workload API is reachable, install a CNI:
  
  ```sh
- clusterctl get kubeconfig "${CLUSTER_NAME}" -n "${NAMESPACE}" > /tmp/"${CLUSTER_NAME}".kubeconfig
- make install-workload-cni WORKLOAD_KUBECONFIG=/tmp/"${CLUSTER_NAME}".kubeconfig
+ export KUBECONF_WORKERCLUSTER=/tmp/"${CLUSTER_NAME}".kubeconfig
+ clusterctl get kubeconfig "${CLUSTER_NAME}" -n "${NAMESPACE}" > "${KUBECONF_WORKERCLUSTER}"
+ make install-workload-cni WORKLOAD_KUBECONFIG="${KUBECONF_WORKERCLUSTER}"
  ```
  
  ## Clean up
