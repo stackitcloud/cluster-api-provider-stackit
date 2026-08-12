@@ -140,7 +140,7 @@ banner. Retried 3 more times over the next minute — identical every time.
 
 To rule out a one-off broken VM, the bastion server was deleted directly to
 force the provider's "ensure exists" reconcile (the same mechanism found in
-[run2-2-ha-controlplane.md](run2-2-ha-controlplane.md)) to
+[run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md)) to
 provision a replacement.
 
 ```
@@ -171,7 +171,7 @@ True Available   # new serverID=7c8b8a93..., same reused public IP 188.34.73.218
 **Result — second finding:** the `StackitCluster` controller took over 4
 minutes to even notice the out-of-band deletion and begin recreating the
 bastion (compare to the ~1 minute noticed for a control-plane
-`StackitMachine` in [run2-2-ha-controlplane.md](run2-2-ha-controlplane.md)).
+`StackitMachine` in [run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md)).
 There is no fast active health-check for the bastion; it only picks up the
 change on its next reconcile trigger. A later attempt (deleting both the
 server *and* its public IP, see step 6) took over **15 minutes** with zero
@@ -282,7 +282,7 @@ environment and remain unverified in this run.
 - **Reconcile latency after out-of-band bastion deletion is highly
   variable** (~4 to 15+ minutes observed, vs. ~1 minute for a
   control-plane `StackitMachine` in
-  [run2-2-ha-controlplane.md](run2-2-ha-controlplane.md)) — there
+  [run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md)) — there
   is no fast active health probe for the bastion; recovery depends on
   whatever next triggers a reconcile.
 - **Deletion/cleanup remained fully correct** even after 2 forced bastion
@@ -312,15 +312,19 @@ bastion SSH path on current `main`.
   attach in `EnsureBastion` — and the same early return also delays the public
   IP assignment by one reconcile cycle. See
   [bastion-bug.md](bastion-bug.md#1-the-bastion-security-group-is-attached-twice).
-- The CIDR-narrowing variant suggested in the conclusion would **not** be a
-  valid test on current code: security-group rules are only ever added, never
-  removed, so the old CIDR would still be admitted. See
+- The CIDR-narrowing variant suggested in the conclusion is **valid and in
+  fact the cheapest way to expose a second defect** — provided it is run from
+  the network that was previously allowed. Security-group rules are only ever
+  added, never removed, so the stale rule keeps admitting the tester and the
+  expected timeout never happens; that failure is the proof. Only the
+  combination "narrow the CIDR *and* test from a never-allowed network" would
+  mislead. See
   [bastion-bug.md](bastion-bug.md#2-changing-allowedcidrs-never-revokes-the-old-access).
 - The "TCP/22 to STACKIT ranges is blocked" explanation does not survive
-  comparison with [run1-4-bastion.md](run1-4-bastion.md), where SSH to STACKIT
+  comparison with [run-main1-4-bastion.md](run-main1-4-bastion.md), where SSH to STACKIT
   bastions worked from this same environment. Both runs together point at
   IP-range reachability instead, independent of port —
-  [bastion-bug.md](bastion-bug.md#open-not-a-code-defect-the-ssh-failures)
+  [bastion-bug.md](bastion-bug.md#resolved-and-not-a-code-defect-the-ssh-failures)
   has the evidence table and a falsifiable test.
 - The `WORKER_MACHINE_COUNT` finding from step 2 is tracked as
   [bastion-bug.md](bastion-bug.md#4-cluster-template-bastionyaml-ignores-worker_machine_count).

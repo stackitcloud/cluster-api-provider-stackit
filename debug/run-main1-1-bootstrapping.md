@@ -243,4 +243,4 @@ communication works, and in-cluster DNS resolves.
 **Observation, not a defect:** scaling a `MachineDeployment` down removes an
 arbitrary Machine, not necessarily the most recently added one — expected
 upstream MachineSet behavior, worth remembering when planning scale-down
-tests (e.g. in [run1-2-ha-controlplane.md](run1-2-ha-controlplane.md)).
+tests (e.g. in [run-main1-2-ha-controlplane.md](run-main1-2-ha-controlplane.md)).

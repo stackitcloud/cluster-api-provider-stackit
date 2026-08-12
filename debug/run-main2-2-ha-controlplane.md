@@ -2,7 +2,7 @@
 
 Date: 2026-08-07
 Run: 2 of 2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Cluster: `stackit-capi-test` (scaled up from the 1-CP cluster used in [run2-1-bootstrapping.md](run2-1-bootstrapping.md))
+Cluster: `stackit-capi-test` (scaled up from the 1-CP cluster used in [run-main2-1-bootstrapping.md](run-main2-1-bootstrapping.md))
 Status: ⚠️ partial — works, but only *after* manual remediation (no `MachineHealthCheck` ships with any template); a surprising intermediate self-healing behavior was found that does **not** by itself restore the cluster
 
 Verifies that 3 control-plane nodes can join and form an HA control plane,
@@ -14,7 +14,7 @@ new leader being elected — without losing API-server availability.
 `cluster.x-k8s.io/control-plane` label are the responsibility of the
 **upstream `KubeadmControlPlane` controller**, not this provider. This
 provider's only control-plane-aware logic is `isControlPlaneMachine()` in
-[../internal/controller/stackitmachine_controller.go](../internal/controller/stackitmachine_controller.go),
+`internal/controller/stackitmachine_controller.go`,
 used to add/remove that machine's IP as an API-server load-balancer target
 (`reconcileAPIServerLoadBalancerTarget` / `deleteAPIServerLoadBalancerTarget`).
 This is therefore a black-box, cluster-operator-perspective test — there is
@@ -84,7 +84,7 @@ stackit-capi-test-control-plane-bkkfk → 03f42a7c-905c-4f16-a6eb-4cfd1f97ff2e
 ```
 
 **Result:** Leader is `...bkkfk` — the original first control-plane machine
-from [run2-1-bootstrapping.md](run2-1-bootstrapping.md), i.e. the
+from [run-main2-1-bootstrapping.md](run-main2-1-bootstrapping.md), i.e. the
 machine that was **not** cordoned in that document's scale-down test.
 
 ---
@@ -93,7 +93,7 @@ machine that was **not** cordoned in that document's scale-down test.
 
 Deleting the VM (not the `Machine` object) simulates a hard node failure,
 independent of the graceful CAPI-driven deletion path covered in
-[run2-3-deletion.md](run2-3-deletion.md).
+[run-main2-3-deletion.md](run-main2-3-deletion.md).
 
 ```
 $ kubectl --kubeconfig "${KUBECONF_WORKERCLUSTER}" get --raw='/readyz'
@@ -153,10 +153,10 @@ self-healing at first — but the **new VM never actually rejoined the
 Kubernetes cluster**: the `Node` object's `Ready` heartbeat froze at the
 moment the old VM died and never updated again, even 9 minutes after the
 replacement VM reached `ACTIVE` (well over the ~1-3 minutes normal join
-takes per [run2-1-bootstrapping.md](run2-1-bootstrapping.md)).
+takes per [run-main2-1-bootstrapping.md](run-main2-1-bootstrapping.md)).
 
 **Root cause, confirmed in code:** `ensureServer()` in
-[../internal/controller/stackitmachine_controller.go:293](../internal/controller/stackitmachine_controller.go)
+`internal/controller/stackitmachine_controller.go:293`
 does, on every reconcile, `GetServer(instanceID)`; if that returns
 `NotFound` it falls through to `FindServerByTags` and then straight to
 `CreateServer(...)` — unconditionally, with no check for whether this
@@ -299,7 +299,7 @@ What does **not** work automatically, and a new finding:
   restore the cluster, it just consumes another VM+volume silently in the
   background until an operator deletes the `Machine`. This is worth a
   closer look at
-  [../internal/controller/stackitmachine_controller.go](../internal/controller/stackitmachine_controller.go)
+  `internal/controller/stackitmachine_controller.go`
   to decide whether "instance not found → recreate" is the intended
   behavior for an already-`Ready` machine, or whether it should instead
   surface a terminal error for CAPI/an MHC to act on.

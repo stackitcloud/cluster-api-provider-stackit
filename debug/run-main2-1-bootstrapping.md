@@ -25,7 +25,7 @@ with `CONTROL_PLANE_MACHINE_COUNT=1`, `WORKER_MACHINE_COUNT=1`.
 **Note on this run:** the first attempt at this cluster hit an outbound
 network failure (later linked to STACKIT IP-range reachability from this
 environment, see
-[bastion-bug.md](bastion-bug.md#open-not-a-code-defect-the-ssh-failures)) —
+[bastion-bug.md](bastion-bug.md#resolved-and-not-a-code-defect-the-ssh-failures)) —
 the `Cluster`/`StackitCluster` were deleted cleanly and Steps 1–4 below are
 from the second, successful attempt.
 
@@ -304,7 +304,7 @@ resolves.
 arbitrary Machine — this run removed the newest node, a prior run removed
 the original one. Expected upstream MachineSet behavior, worth remembering
 when planning scale-down tests (e.g. in
-[run2-2-ha-controlplane.md](run2-2-ha-controlplane.md)).
+[run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md)).
 
 **Non-bug, self-resolving:** right after the Cilium rollout, `cilium status`
 briefly reported 4 errors from kubelet-exec DNS lookups via `1.1.1.1:53`

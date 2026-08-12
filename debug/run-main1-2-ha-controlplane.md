@@ -2,7 +2,7 @@
 
 Date: 2026-08-05
 Run: 1 of 2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Cluster: `stackit-workload` (scaled up from the 1-CP cluster used in [run1-1-bootstrapping.md](run1-1-bootstrapping.md))
+Cluster: `stackit-workload` (scaled up from the 1-CP cluster used in [run-main1-1-bootstrapping.md](run-main1-1-bootstrapping.md))
 Status: ⚠️ partial — works, but only *after* manual remediation (no `MachineHealthCheck` ships with any template)
 
 Verifies that 3 control-plane nodes can join and form an HA control plane,
@@ -14,7 +14,7 @@ new leader being elected — without losing API-server availability.
 `cluster.x-k8s.io/control-plane` label are the responsibility of the
 **upstream `KubeadmControlPlane` controller**, not this provider. This
 provider's only control-plane-aware logic is `isControlPlaneMachine()` in
-[../internal/controller/stackitmachine_controller.go](../internal/controller/stackitmachine_controller.go),
+`internal/controller/stackitmachine_controller.go`,
 used to add/remove that machine's IP as an API-server load-balancer target
 (`reconcileAPIServerLoadBalancerTarget` / `deleteAPIServerLoadBalancerTarget`).
 This is therefore a black-box, cluster-operator-perspective test — there is
@@ -101,7 +101,7 @@ to its `Machine.spec.providerID` to get the STACKIT server ID.
 
 Deleting the VM (not the `Machine` object) simulates a hard node failure,
 independent of the graceful CAPI-driven deletion path covered in
-[run1-3-deletion.md](run1-3-deletion.md).
+[run-main1-3-deletion.md](run-main1-3-deletion.md).
 
 ```
 $ kubectl --kubeconfig "${KUBECONF_WORKERCLUSTER}" get --raw='/readyz'
@@ -251,7 +251,7 @@ only Kubernetes objects and the load balancer; it never ran `stackit server
 list`. Run 2 repeated the same scenario and found that the `StackitMachine`
 reconciler had silently created a *replacement VM* that could never rejoin the
 cluster — see [machine-recreate-bug.md](machine-recreate-bug.md) and
-[run2-2-ha-controlplane.md](run2-2-ha-controlplane.md).
+[run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md).
 
 The two runs do not contradict each other; the silent recreate was simply not
 visible from the commands used here.

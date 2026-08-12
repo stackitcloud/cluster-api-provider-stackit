@@ -78,7 +78,7 @@ group before the server had a network port (state `CREATING`); it
 self-healed on the next reconcile once the server reached `ACTIVE`.
 
 **Separate, unrelated finding:** the `StackitMachine` reconciler
-([../internal/controller/stackitmachine_controller.go:131](../internal/controller/stackitmachine_controller.go))
+(`internal/controller/stackitmachine_controller.go:131`)
 hard-blocks all machine provisioning bookkeeping while
 `StackitCluster.Status.Ready == false`. Since the bastion errors above kept
 `Ready=false` for over an hour, the 4 workload `Machine` objects sat at
@@ -116,7 +116,7 @@ output isn't mirrored to the serial console on this image (it stops right
 after the last cloud-init line). Injecting a temporary debug password into
 the bastion cloud-init ConfigMap triggers the controller's built-in
 recreate (`bastionNeedsRecreate` in
-[../internal/controller/stackitcluster_controller.go:470](../internal/controller/stackitcluster_controller.go)
+`internal/controller/stackitcluster_controller.go:470`
 auto-deletes and recreates the bastion when the resolved cloud-init content
 hash changes — no manual server deletion needed). The **recreated** bastion
 (new IP `213.17.20.79`, later `213.17.23.100` after reverting the debug
@@ -309,4 +309,4 @@ recorded — these are re-interpretations, not changes to what was observed.
   [bastion-bug.md](bastion-bug.md#2-changing-allowedcidrs-never-revokes-the-old-access).
 - The unresolved SSH refusal on `192.214.188.106` fits a pattern that only
   became visible after run 2 and is no longer best explained as transient; see
-  [bastion-bug.md](bastion-bug.md#open-not-a-code-defect-the-ssh-failures).
+  [bastion-bug.md](bastion-bug.md#resolved-and-not-a-code-defect-the-ssh-failures).

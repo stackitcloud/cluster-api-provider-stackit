@@ -2,7 +2,7 @@
 
 Date: 2026-08-05
 Run: 1 of 2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Cluster: `stackit-workload` (3 control-plane + 1 worker, carried over from [run1-1-bootstrapping.md](run1-1-bootstrapping.md) / [run1-2-ha-controlplane.md](run1-2-ha-controlplane.md))
+Cluster: `stackit-workload` (3 control-plane + 1 worker, carried over from [run-main1-1-bootstrapping.md](run-main1-1-bootstrapping.md) / [run-main1-2-ha-controlplane.md](run-main1-2-ha-controlplane.md))
 Status: ✅ works
 
 Verifies that deleting a cluster removes all STACKIT infrastructure (VMs,
@@ -27,11 +27,11 @@ running workload cluster.
 
 Expected order in code: per `StackitMachine` — API-server LB target removed
 → server/VM deleted → instance status cleared → `MachineFinalizer` removed
-([../internal/controller/stackitmachine_controller.go](../internal/controller/stackitmachine_controller.go),
+(`internal/controller/stackitmachine_controller.go`,
 `reconcileDelete`); then `StackitCluster` — API-server load balancer deleted
 → bastion security group / public IP deleted (if enabled) →
 `ClusterFinalizer` removed
-([../internal/controller/stackitcluster_controller.go](../internal/controller/stackitcluster_controller.go),
+(`internal/controller/stackitcluster_controller.go`,
 `reconcileDelete`).
 
 ```

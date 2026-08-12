@@ -1,16 +1,29 @@
 # Bug: stuck cluster deletion orphans VMs
 
-Date: 2026-08-03
+Date: 2026-08-03, updated 2026-08-11 after the refactor run
 Cluster: `stackit-workload`
 Status: ⚠️ **open** — root cause identified, fix specified below, **not implemented**
 
 Deleting `Cluster`, `StackitCluster` and all `Machine`s at the same time
 (e.g. `kubectl delete -f cluster.yaml` on a manifest containing all of them)
-strands every `Machine`/`StackitMachine` in `Deleting` forever and leaves
-the backing VMs running at STACKIT. The safe path — `kubectl delete cluster
-<name>` alone, letting CAPI cascade — works correctly; confirmed in both test
-runs, see [run2-3-deletion.md](run2-3-deletion.md) (most recent) and
-[run1-3-deletion.md](run1-3-deletion.md).
+can strand `Machine`/`StackitMachine` objects in `Deleting` indefinitely and
+leave the backing VMs running at STACKIT. The safe path — `kubectl delete
+cluster <name>` alone, letting CAPI cascade — works correctly; confirmed in
+all three test runs, see [run-main1-3-deletion.md](run-main1-3-deletion.md),
+[run-main2-3-deletion.md](run-main2-3-deletion.md) and
+[run-refactor1-3-deletion.md](run-refactor1-3-deletion.md).
+
+⚠️ **It is a race, not a deterministic failure.**
+[run-refactor1-4-bastion.md](run-refactor1-4-bastion.md) ran `kubectl delete -f
+cluster-bastion.yaml` deliberately and it completed **cleanly** — everything
+gone in 60 seconds with zero orphaned resources. That is not a fix: the
+responsible code path is unchanged (see [Root cause](#root-cause)), and
+`controller/stackitmachine_controller.go:87-94` still returns before any delete
+handling and without a requeue when the `StackitCluster` is already gone.
+Whether the bug bites depends on whether CAPI finishes deleting the
+`StackitMachine`s before the `StackitCluster` finalizer is released. A single
+clean run therefore proves nothing — do not treat it as evidence that the issue
+is resolved.
 
 ## Investigation
 
@@ -115,8 +128,14 @@ $ kubectl logs -n cluster-api-provider-stackit-system \
 **Result:** From `2026-07-31T14:38:23Z` — moments after the deletion
 timestamps were set — the log contains nothing but `StackitCluster not
 found, requeueing`, repeated for over 2 days. A deletion of the cloud
-instance is **never attempted**. The controller logs this and returns `nil`
-(no error, no backoff), so it loops forever.
+instance is **never attempted**.
+
+Note the mechanism, because the log message is misleading: the controller
+returns `ctrl.Result{}, nil` — **no error, no backoff and no requeue**. It is
+not spinning in a loop. The irregular repeats above (minutes apart, then hours)
+are watch events and informer resyncs re-triggering the reconcile, and each one
+bails at the same line. The practical effect is the same — no progress, ever —
+but adding a requeue would not fix it.
 
 ---
 
@@ -147,9 +166,11 @@ still exists in `Deleting`. The credentials secret still exists — only the
 
 ### 7. Code analysis: why does a missing StackitCluster block deletion?
 
-```
-internal/controller/stackitmachine_controller.go:92-99
-```
+| Branch | Path |
+| --- | --- |
+| `main` | `internal/controller/stackitmachine_controller.go`, lines 92-99 |
+| `refactor` | [`controller/stackitmachine_controller.go`](../controller/stackitmachine_controller.go), lines 87-94 |
+
 ```go
 stackitCluster, err := r.getStackitCluster(ctx, cluster)
 if err != nil {
@@ -169,9 +190,11 @@ tries to terminate the VM at STACKIT or remove the finalizer.
 
 ### 8. Code analysis: why is the StackitCluster gone while Machines remain?
 
-```
-internal/controller/stackitcluster_controller.go:376-410 (reconcileDelete)
-```
+| Branch | Path |
+| --- | --- |
+| `main` | `internal/controller/stackitcluster_controller.go`, `reconcileDelete`, lines 376-410 |
+| `refactor` | [`controller/stackitcluster_infrastructure.go`](../controller/stackitcluster_infrastructure.go), `reconcileDelete`, lines 188-235 |
+
 ```go
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope.ClusterScope) error {
     ...
@@ -185,17 +208,15 @@ objects still exist for the cluster. It cleans up its own cloud
 infrastructure (load balancer, bastion) and removes its finalizer
 immediately, regardless of the state of the worker Machines.
 
-**Branch parity note:** the bug exists identically on
-`refactor/code-cleanup-and-proper-abstraction` (upstream
-`github.com/stackitcloud/cluster-api-provider-stackit`, commit `ba2a21f`),
-where `internal/controller/` was split into several files under
-`controller/`. There, `reconcileDelete` lives in
-`controller/stackitcluster_infrastructure.go:188-235` and ends with the same
-unconditional `controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)`
-after its load-balancer/bastion cleanup — no check for remaining Machines.
-The counterpart in `controller/stackitmachine_controller.go:86-92` is
-identical to the `main` version. If that branch is merged, the fix below
-must be applied there too.
+**Branch parity note:** verified identical on both branches. The refactor
+split `internal/controller/` into several files under `controller/`, but
+`reconcileDelete` still ends with the same unconditional
+`controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)` after its
+load-balancer/bastion cleanup (`main`
+`internal/controller/stackitcluster_controller.go:409` →  `refactor`
+`controller/stackitcluster_infrastructure.go:234`), with no check for
+remaining Machines. The `StackitMachine` counterpart is unchanged too. The fix
+below applies to both.
 
 ## Root cause
 
@@ -208,10 +229,11 @@ Because `StackitCluster.reconcileDelete` does not wait for pending
 `StackitMachine`s, the `StackitCluster` is removed almost instantly, before
 the worker VMs can be terminated at STACKIT. The `StackitMachine` controller
 however *needs* the `StackitCluster` to build credentials/project context
-for the cloud API call. With it missing, the controller loops forever on
-`StackitCluster not found, requeueing` without ever deleting the VMs. The
-finalizers stay, and the `Machine`/`StackitMachine` objects remain stuck in
-`Deleting` indefinitely.
+for the cloud API call. With it missing, the controller bails out at
+`StackitCluster not found, requeueing` on every reconcile without ever deleting
+the VMs — not in a tight loop, but on each watch event or resync, indefinitely.
+The finalizers stay, and the `Machine`/`StackitMachine` objects remain stuck in
+`Deleting`.
 
 This produces two separate problems:
 

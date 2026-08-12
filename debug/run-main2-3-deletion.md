@@ -2,7 +2,7 @@
 
 Date: 2026-08-07
 Run: 2 of 2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Cluster: `stackit-capi-test` (3 control-plane + 1 worker, carried over from [run2-1-bootstrapping.md](run2-1-bootstrapping.md) / [run2-2-ha-controlplane.md](run2-2-ha-controlplane.md))
+Cluster: `stackit-capi-test` (3 control-plane + 1 worker, carried over from [run-main2-1-bootstrapping.md](run-main2-1-bootstrapping.md) / [run-main2-2-ha-controlplane.md](run-main2-2-ha-controlplane.md))
 Status: ✅ works
 
 Verifies that deleting a cluster removes all STACKIT infrastructure (VMs,
@@ -55,11 +55,11 @@ API-server load-balancer instances, all `ACTIVE`/`Running` before deletion.
 
 Expected order in code: per `StackitMachine` — API-server LB target removed
 → server/VM deleted → instance status cleared → `MachineFinalizer` removed
-([../internal/controller/stackitmachine_controller.go](../internal/controller/stackitmachine_controller.go),
+(`internal/controller/stackitmachine_controller.go`,
 `reconcileDelete`); then `StackitCluster` — API-server load balancer deleted
 → bastion security group / public IP deleted (if enabled) →
 `ClusterFinalizer` removed
-([../internal/controller/stackitcluster_controller.go](../internal/controller/stackitcluster_controller.go),
+(`internal/controller/stackitcluster_controller.go`,
 `reconcileDelete`).
 
 ```
