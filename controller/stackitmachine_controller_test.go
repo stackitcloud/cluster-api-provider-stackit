@@ -132,6 +132,40 @@ var _ = Describe("StackitMachine Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
+	It("does not silently recreate the server of an already-provisioned machine", func() {
+		// Regression test for debug/machine-recreate-bug.md: when the backing
+		// server disappears out-of-band, ensureServer used to call CreateServer
+		// again, replaying the original bootstrap data. The replacement either
+		// never rejoins (different IP) or rejoins while Machine and Node keep
+		// pointing at the deleted server (same IP) — neither restores the
+		// cluster, and both consume another VM unnoticed.
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		Expect(fakeCloud.CreateServerCalls).To(Equal(1))
+
+		provisioned := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, provisioned)).To(Succeed())
+		Expect(provisioned.Status.Initialization.Provisioned).To(BeTrue())
+		instanceID := provisioned.Status.InstanceID
+		Expect(instanceID).NotTo(BeEmpty())
+
+		By("removing the server behind the provider's back")
+		Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		By("reconciling again")
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).To(HaveOccurred(), "reconcile must surface the missing server instead of papering over it")
+
+		Expect(fakeCloud.CreateServerCalls).To(Equal(1),
+			"a replacement server was created for an already-provisioned machine")
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+	})
+
 	It("attaches provider-managed node SSH access when bastion is enabled", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)

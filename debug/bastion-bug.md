@@ -2,9 +2,13 @@
 
 Date: 2026-08-10, updated 2026-08-11 after the refactor run
 Source: code review of the bastion path after run main2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Status: ⚠️ **open** — four defects confirmed in code, none fixed; all still
-present on `refactor/code-cleanup-and-proper-abstraction` (paths below are the
-refactored ones)
+Status: ⚠️ **partially fixed** (2026-08-12) — defects 1 and 2 are fixed with
+regression tests; defects 3 and 4 remain open. Paths below are the refactored
+ones.
+
+**Note on the code snippets below:** they show the state **before** the fixes of
+2026-08-12, together with the line numbers of that state. They document what the
+defect looked like; the current code differs for defects 1 and 2.
 
 Collects the defects found by reading the bastion code paths against the
 evidence from [run-main1-4-bastion.md](run-main1-4-bastion.md) and
@@ -82,9 +86,11 @@ variant for the first ~60 seconds of bastion provisioning — and
 `status.bastion.publicIP` staying empty for exactly that window, appearing only
 at t+80s once the error had cleared. Identical to `main`.
 
-**Fix:** drop the call at lines 263-265. If it is to be kept as a defensive
-re-attach for the `CreateServer`-found-existing-server path, it must also
-tolerate `IsNotFound` and the duplicate-`400`.
+**Fix — ✅ done (2026-08-12).** The redundant call was removed; the security
+group reaches the server through the `CreateServer` payload alone. Guarded by
+`TestSDKClientEnsureBastionAttachesSecurityGroupOnlyOnce` in
+`cloud/sdk_client_test.go`, which also asserts the public IP is assigned in the
+same reconcile — the effect that the aborted call used to delay.
 
 ---
 
@@ -141,9 +147,12 @@ combination times out for the wrong reason and looks like a pass. That is the
 one variant that would mislead, and it is why the runs above could not catch
 this.
 
-**Fix:** reconcile the rule set in both directions — delete SSH rules whose
-`ipRange` is not in the desired CIDR list. Afterwards the procedure above must
-produce the timeout it currently fails to produce.
+**Fix — ✅ done (2026-08-12).** `ensureBastionSecurityGroupRules` now reconciles
+in both directions: after creating missing rules it deletes every SSH rule whose
+`ipRange` is no longer in the desired list. Guarded by
+`TestSDKClientEnsureBastionRevokesRemovedCIDR` in `cloud/sdk_client_test.go`.
+The manual procedure above should now produce the timeout it previously failed
+to produce — worth confirming once against real infrastructure.
 
 ---
 

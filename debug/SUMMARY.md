@@ -16,6 +16,7 @@ Read top to bottom; this is the order in which everything happened.
 | **2e** | 2026-08-07 (later) | `main` | `stackit-capi-test` | **Run main2, extra** — bastion, blocked at SSH | [run-main2-4-bastion.md](run-main2-4-bastion.md) |
 | **3** | 2026-08-10 | — | — | Code review of both `main` runs; defects written up | [bastion-bug.md](bastion-bug.md) · [machine-recreate-bug.md](machine-recreate-bug.md) |
 | **4** | 2026-08-11 | `refactor` | `stackit-capi-test` | **Run refactor1** — all four packages against the refactored provider | [run-refactor1-1-bootstrapping.md](run-refactor1-1-bootstrapping.md) · [run-refactor1-2-ha-controlplane.md](run-refactor1-2-ha-controlplane.md) · [run-refactor1-3-deletion.md](run-refactor1-3-deletion.md) · [run-refactor1-4-bastion.md](run-refactor1-4-bastion.md) |
+| **5** | 2026-08-12 | `refactor` | e2e fixtures | **Run refactor2** — first execution of the e2e suite on any branch | [run-refactor2-1-e2e.md](run-refactor2-1-e2e.md) |
 
 Each `run-*` document is a complete protocol of its own run. Where a later
 review corrected a conclusion, the protocol is left as recorded and an
@@ -53,8 +54,13 @@ found.** Every known defect reproduces from the same, relocated code:
 | Document | Status | Summary |
 | --- | --- | --- |
 | [deletion-bug.md](deletion-bug.md) | ⚠️ open | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously can strand machines and orphan VMs. Root cause identified, fix specified, **not implemented**. `run-refactor1-4` ran `kubectl delete -f` deliberately and it completed cleanly — the race simply did not hit; the code path is verifiably unchanged. |
-| [bastion-bug.md](bastion-bug.md) | ⚠️ open | Four code-confirmed defects: security group attached twice (causes the "transient" `BastionError` and delays the public IP), `allowedCIDRs` rules never removed (**security-relevant**), `bastionNeedsRecreate` only watches cloud-init, and the hardcoded `replicas: 3`. |
-| [machine-recreate-bug.md](machine-recreate-bug.md) | ⚠️ open | `ensureServer()` recreates a missing server unconditionally, even for a machine that had already joined. **`run-refactor1-2` found a worse outcome than previously known** — see below. |
+| [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Four code-confirmed defects. **Fixed 2026-08-12 with regression tests:** security group attached twice, and `allowedCIDRs` rules never removed (**security-relevant**). **Still open:** `bastionNeedsRecreate` only watches cloud-init, and the hardcoded `replicas: 3`. |
+| [machine-recreate-bug.md](machine-recreate-bug.md) | ✅ fixed | `ensureServer()` recreated a missing server unconditionally, even for a machine that had already joined. Fixed 2026-08-12 with an envtest regression test; `run-refactor1-2` had found a worse variant than previously known — see below. |
+
+**Where each defect should be covered by tests** — unit, envtest or e2e — is
+worked out once in [test-strategy.md](test-strategy.md). The assignment is
+structural, not a preference: envtest runs against the fake cloud client and
+therefore cannot reach the two cloud-layer defects at all.
 
 **Sharpened by run refactor1:** the outcome of the silent recreate depends on
 whether the replacement VM happens to get the **same internal IP**:
@@ -145,58 +151,38 @@ the CIDR test.
 
 ## Next steps
 
-### Now: e2e coverage
+### Done (2026-08-12)
 
-The `debug/` runs are manual and cannot be repeated cheaply. The e2e suite
-already covers much of the same ground and has **never been executed on the
-refactor branch** — getting it running and extending it is the highest-value
-next step.
+- e2e suite made runnable and executed for the first time on any branch: free
+  specs plus cluster lifecycle, NodeRef and bastion — all green, no leaks. Six
+  entry barriers documented in [run-refactor2-1-e2e.md](run-refactor2-1-e2e.md).
+- Three defects fixed, each with a regression test that was proven to catch it
+  by temporarily reverting the fix — see
+  [test-strategy.md](test-strategy.md#landing-the-tests):
+  duplicate security-group attach, `allowedCIDRs` never revoked, and the
+  unconditional server recreate. `cloud` coverage 39.1 % → 55.5 %,
+  `controller` 70.2 % → 71.0 %.
 
-1. **Make the suite runnable.** Three verified blockers, none of them a code
-   defect:
-   - `STACKIT_AVAILABILITY_ZONE` is `requiredEnv` (`test/e2e/e2e_test.go`) but
-     missing from `.envrc`.
-   - `STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE` from `.envrc` pins minor 1.35,
-     while the suite asserts the image minor matches the Kubernetes version
-     under test. Do not export it for e2e — the suite has per-minor defaults.
-   - The running devcontainer is `golang:1.25` while `go.mod` requires 1.26.0
-     and `GOTOOLCHAIN=local`, so `make manifests/test/test-e2e` abort. The
-     branch already bumps `.devcontainer/devcontainer.json` to `golang:1.26`;
-     rebuild the container, or prefix `GOTOOLCHAIN=auto`.
-2. **Run the relevant billable specs:** cluster lifecycle
-   (`STACKIT_E2E_CREATE_CLUSTER`), NodeRef (`make test-e2e-workload-noderef`),
-   bastion (`make test-e2e-workload-bastion`) — the three that cover the
-   behaviour our documented defects touch.
-3. **Extend the suite** with two specs that turn documented defects into
-   automated regression tests. Both land red and go green with the respective
-   fix, so they belong behind their own gates like every other billable spec:
-   - *out-of-band VM delete* — the existing NodeRef spec already asserts the
-     provider-ID invariant that [machine-recreate-bug.md](machine-recreate-bug.md)
-     violates; it simply never deletes a VM out-of-band.
-   - *`allowedCIDRs` revocation* — pure API assertions, no SSH, therefore
-     immune to the IP-range problem that blocked run main2. See
-     [bastion-bug.md#how-to-actually-prove-this-bug](bastion-bug.md#how-to-actually-prove-this-bug).
+### Open
 
-### Then: the pre-existing defects (all present on `main` too)
-
-4. Guard the unconditional recreate in `ensureServer()`
-   ([machine-recreate-bug.md](machine-recreate-bug.md)). Highest impact: the
-   same-IP variant found in `run-refactor1-2` leaves a cluster that looks
-   healthy while carrying a silent provider-ID mismatch.
-5. Remove the duplicate security-group attach in `EnsureBastion`
-   ([bastion-bug.md](bastion-bug.md#1-the-bastion-security-group-is-attached-twice)).
-6. Make `allowedCIDRs` reconcile in both directions
-   ([bastion-bug.md](bastion-bug.md#2-changing-allowedcidrs-never-revokes-the-old-access))
-   — security-relevant. This defect has **not been demonstrated yet**: both CIDR
-   tests so far ran from a never-allowed network and cannot detect it.
-7. Fix `replicas: 3` → `${WORKER_MACHINE_COUNT}` in
-   `templates/cluster-template-bastion.yaml`. Note this one is **not** coverable
-   by e2e as it stands — the suite renders its own fixtures and never reads that
-   template; a template lint would be the fitting check.
-8. Land the deletion-order fix
+1. Fix `replicas: 3` → `${WORKER_MACHINE_COUNT}` in
+   `templates/cluster-template-bastion.yaml`. Not coverable by e2e as it stands
+   — the suite renders its own fixtures and never reads that template; a
+   template lint would be the fitting check.
+2. Extend `bastionNeedsRecreate` to cover `sshKeyName`/`imageID`/`machineType`,
+   or document the limitation prominently
+   ([bastion-bug.md](bastion-bug.md#3-bastionneedsrecreate-only-reacts-to-cloud-init-changes)).
+3. Land the deletion-order fix
    ([deletion-bug.md#fix-plan-not-yet-implemented](deletion-bug.md#fix-plan-not-yet-implemented));
    `kubectl delete cluster` stays the documented default until then.
-9. `MachineHealthCheck` remediation is already on the roadmap
+4. Confirm the `allowedCIDRs` fix once against real infrastructure using the
+   procedure in
+   [bastion-bug.md#how-to-actually-prove-this-bug](bastion-bug.md#how-to-actually-prove-this-bug)
+   — the unit test asserts the request, not the effective state.
+5. Reduce the e2e entry barriers: fold `STACKIT_AVAILABILITY_ZONE`, the CCM
+   image handling and the credentials Secret into `setup-test-e2e` or the docs,
+   and stop `make deploy` from rewriting `config/manager/kustomization.yaml`.
+6. `MachineHealthCheck` remediation is already on the roadmap
    ([../docs/src/getting-started/overview.md](../docs/src/getting-started/overview.md),
    *"Full Cluster API Support"*), so the open question is narrower: should the
    **example templates** ship one, or only document the gap?
@@ -205,8 +191,11 @@ next step.
    - *Against:* upstream CAPI keeps remediation opt-in on purpose, sensible
      timeouts are workload-specific, and an aggressive default can replace
      healthy nodes.
-   - Note an MHC would **not** fix
+   - Note an MHC would **not** have fixed
      [machine-recreate-bug.md](machine-recreate-bug.md); see there for why.
+7. Optional e2e specs for the three fixed defects — deferred, with the required
+   work written up per spec in
+   [test-strategy.md](test-strategy.md#optional-e2e-specs--deferred-and-what-each-would-need).
 
 ### Not covered
 

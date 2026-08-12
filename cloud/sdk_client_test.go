@@ -431,3 +431,174 @@ func lookup(m map[string]any, key string) any {
 	}
 	return nil
 }
+
+// TestSDKClientEnsureBastionAttachesSecurityGroupOnlyOnce guards against the
+// redundant security-group attach that used to follow CreateServer. The group
+// is already part of the create payload; attaching it again failed with 404
+// while the server had no port yet and with 400 "Duplicate items in the list"
+// once it had one — and the error aborted EnsureBastion before the public IP
+// was assigned.
+func TestSDKClientEnsureBastionAttachesSecurityGroupOnlyOnce(t *testing.T) {
+	var (
+		createPayload    map[string]any
+		attachCallCount  int
+		publicIPAssigned bool
+	)
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": testSDKSecurityGroup, "name": "bastion-ssh",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/rules"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/rules"):
+			writeJSON(t, w, map[string]any{"id": "77777777-7777-4777-8777-777777777777", "direction": "ingress"})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/servers"):
+			createPayload = readJSON(t, r)
+			writeJSON(t, w, map[string]any{
+				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+			})
+		case strings.Contains(path, "/security-groups/") && strings.Contains(path, "/servers/"):
+			// PUT /servers/{id}/security-groups/{id} or the inverse ordering:
+			// any call here is the redundant attach this test guards against.
+			attachCallCount++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/public-ips"):
+			writeJSON(t, w, map[string]any{"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10"})
+		case strings.Contains(path, "/public-ips/"):
+			publicIPAssigned = true
+			writeJSON(t, w, map[string]any{"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10"})
+		case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
+			writeJSON(t, w, map[string]any{
+				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	bastion, err := client.EnsureBastion(context.Background(), BastionInput{
+		Name:         "bastion",
+		ProjectID:    testSDKProjectID,
+		Region:       testSDKRegion,
+		NetworkID:    testSDKNetworkID,
+		ImageID:      testSDKImageID,
+		MachineType:  "c2i.1",
+		SSHKeyName:   "default",
+		AllowedCIDRs: []string{"203.0.113.0/24"},
+		Tags:         map[string]string{"cluster": "test"},
+	})
+	if err != nil {
+		t.Fatalf("EnsureBastion() error = %v", err)
+	}
+
+	if attachCallCount != 0 {
+		t.Fatalf("security group attached %d extra time(s) after CreateServer, want 0", attachCallCount)
+	}
+	groups, _ := createPayload["securityGroups"].([]any)
+	if len(groups) != 1 || groups[0] != testSDKSecurityGroup {
+		t.Fatalf("create payload securityGroups = %v, want [%s]", createPayload["securityGroups"], testSDKSecurityGroup)
+	}
+	if !publicIPAssigned {
+		t.Fatal("public IP was never assigned to the bastion server")
+	}
+	if bastion.PublicIP != "203.0.113.10" {
+		t.Fatalf("bastion.PublicIP = %q, want 203.0.113.10", bastion.PublicIP)
+	}
+}
+
+// TestSDKClientEnsureBastionRevokesRemovedCIDR guards against security-group
+// rules only ever being added. Narrowing allowedCIDRs must actually take
+// access away from the previously allowed range.
+func TestSDKClientEnsureBastionRevokesRemovedCIDR(t *testing.T) {
+	const staleRuleID = "55555555-5555-4555-8555-555555555555"
+	var (
+		createdRuleCIDRs []string
+		deletedRuleIDs   []string
+	)
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": testSDKSecurityGroup, "name": "bastion-ssh",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/rules"):
+			// One pre-existing SSH rule for the CIDR that is being revoked.
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id":        staleRuleID,
+					"direction": "ingress",
+					"ipRange":   "198.51.100.0/24",
+					"portRange": map[string]any{"min": 22, "max": 22},
+					"protocol":  map[string]any{"name": "tcp"},
+				},
+			}})
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/rules"):
+			payload := readJSON(t, r)
+			if cidr, ok := payload["ipRange"].(string); ok {
+				createdRuleCIDRs = append(createdRuleCIDRs, cidr)
+			}
+			writeJSON(t, w, map[string]any{"id": "77777777-7777-4777-8777-777777777777", "direction": "ingress"})
+		case r.Method == http.MethodDelete && strings.Contains(path, "/rules/"):
+			parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
+			deletedRuleIDs = append(deletedRuleIDs, parts[len(parts)-1])
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10", "networkInterface": "nic-1",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
+			writeJSON(t, w, map[string]any{
+				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	if _, err := client.EnsureBastion(context.Background(), BastionInput{
+		Name:         "bastion",
+		ProjectID:    testSDKProjectID,
+		Region:       testSDKRegion,
+		NetworkID:    testSDKNetworkID,
+		ImageID:      testSDKImageID,
+		MachineType:  "c2i.1",
+		SSHKeyName:   "default",
+		AllowedCIDRs: []string{"203.0.113.0/24"},
+		Tags:         map[string]string{"cluster": "test"},
+	}); err != nil {
+		t.Fatalf("EnsureBastion() error = %v", err)
+	}
+
+	if len(createdRuleCIDRs) != 1 || createdRuleCIDRs[0] != "203.0.113.0/24" {
+		t.Fatalf("created rules for %v, want [203.0.113.0/24]", createdRuleCIDRs)
+	}
+	if len(deletedRuleIDs) != 1 || deletedRuleIDs[0] != staleRuleID {
+		t.Fatalf("deleted rules %v, want [%s] — the revoked CIDR keeps its SSH access", deletedRuleIDs, staleRuleID)
+	}
+}

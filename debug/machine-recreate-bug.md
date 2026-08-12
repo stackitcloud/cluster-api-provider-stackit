@@ -2,7 +2,7 @@
 
 Date: 2026-08-10, updated 2026-08-11 after the refactor run
 Source: HA control-plane package of run main2 and run refactor1 — see [SUMMARY.md](SUMMARY.md#timeline)
-Status: ⚠️ **open** — root cause confirmed in code, unchanged on both branches, fix not implemented
+Status: ✅ **fixed** (2026-08-12) — guard implemented with a regression test; the analysis below documents the defect as it was
 
 When a `StackitMachine`'s backing STACKIT server disappears out-of-band, the
 reconciler creates a replacement server unconditionally — including for a
@@ -180,6 +180,12 @@ becomes an independent, ordinary roadmap item
 ([../docs/src/getting-started/overview.md](../docs/src/getting-started/overview.md)).
 
 ## Fix options
+
+**Implemented: option 1.** `ensureServer` now returns a wrapped
+`cloud.ErrNotFound` when the server of a machine with
+`Status.Initialization.Provisioned` has disappeared, instead of calling
+`CreateServer`. Regression test: *"does not silently recreate the server of an
+already-provisioned machine"* in `controller/stackitmachine_controller_test.go`.
 
 1. **Guard the recreate.** Treat "instance ID was set, server is now gone" as a
    terminal condition for an already-initialised machine

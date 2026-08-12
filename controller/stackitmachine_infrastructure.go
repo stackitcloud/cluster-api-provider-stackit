@@ -224,6 +224,21 @@ func (r *StackitMachineReconciler) ensureServer(
 	} else if !cloud.IsNotFound(err) {
 		return nil, false, err
 	}
+
+	// The machine had already been provisioned and its server has since
+	// disappeared. Recreating it here would replay the original bootstrap data,
+	// which is pinned to the previous identity: the replacement either never
+	// rejoins (different IP) or rejoins while Machine/Node keep pointing at the
+	// deleted server (same IP). Neither restores the cluster, and both consume
+	// another VM silently. Surface it instead and let Cluster API decide to
+	// replace the Machine.
+	if sm.Status.Initialization.Provisioned {
+		return nil, false, fmt.Errorf(
+			"%w: server %s for already-provisioned machine no longer exists; the Machine must be replaced",
+			cloud.ErrNotFound, sm.Status.InstanceID,
+		)
+	}
+
 	deleteOnTermination := true
 	if sm.Spec.RootVolume.DeleteOnTermination != nil {
 		deleteOnTermination = *sm.Spec.RootVolume.DeleteOnTermination
