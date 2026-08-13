@@ -260,9 +260,11 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	if err != nil {
 		return nil, err
 	}
-	if err := c.addSecurityGroupToServer(ctx, server.ID, securityGroup.ID); err != nil {
-		return nil, err
-	}
+	// The security group is already part of the CreateServer payload above.
+	// Attaching it again here used to fail with 404 while the server had no
+	// port yet, and with 400 "Duplicate items in the list" once it had one —
+	// and because the error aborted EnsureBastion, the public IP below was
+	// only assigned a reconcile later.
 
 	publicIP, err := c.ensurePublicIP(ctx, input.Tags)
 	if err != nil {
@@ -698,10 +700,12 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 		return classifySDKError("list security group rules", err)
 	}
 	existingRules := resp.GetItems()
+	desired := make(map[string]struct{}, len(cidrs))
 	for _, cidr := range cidrs {
 		if cidr == "" {
 			return fmt.Errorf("%w: empty bastion allowed CIDR", ErrInvalidInput)
 		}
+		desired[cidr] = struct{}{}
 		if hasSSHRule(existingRules, cidr) {
 			continue
 		}
@@ -714,6 +718,30 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 			CreateSecurityGroupRulePayload(*rule).
 			Execute(); err != nil {
 			return classifySDKError("create security group rule", err)
+		}
+	}
+
+	// Revoke SSH rules for CIDRs that are no longer desired. Without this the
+	// rule set only ever grows, so narrowing allowedCIDRs would not actually
+	// take access away from the previously allowed range.
+	for _, rule := range existingRules {
+		if !isSSHRule(rule) {
+			continue
+		}
+		if _, keep := desired[rule.GetIpRange()]; keep {
+			continue
+		}
+		ruleID := rule.GetId()
+		if ruleID == "" {
+			continue
+		}
+		if err := c.iaasClient.DefaultAPI.
+			DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
+			Execute(); err != nil {
+			err := classifySDKError("delete security group rule", err)
+			if !IsNotFound(err) {
+				return err
+			}
 		}
 	}
 	return nil
@@ -839,18 +867,25 @@ func (c *SDKClient) deleteSecurityGroupRules(ctx context.Context, securityGroupI
 
 func hasSSHRule(rules []iaas.SecurityGroupRule, cidr string) bool {
 	for _, rule := range rules {
-		if rule.GetDirection() != "ingress" || rule.GetIpRange() != cidr {
-			continue
-		}
-		portRange := rule.GetPortRange()
-		if portRange.GetMin() != sshPort || portRange.GetMax() != sshPort {
-			continue
-		}
-		if protocol, ok := rule.GetProtocolOk(); ok && protocol.GetName() == tcpProtocol {
+		if rule.GetIpRange() == cidr && isSSHRule(rule) {
 			return true
 		}
 	}
 	return false
+}
+
+// isSSHRule reports whether the rule is an ingress TCP/22 rule, regardless of
+// which CIDR it allows.
+func isSSHRule(rule iaas.SecurityGroupRule) bool {
+	if rule.GetDirection() != "ingress" {
+		return false
+	}
+	portRange := rule.GetPortRange()
+	if portRange.GetMin() != sshPort || portRange.GetMax() != sshPort {
+		return false
+	}
+	protocol, ok := rule.GetProtocolOk()
+	return ok && protocol.GetName() == tcpProtocol
 }
 
 func hasRemoteSecurityGroupSSHRule(rules []iaas.SecurityGroupRule, remoteSecurityGroupID string) bool {
