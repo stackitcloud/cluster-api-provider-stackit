@@ -85,7 +85,9 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 		)
 	}
 	if created && r.Recorder != nil {
-		r.Recorder.Eventf(sm, corev1.EventTypeNormal, "InstanceCreated", "Created instance %s", server.ID)
+		r.Recorder.Eventf(
+			sm, nil, corev1.EventTypeNormal, "InstanceCreated", "Create", "Created instance %s", server.ID,
+		)
 	}
 
 	sm.Status.InstanceState = server.State
@@ -147,7 +149,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, s *scope
 	if sm.Status.InstanceID == "" && !needsLoadBalancerCleanup {
 		controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sm, corev1.EventTypeNormal, "InstanceDeleted", "Deleted instance")
+			r.Recorder.Eventf(sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
 		}
 		return nil
 	}
@@ -167,7 +169,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, s *scope
 	if sm.Status.InstanceID == "" {
 		controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sm, corev1.EventTypeNormal, "InstanceDeleted", "Deleted instance")
+			r.Recorder.Eventf(sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
 		}
 		return nil
 	}
@@ -178,7 +180,9 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, s *scope
 	s.ClearInstance()
 	controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
 	if r.Recorder != nil {
-		r.Recorder.Eventf(sm, corev1.EventTypeNormal, "InstanceDeleted", "Deleted instance %s", instanceID)
+		r.Recorder.Eventf(
+			sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance %s", instanceID,
+		)
 	}
 	return nil
 }

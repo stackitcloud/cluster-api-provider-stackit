@@ -53,7 +53,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			}
 			s.ClearBastionStatus()
 			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionDeleted", "Deleted bastion")
+				r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 			}
 		}
 		s.SetConditions(metav1.ConditionTrue, "Skipped", "bastion disabled", infrav1.ClusterBastionReadyCondition)
@@ -82,7 +82,10 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		s.ClearBastionStatus()
 		s.SetNotReady("Recreating", "recreating bastion because cloudInitRef content changed", infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionRecreating", "Recreating bastion because cloudInitRef content changed")
+			r.Recorder.Eventf(
+				sc, nil, corev1.EventTypeNormal, "BastionRecreating", "Recreate",
+				"Recreating bastion because cloudInitRef content changed",
+			)
 		}
 		return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, false, nil
 	}
@@ -94,7 +97,9 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 	s.SetBastionStatus(bastion, bastionCloudInitHash(cloudInit))
 	if !hadBastionStatus && r.Recorder != nil {
-		r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionCreated", "Created bastion %s", bastion.ServerID)
+		r.Recorder.Eventf(
+			sc, nil, corev1.EventTypeNormal, "BastionCreated", "Create", "Created bastion %s", bastion.ServerID,
+		)
 	}
 	if bastion.ServerState != "" && bastion.ServerState != "ACTIVE" {
 		s.SetNotReady("Provisioning", fmt.Sprintf("bastion server state is %s", bastion.ServerState), infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)

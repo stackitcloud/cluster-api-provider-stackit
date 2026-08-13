@@ -28,6 +28,7 @@ const (
 	testSDKImageID       = "22222222-2222-4222-8222-222222222222"
 	testSDKSecurityGroup = "44444444-4444-4444-8444-444444444444"
 	testBoolTrue         = "true"
+	testSDKPublicIP      = "203.0.113.10"
 )
 
 func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
@@ -146,7 +147,7 @@ func TestSDKClientEnsureAPIServerLoadBalancerCreatesExpectedPayload(t *testing.T
 	if err != nil {
 		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
 	}
-	if loadBalancer.ID != "apiserver-test" || loadBalancer.IP != "203.0.113.10" || loadBalancer.Port != 6443 {
+	if loadBalancer.ID != "apiserver-test" || loadBalancer.IP != testSDKPublicIP || loadBalancer.Port != 6443 {
 		t.Fatalf("EnsureAPIServerLoadBalancer() = %#v", loadBalancer)
 	}
 

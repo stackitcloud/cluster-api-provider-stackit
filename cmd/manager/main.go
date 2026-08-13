@@ -186,7 +186,7 @@ func main() {
 		Client:             mgr.GetClient(),
 		Scheme:             mgr.GetScheme(),
 		CloudClientFactory: cloud.NewClient,
-		Recorder:           mgr.GetEventRecorderFor("stackitcluster-controller"),
+		Recorder:           mgr.GetEventRecorder("stackitcluster-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "stackitcluster")
 		os.Exit(1)
@@ -195,7 +195,7 @@ func main() {
 		Client:             mgr.GetClient(),
 		Scheme:             mgr.GetScheme(),
 		CloudClientFactory: cloud.NewClient,
-		Recorder:           mgr.GetEventRecorderFor("stackitmachine-controller"),
+		Recorder:           mgr.GetEventRecorder("stackitmachine-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "stackitmachine")
 		os.Exit(1)

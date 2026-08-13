@@ -93,7 +93,10 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 		if lb != nil {
 			sc.Status.APIServerLoadBalancerID = lb.ID
 			if !hadLoadBalancerID && lb.ID != "" && r.Recorder != nil {
-				r.Recorder.Eventf(sc, corev1.EventTypeNormal, "LoadBalancerCreated", "Created API server load balancer %s", lb.ID)
+				r.Recorder.Eventf(
+					sc, nil, corev1.EventTypeNormal, "LoadBalancerCreated", "Create",
+					"Created API server load balancer %s", lb.ID,
+				)
 			}
 		}
 		if lb == nil || lb.IP == "" {
@@ -107,7 +110,10 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 		s.SetAPIServerEndpoint(endpoint)
 		s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.ClusterLoadBalancerReadyCondition)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sc, corev1.EventTypeNormal, "LoadBalancerReady", "API server load balancer is ready at %s", lb.IP)
+			r.Recorder.Eventf(
+				sc, nil, corev1.EventTypeNormal, "LoadBalancerReady", "SetReady",
+				"API server load balancer is ready at %s", lb.IP,
+			)
 		}
 	} else if sc.Spec.ControlPlaneEndpoint.Host != "" {
 		sc.Status.APIServerEndpoint = sc.Spec.ControlPlaneEndpoint
@@ -210,7 +216,10 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 			}
 			sc.Status.APIServerLoadBalancerID = ""
 			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, corev1.EventTypeNormal, "LoadBalancerDeleted", "Deleted API server load balancer %s", loadBalancerID)
+				r.Recorder.Eventf(
+					sc, nil, corev1.EventTypeNormal, "LoadBalancerDeleted", "Delete",
+					"Deleted API server load balancer %s", loadBalancerID,
+				)
 			}
 		}
 		if hasBastionStatus(sc.Status.Bastion) {
@@ -227,7 +236,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 			}
 			s.ClearBastionStatus()
 			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionDeleted", "Deleted bastion")
+				r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 			}
 		}
 	}

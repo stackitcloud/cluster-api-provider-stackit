@@ -21,7 +21,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -237,7 +236,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		createBootstrapSecret(ctx, bootstrapName)
 		cluster := &clusterv1.Cluster{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())
-		cluster.Spec.Paused = ptr.To(true)
+		cluster.Spec.Paused = new(true)
 		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
 
 		cloudClientFactoryCalls := 0
