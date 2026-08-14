@@ -260,11 +260,15 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	if err != nil {
 		return nil, err
 	}
-	// The security group is already part of the CreateServer payload above.
-	// Attaching it again here used to fail with 404 while the server had no
-	// port yet, and with 400 "Duplicate items in the list" once it had one —
-	// and because the error aborted EnsureBastion, the public IP below was
-	// only assigned a reconcile later.
+	// The group is already in the CreateServer payload, but CreateServer
+	// short-circuits on an existing server found by tags — this is then the only
+	// path that re-attaches a group that was detached out of band (for example
+	// by an interrupted DeleteBastion). Kept deliberately, and idempotent: the
+	// duplicate/no-port-yet responses are tolerated so they can no longer abort
+	// the reconcile before the public IP below is assigned.
+	if err := c.addSecurityGroupToServer(ctx, server.ID, securityGroup.ID); err != nil {
+		return nil, err
+	}
 
 	publicIP, err := c.ensurePublicIP(ctx, input.Tags)
 	if err != nil {
@@ -834,12 +838,18 @@ func (c *SDKClient) findSecurityGroupByTags(ctx context.Context, tags map[string
 	return matched[0], nil
 }
 
+// addSecurityGroupToServer attaches the group idempotently. Three outcomes are
+// expected and must not fail the caller:
+//   - conflict: already attached
+//   - invalid input: the API rejects the duplicate ("Duplicate items in the list")
+//   - not found: the server has no network port yet, so there is nothing to
+//     attach to — the next reconcile retries once it does
 func (c *SDKClient) addSecurityGroupToServer(ctx context.Context, serverID, securityGroupID string) error {
 	if err := c.iaasClient.DefaultAPI.
 		AddSecurityGroupToServer(ctx, c.projectID, c.region, serverID, securityGroupID).
 		Execute(); err != nil {
 		err := classifySDKError("add security group to server", err)
-		if !IsConflict(err) {
+		if !IsConflict(err) && !IsInvalidInput(err) && !IsNotFound(err) {
 			return err
 		}
 	}
