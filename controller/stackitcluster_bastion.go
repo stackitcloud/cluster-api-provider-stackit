@@ -19,6 +19,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -44,7 +45,19 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 
 	if !sc.Spec.Bastion.Enabled {
-		if hasBastionStatus(sc.Status.Bastion) {
+		// Status alone is not proof that no bastion exists: EnsureBastion can
+		// succeed and the status patch can be lost, after which disabling the
+		// bastion would silently leave it running with port 22 open — while the
+		// condition below claims it is disabled.
+		//
+		// The BastionReady condition lives in the same status subresource, so it
+		// is missing in exactly that case. Using it as the trigger keeps the
+		// tag-based sweep to once per cluster instead of once per reconcile,
+		// which matters because this path runs for every cluster without a
+		// bastion.
+		sweep := hasBastionStatus(sc.Status.Bastion) ||
+			meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition) == nil
+		if sweep {
 			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil {
 				return ctrl.Result{}, false, err
 			}
