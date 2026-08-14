@@ -52,12 +52,10 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		//
 		// The BastionReady condition lives in the same status subresource, so it
 		// is missing in exactly that case. Using it as the trigger keeps the
-		// tag-based sweep to once per cluster instead of once per reconcile,
+		// tag-based cleanup to once per cluster instead of once per reconcile,
 		// which matters because this path runs for every cluster without a
 		// bastion.
-		sweep := hasBastionStatus(sc.Status.Bastion) ||
-			meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition) == nil
-		if sweep {
+		if hasBastionStatus(sc.Status.Bastion) || meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition) == nil {
 			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil {
 				return ctrl.Result{}, false, err
 			}
