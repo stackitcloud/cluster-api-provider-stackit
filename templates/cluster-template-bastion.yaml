@@ -157,7 +157,7 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   clusterName: ${CLUSTER_NAME}
-  replicas: 3
+  replicas: ${WORKER_MACHINE_COUNT}
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
