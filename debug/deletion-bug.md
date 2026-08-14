@@ -300,9 +300,18 @@ cluster with `bastion.enabled: true` whose bastion status was never persisted
 skips the whole block and drops its finalizer — leaking the bastion server, its
 public IP and its security groups at once.
 
-**Fix:** add `sc.Spec.Bastion.Enabled` to the condition, and run the tag-based
-deletion even when the status fields are empty, so cleanup depends on intent
-rather than on bookkeeping having succeeded.
+**Fix — ✅ done (2026-08-14).** `sc.Spec.Bastion.Enabled` was added to the
+condition **and** to the inner bastion block, which turned out to be gated on
+`hasBastionStatus` a second time — fixing only the outer condition left the leak
+in place, which the regression test caught immediately. Cleanup now follows
+intent; `DeleteBastion` and `DeleteNodeSSHAccess` resolve their resources by tag
+when the status fields are empty.
+
+Guarded by *"cleans up bastion resources during deletion even when bastion
+status was never persisted"* in
+`controller/stackitcluster_controller_test.go`, which reconciles a bastion
+cluster, wipes `Status.Bastion` to simulate the lost patch, deletes the cluster
+and asserts no server, public IP or security group survives.
 
 ### Relation to the bug above
 

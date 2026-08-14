@@ -2,9 +2,9 @@
 
 Date: 2026-08-10, updated 2026-08-11 after the refactor run
 Source: code review of the bastion path after run main2 — see [SUMMARY.md](SUMMARY.md#timeline)
-Status: ⚠️ **partially fixed** (2026-08-12) — defects 1 and 2 are fixed with
-regression tests; defects 3 and 4 remain open. Paths below are the refactored
-ones.
+Status: ⚠️ **partially fixed** — defects 1, 2 (2026-08-12) and 4 (2026-08-14)
+are fixed; only defect 3 (`bastionNeedsRecreate`) remains open. Paths below are
+the refactored ones.
 
 **Note on the code snippets below:** they show the state **before** the fixes of
 2026-08-12, together with the line numbers of that state. They document what the
@@ -215,7 +215,11 @@ main1 ran with 4 nodes and did not recognise the discrepancy. Reproduced
 unchanged in [run-refactor1-4-bastion.md](run-refactor1-4-bastion.md) step 2
 (`WORKER_MACHINE_COUNT=1` exported, `spec.replicas` came back as `3`).
 
-**Fix:** `replicas: ${WORKER_MACHINE_COUNT}`, matching the base template.
+**Fix — ✅ done (2026-08-14).** Now `replicas: ${WORKER_MACHINE_COUNT}`, matching
+the base template. Verified by rendering the template with
+`WORKER_MACHINE_COUNT=1` and `=3` and checking the resulting
+`MachineDeployment`. Not coverable by the e2e suite — it renders its own
+fixtures and never reads this template.
 
 ---
 

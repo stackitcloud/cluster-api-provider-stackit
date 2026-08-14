@@ -54,8 +54,8 @@ found.** Every known defect reproduces from the same, relocated code:
 
 | Document | Status | Summary |
 | --- | --- | --- |
-| [deletion-bug.md](deletion-bug.md) | ⚠️ open | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously can strand machines and orphan VMs. Root cause identified, fix specified, **not implemented**. `run-refactor1-4` ran `kubectl delete -f` deliberately and it completed cleanly — the race simply did not hit; the code path is verifiably unchanged. **Two further orphan-leak paths** were added on 2026-08-14 from the Copilot review — both caused by trusting persisted status over the cloud. |
-| [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Four code-confirmed defects. **Fixed 2026-08-12 with regression tests:** security group attached twice, and `allowedCIDRs` rules never removed (**security-relevant**). **Still open:** `bastionNeedsRecreate` only watches cloud-init, and the hardcoded `replicas: 3`. |
+| [deletion-bug.md](deletion-bug.md) | ⚠️ open | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously can strand machines and orphan VMs. Root cause identified, fix specified, **not implemented**. `run-refactor1-4` ran `kubectl delete -f` deliberately and it completed cleanly — the race simply did not hit; the code path is verifiably unchanged. **Two further orphan-leak paths** were added on 2026-08-14 from the Copilot review — both caused by trusting persisted status over the cloud; the bastion one is **fixed** with a regression test, the machine-finalizer one remains open. |
+| [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Four code-confirmed defects. **Fixed:** security group attached twice and `allowedCIDRs` never revoked (2026-08-12, **security-relevant**), hardcoded `replicas: 3` (2026-08-14). **Still open:** `bastionNeedsRecreate` only watches cloud-init. |
 | [watch-wiring-bug.md](watch-wiring-bug.md) | ⚠️ open | Two defects where a change that should trigger a reconcile does not: the credentials Secret is not watched (a corrected Secret never re-reconciles the cluster), and the StackitCluster→Machine predicate matches `Machine.spec.clusterName` against the StackitCluster name. From the Copilot review, verified in code. |
 | [machine-recreate-bug.md](machine-recreate-bug.md) | ✅ fixed | `ensureServer()` recreated a missing server unconditionally, even for a machine that had already joined. Fixed 2026-08-12 with an envtest regression test; `run-refactor1-2` had found a worse variant than previously known — see below. |
 
@@ -158,6 +158,9 @@ the CIDR test.
 - e2e suite made runnable and executed for the first time on any branch: free
   specs plus cluster lifecycle, NodeRef and bastion — all green, no leaks. Six
   entry barriers documented in [run-refactor2-1-e2e.md](run-refactor2-1-e2e.md).
+- **2026-08-14:** two more quick-win fixes — the hardcoded worker `replicas: 3`
+  in the bastion template, and bastion cleanup on deletion now following intent
+  rather than persisted status (the latter with an envtest regression test).
 - Three defects fixed, each with a regression test that was proven to catch it
   by temporarily reverting the fix — see
   [test-strategy.md](test-strategy.md#landing-the-tests):
@@ -170,28 +173,23 @@ the CIDR test.
 1. Wire a credentials-Secret watch and fix the StackitCluster→Machine predicate
    ([watch-wiring-bug.md](watch-wiring-bug.md)) — both are cheap to cover at the
    envtest level.
-2. Close the two status-vs-cloud orphan-leak paths on deletion
-   ([deletion-bug.md](deletion-bug.md#related-two-more-orphan-leak-paths-on-deletion-2026-08-14)):
-   look the server up by tags before dropping the machine finalizer, and include
-   `Spec.Bastion.Enabled` in the cluster cleanup condition.
-3. Fix `replicas: 3` → `${WORKER_MACHINE_COUNT}` in
-   `templates/cluster-template-bastion.yaml`. Not coverable by e2e as it stands
-   — the suite renders its own fixtures and never reads that template; a
-   template lint would be the fitting check.
-4. Extend `bastionNeedsRecreate` to cover `sshKeyName`/`imageID`/`machineType`,
+2. Look the server up by tags before dropping the **machine** finalizer
+   ([deletion-bug.md](deletion-bug.md#a-machine-finalizer-removed-while-a-tagged-vm-may-still-exist))
+   — the cluster-side counterpart was fixed on 2026-08-14.
+3. Extend `bastionNeedsRecreate` to cover `sshKeyName`/`imageID`/`machineType`,
    or document the limitation prominently
    ([bastion-bug.md](bastion-bug.md#3-bastionneedsrecreate-only-reacts-to-cloud-init-changes)).
-5. Land the deletion-order fix
+4. Land the deletion-order fix
    ([deletion-bug.md#fix-plan-not-yet-implemented](deletion-bug.md#fix-plan-not-yet-implemented));
    `kubectl delete cluster` stays the documented default until then.
-6. Confirm the `allowedCIDRs` fix once against real infrastructure using the
+5. Confirm the `allowedCIDRs` fix once against real infrastructure using the
    procedure in
    [bastion-bug.md#how-to-actually-prove-this-bug](bastion-bug.md#how-to-actually-prove-this-bug)
    — the unit test asserts the request, not the effective state.
-7. Reduce the e2e entry barriers: fold `STACKIT_AVAILABILITY_ZONE`, the CCM
+6. Reduce the e2e entry barriers: fold `STACKIT_AVAILABILITY_ZONE`, the CCM
    image handling and the credentials Secret into `setup-test-e2e` or the docs,
    and stop `make deploy` from rewriting `config/manager/kustomization.yaml`.
-8. `MachineHealthCheck` remediation is already on the roadmap
+7. `MachineHealthCheck` remediation is already on the roadmap
    ([../docs/src/getting-started/overview.md](../docs/src/getting-started/overview.md),
    *"Full Cluster API Support"*), so the open question is narrower: should the
    **example templates** ship one, or only document the gap?
@@ -202,7 +200,7 @@ the CIDR test.
      healthy nodes.
    - Note an MHC would **not** have fixed
      [machine-recreate-bug.md](machine-recreate-bug.md); see there for why.
-9. Optional e2e specs for the three fixed defects — deferred, with the required
+8. Optional e2e specs for the three fixed defects — deferred, with the required
    work written up per spec in
    [test-strategy.md](test-strategy.md#optional-e2e-specs--deferred-and-what-each-would-need).
 
