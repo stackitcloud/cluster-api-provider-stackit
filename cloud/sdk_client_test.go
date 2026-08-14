@@ -602,3 +602,72 @@ func TestSDKClientEnsureBastionRevokesRemovedCIDR(t *testing.T) {
 		t.Fatalf("deleted rules %v, want [%s] — the revoked CIDR keeps its SSH access", deletedRuleIDs, staleRuleID)
 	}
 }
+
+// TestSDKClientEnsureBastionDeduplicatesRepeatedCIDRs guards against a CIDR
+// listed twice producing two identical rules: existingRules is a snapshot taken
+// before the loop, so the second pass would not see the rule the first pass
+// created and the duplicate create fails the whole reconcile.
+func TestSDKClientEnsureBastionDeduplicatesRepeatedCIDRs(t *testing.T) {
+	var createdRuleCIDRs []string
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": testSDKSecurityGroup, "name": "bastion-ssh",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/rules"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/rules"):
+			payload := readJSON(t, r)
+			if cidr, ok := payload["ipRange"].(string); ok {
+				createdRuleCIDRs = append(createdRuleCIDRs, cidr)
+			}
+			writeJSON(t, w, map[string]any{"id": "77777777-7777-4777-8777-777777777777", "direction": "ingress"})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10", "networkInterface": "nic-1",
+					"labels": map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
+			writeJSON(t, w, map[string]any{
+				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	if _, err := client.EnsureBastion(context.Background(), BastionInput{
+		Name:        "bastion",
+		ProjectID:   testSDKProjectID,
+		Region:      testSDKRegion,
+		NetworkID:   testSDKNetworkID,
+		ImageID:     testSDKImageID,
+		MachineType: "c2i.1",
+		SSHKeyName:  "default",
+		// The same CIDR twice, plus a distinct one.
+		AllowedCIDRs: []string{"203.0.113.0/24", "203.0.113.0/24", "198.51.100.0/24"},
+		Tags:         map[string]string{"cluster": "test"},
+	}); err != nil {
+		t.Fatalf("EnsureBastion() error = %v", err)
+	}
+
+	if len(createdRuleCIDRs) != 2 {
+		t.Fatalf("created %d rules (%v), want 2 — the repeated CIDR was created twice",
+			len(createdRuleCIDRs), createdRuleCIDRs)
+	}
+}

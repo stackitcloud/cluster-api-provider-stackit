@@ -164,6 +164,13 @@ var _ = Describe("StackitMachine Controller", func() {
 		Expect(fakeCloud.CreateServerCalls).To(Equal(1),
 			"a replacement server was created for an already-provisioned machine")
 		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		By("reporting a consistent readiness state")
+		degraded := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
+		expectCondition(degraded.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+		Expect(degraded.Status.Ready).To(BeFalse(),
+			"legacy status.ready must follow the Ready condition, not contradict it")
 	})
 
 	It("attaches provider-managed node SSH access when bastion is enabled", func() {

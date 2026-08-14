@@ -705,6 +705,13 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 		if cidr == "" {
 			return fmt.Errorf("%w: empty bastion allowed CIDR", ErrInvalidInput)
 		}
+		if _, seen := desired[cidr]; seen {
+			// A CIDR listed twice would otherwise be created twice:
+			// existingRules is a snapshot from before this loop, so the second
+			// pass does not see the rule the first pass just created, and the
+			// duplicate create fails the whole bastion reconcile.
+			continue
+		}
 		desired[cidr] = struct{}{}
 		if hasSSHRule(existingRules, cidr) {
 			continue

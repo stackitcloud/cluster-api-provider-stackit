@@ -73,6 +73,9 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 
 	server, created, err := r.ensureServer(ctx, cloudClient, s, bootstrapData)
 	if err != nil {
+		// Keep the legacy boolean in step with the conditions: a machine whose
+		// server could not be ensured is not ready, even if it was before.
+		sm.Status.Ready = false
 		return util.CloudFailureResult(
 			&sm.Status.Conditions,
 			sm.Generation,
@@ -98,6 +101,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 	}
 
 	if err := r.reconcileBastionNodeSSHAccess(ctx, cloudClient, s, server); err != nil {
+		sm.Status.Ready = false
 		return util.CloudFailureResult(
 			&sm.Status.Conditions,
 			sm.Generation,
@@ -110,6 +114,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 	}
 
 	if err := r.reconcileAPIServerLoadBalancerTarget(ctx, cloudClient, s, server); err != nil {
+		sm.Status.Ready = false
 		return util.CloudFailureResult(
 			&sm.Status.Conditions,
 			sm.Generation,
