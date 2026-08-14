@@ -203,6 +203,50 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	It("cleans up bastion resources during deletion even when bastion status was never persisted", func() {
+		// Regression test for debug/deletion-bug.md: the cloud-cleanup block used
+		// to be gated on persisted status for the bastion, while the load
+		// balancer was gated on its spec flag. A bastion created without its
+		// status patch landing (process restart, conflict) therefore skipped
+		// cleanup entirely and leaked server, public IP and security group.
+		createOwnerCluster(ctx, clusterName+"-nolb", namespace)
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
+		})
+		lbDisabled := newStackitCluster(clusterName+"-nolb", namespace, false)
+		lbDisabled.Spec.CredentialsSecretRef.Name = credentials
+		lbDisabled.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Create(ctx, lbDisabled)).To(Succeed())
+		defer deleteIfExists(ctx, lbDisabled)
+
+		key := types.NamespacedName{Namespace: namespace, Name: lbDisabled.Name}
+		req := reconcile.Request{NamespacedName: key}
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted bastion status, as if the patch never landed")
+		got.Status.Bastion = infrav1.StackitBastionStatus{}
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(hasBastionStatus(got.Status.Bastion)).To(BeFalse())
+		Expect(got.Status.APIServerLoadBalancerID).To(BeEmpty())
+
+		By("deleting the cluster")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"bastion server leaked because cleanup was gated on status alone")
+		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())
