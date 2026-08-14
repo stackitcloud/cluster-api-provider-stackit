@@ -247,6 +247,71 @@ This produces two separate problems:
    a standard pattern for CAPI infrastructure providers.
    → see [Fix plan](#fix-plan-not-yet-implemented).
 
+## Related: two more orphan-leak paths on deletion (2026-08-14)
+
+Found by the Copilot review on
+[PR #1](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/1)
+and verified against the code. Same family as the bug above — resources left
+behind at STACKIT after deletion — but a **different mechanism**: not "the
+machine can no longer reach the cloud API", but "persisted status does not
+match what actually exists in the cloud".
+
+Both share one root assumption: **status is treated as proof of reality.** A
+server can be created and the reconcile can stop before the status patch lands
+(process restart, conflict, lost connection). From then on the object claims
+nothing exists while the VM is running and tagged.
+
+### A. Machine finalizer removed while a tagged VM may still exist
+
+[`controller/stackitmachine_infrastructure.go`](../controller/stackitmachine_infrastructure.go),
+`reconcileDelete`:
+
+```go
+if sm.Status.InstanceID == "" && !needsLoadBalancerCleanup {
+    controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
+    ...
+    return nil
+}
+```
+
+An empty `status.instanceID` is taken to mean "no VM was ever created", and the
+finalizer goes away without a single cloud call. If `CreateServer` had
+succeeded and the status patch had not, that VM is now unreferenced and
+unreachable through any controller.
+
+**Fix:** before removing the finalizer, look the server up by `s.Tags()` and
+delete it if found, treating not-found as success. The tags are already
+sufficient for this — `cloud.CleanupByTags` does exactly this kind of lookup.
+
+### B. Cluster cleanup skipped entirely when bastion status is empty
+
+[`controller/stackitcluster_infrastructure.go`](../controller/stackitcluster_infrastructure.go),
+`reconcileDelete`:
+
+```go
+if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) || sc.Spec.APIServerLoadBalancer.Enabled {
+    // ... all cloud cleanup lives in here
+}
+```
+
+Note what is **not** in that condition: `sc.Spec.Bastion.Enabled`. The load
+balancer is covered by its spec flag, the bastion only by its *status*. So a
+cluster with `bastion.enabled: true` whose bastion status was never persisted
+skips the whole block and drops its finalizer — leaking the bastion server, its
+public IP and its security groups at once.
+
+**Fix:** add `sc.Spec.Bastion.Enabled` to the condition, and run the tag-based
+deletion even when the status fields are empty, so cleanup depends on intent
+rather than on bookkeeping having succeeded.
+
+### Relation to the bug above
+
+The fix plan below guards `StackitCluster.reconcileDelete` against removing its
+finalizer while machines remain. These two are the mirror image: they remove
+finalizers while *cloud resources* remain. A complete fix for deletion
+correctness should cover both — "do not finish before dependents are gone" and
+"do not trust status over the cloud".
+
 ## Manual cleanup protocol
 
 How to free an already-damaged cluster. **Always clean up the cloud side
