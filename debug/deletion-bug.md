@@ -313,6 +313,32 @@ status was never persisted"* in
 cluster, wipes `Status.Bastion` to simulate the lost patch, deletes the cluster
 and asserts no server, public IP or security group survives.
 
+### C. A deleted credentials Secret stranded the cluster in `Terminating`
+
+Same function, right after the gate from B opens: `util.BuildCloudClient` reads
+the credentials Secret, and every error from it was returned unchanged. During
+namespace teardown the Secret is commonly deleted **before** the
+`StackitCluster` — Kubernetes gives no ordering guarantee — so `reconcileDelete`
+then failed on a `NotFound` it could never recover from. The finalizer stayed,
+and the cluster hung in `Terminating` until an operator removed it by hand: the
+same end state as the bug at the top of this document, reached by a different
+route.
+
+Widening the gate in B made this more likely to be hit, not less: clusters that
+previously skipped the block entirely now enter it and reach the Secret read.
+
+**Fix — ✅ done (2026-08-14).** A missing Secret finalizes the deletion, emits a
+`CleanupSkipped` warning event naming the possible leak, and removes the
+finalizer. Every *other* credentials error — invalid, unauthorized — is fixable
+by the operator and therefore still blocks, as before.
+
+The tradeoff is deliberate: without the credentials there is no way to reach the
+cloud at all, so the choice is between a leak the operator is told about and a
+cluster that can never be deleted. Making the leak loud is the lesser evil.
+
+Guarded by *"finalizes deletion when the credentials Secret is already gone"* in
+`controller/stackitcluster_controller_test.go`.
+
 ### Relation to the bug above
 
 The fix plan below guards `StackitCluster.reconcileDelete` against removing its

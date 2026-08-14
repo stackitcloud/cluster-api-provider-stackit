@@ -54,8 +54,8 @@ found.** Every known defect reproduces from the same, relocated code:
 
 | Document | Status | Summary |
 | --- | --- | --- |
-| [deletion-bug.md](deletion-bug.md) | ⚠️ open | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously can strand machines and orphan VMs. Root cause identified, fix specified, **not implemented**. `run-refactor1-4` ran `kubectl delete -f` deliberately and it completed cleanly — the race simply did not hit; the code path is verifiably unchanged. **Two further orphan-leak paths** were added on 2026-08-14 from the Copilot review — both caused by trusting persisted status over the cloud; the bastion one is **fixed** with a regression test, the machine-finalizer one remains open. |
-| [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Four code-confirmed defects. **Fixed:** security group attached twice and `allowedCIDRs` never revoked (2026-08-12, **security-relevant**), hardcoded `replicas: 3` (2026-08-14). **Still open:** `bastionNeedsRecreate` only watches cloud-init. |
+| [deletion-bug.md](deletion-bug.md) | ⚠️ open | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously can strand machines and orphan VMs. Root cause identified, fix specified, **not implemented**. `run-refactor1-4` ran `kubectl delete -f` deliberately and it completed cleanly — the race simply did not hit; the code path is verifiably unchanged. **Three further orphan-leak paths** were added on 2026-08-14 — the first two from the Copilot review, both caused by trusting persisted status over the cloud; a third came out of reviewing [PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4). **Fixed:** bastion cleanup by intent, and a deleted credentials Secret no longer strands the cluster in `Terminating`. **Open:** the machine-finalizer path. |
+| [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Five code-confirmed defects. **Fixed:** security group attached twice (the first fix removed the call and was itself a regression — now an idempotent re-attach), `allowedCIDRs` never revoked (**security-relevant**), hardcoded `replicas: 3`, and disabling the bastion not tearing it down. **Still open:** `bastionNeedsRecreate` only watches cloud-init, and the CIDR revoke compares prefixes as strings. |
 | [watch-wiring-bug.md](watch-wiring-bug.md) | ⚠️ open | Two defects where a change that should trigger a reconcile does not: the credentials Secret is not watched (a corrected Secret never re-reconciles the cluster), and the StackitCluster→Machine predicate matches `Machine.spec.clusterName` against the StackitCluster name. From the Copilot review, verified in code. |
 | [machine-recreate-bug.md](machine-recreate-bug.md) | ✅ fixed | `ensureServer()` recreated a missing server unconditionally, even for a machine that had already joined. Fixed 2026-08-12 with an envtest regression test; `run-refactor1-2` had found a worse variant than previously known — see below. |
 
@@ -161,6 +161,12 @@ the CIDR test.
 - **2026-08-14:** two more quick-win fixes — the hardcoded worker `replicas: 3`
   in the bastion template, and bastion cleanup on deletion now following intent
   rather than persisted status (the latter with an envtest regression test).
+- **2026-08-14, from reviewing [PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4)
+  itself:** the security-group fix was found to be a regression of its own and
+  replaced by an idempotent re-attach; disabling the bastion now tears it down
+  even without persisted status; and a deleted credentials Secret finalizes the
+  cluster instead of stranding it. Three further findings from the same review
+  are open — items 8–10 below.
 - Three defects fixed, each with a regression test that was proven to catch it
   by temporarily reverting the fix — see
   [test-strategy.md](test-strategy.md#landing-the-tests):
@@ -200,7 +206,25 @@ the CIDR test.
      healthy nodes.
    - Note an MHC would **not** have fixed
      [machine-recreate-bug.md](machine-recreate-bug.md); see there for why.
-8. Optional e2e specs for the three fixed defects — deferred, with the required
+8. Give the recreate guard a terminal state
+   ([machine-recreate-bug.md](machine-recreate-bug.md#fix-options)). It returns
+   a retryable `cloud.ErrNotFound`, so an already-provisioned machine whose
+   server is gone reconciles forever; the provider has no
+   `failureReason`/`failureMessage` for CAPI to remediate on, and
+   `status.instanceState`/`status.addresses` keep describing the deleted server.
+   This is the unimplemented half of the fix, and it is what keeps item 7
+   coupled to this bug.
+9. Normalise CIDRs before comparing them in the `allowedCIDRs` revoke loop
+   ([bastion-bug.md](bastion-bug.md#2-changing-allowedcidrs-never-revokes-the-old-access)).
+   A non-canonical prefix such as `203.0.113.5/24` — which `validateBastionSpec`
+   accepts — never matches what the API returns masked, so the rule is deleted
+   and recreated on every reconcile. In the same loop, `isSSHRule` ignores
+   `ipRange`, so a rule without one would be deleted (latent today).
+10. Clear `status.ready` on all failure paths in `StackitMachine.reconcileNormal`
+    ([machine-recreate-bug.md](machine-recreate-bug.md#follow-up-statusready-is-cleared-on-only-three-of-five-failure-paths))
+    — the bootstrap-data and credentials paths still leave `ready: true` next to
+    conditions saying `False`. The cluster controller already does this.
+11. Optional e2e specs for the three fixed defects — deferred, with the required
    work written up per spec in
    [test-strategy.md](test-strategy.md#optional-e2e-specs--deferred-and-what-each-would-need).
 

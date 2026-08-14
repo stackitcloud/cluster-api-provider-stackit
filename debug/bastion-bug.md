@@ -86,11 +86,21 @@ variant for the first ~60 seconds of bastion provisioning — and
 `status.bastion.publicIP` staying empty for exactly that window, appearing only
 at t+80s once the error had cleared. Identical to `main`.
 
-**Fix — ✅ done (2026-08-12).** The redundant call was removed; the security
-group reaches the server through the `CreateServer` payload alone. Guarded by
-`TestSDKClientEnsureBastionAttachesSecurityGroupOnlyOnce` in
-`cloud/sdk_client_test.go`, which also asserts the public IP is assigned in the
-same reconcile — the effect that the aborted call used to delay.
+**Fix — ✅ done (2026-08-14), after a first attempt was wrong.**
+
+The first fix simply removed the call. That was a regression: `CreateServer`
+short-circuits on an existing server found by tags, so this call is the **only**
+path that re-attaches a group detached out of band — for instance by an
+interrupted `DeleteBastion`. Without it the bastion reports `Ready` while none
+of its SSH rules are in effect. The asymmetry gives it away: the public IP right
+below is re-attached conditionally and tolerates `Conflict`.
+
+The call is therefore back, and `addSecurityGroupToServer` now tolerates
+`IsConflict`, `IsInvalidInput` (the 400 duplicate) and `IsNotFound` (no port
+yet) — the second option named above, which was passed over the first time.
+Guarded by `TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach`,
+where the mock returns the real 400 duplicate body and the test requires
+`EnsureBastion` to complete **and** assign the public IP.
 
 ---
 
@@ -153,6 +163,43 @@ in both directions: after creating missing rules it deletes every SSH rule whose
 `TestSDKClientEnsureBastionRevokesRemovedCIDR` in `cloud/sdk_client_test.go`.
 The manual procedure above should now produce the timeout it previously failed
 to produce — worth confirming once against real infrastructure.
+
+**⚠️ Still open — CIDRs are compared as strings.** The revoke loop matches
+`desired[rule.GetIpRange()]` against what the API returns. A non-canonical
+prefix such as `203.0.113.5/24`, which `validateBastionSpec` accepts and the API
+stores masked, therefore never matches: the rule is deleted and recreated on
+**every** reconcile. Separately, `isSSHRule` matches direction, port and
+protocol but not `ipRange`, so a rule with an empty `ipRange` (remote-security-group
+based) counts as "not desired" and would be deleted — latent today, since such
+rules only live on the node security group. Suggested: normalise via
+`netip.ParsePrefix(...).Masked()` before comparing, and skip rules without an
+`ipRange`.
+
+---
+
+## 5. Disabling the bastion did not tear it down — ✅ fixed (2026-08-14)
+
+**Location:** [`controller/stackitcluster_bastion.go`](../controller/stackitcluster_bastion.go),
+`reconcileBastion`.
+
+The intent-vs-status fix in
+[deletion-bug.md](deletion-bug.md#b-cluster-cleanup-skipped-entirely-when-bastion-status-is-empty)
+was applied to `reconcileDelete` only. The `spec.bastion.enabled: false` path
+here stayed gated on `hasBastionStatus()` alone, so a bastion whose status patch
+never landed kept running — **with port 22 open** — while the condition reported
+`Skipped: bastion disabled`.
+
+**Fix:** teardown now runs when the bastion status is present **or the
+`BastionReady` condition is missing**. Both live in the same status subresource,
+so the condition is absent in exactly the case where the status was lost.
+
+The trigger matters for cost: this path runs on every reconcile of every cluster
+*without* a bastion, which is most of them. An unconditional tag sweep would add
+about four STACKIT API calls per reconcile permanently; with the condition as
+trigger the sweep runs once per cluster.
+
+Guarded by *"tears the bastion down when disabled even if its status was never
+persisted"*.
 
 ---
 

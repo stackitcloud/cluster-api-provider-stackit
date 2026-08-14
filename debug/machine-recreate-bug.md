@@ -181,11 +181,31 @@ becomes an independent, ordinary roadmap item
 
 ## Fix options
 
-**Implemented: option 1.** `ensureServer` now returns a wrapped
-`cloud.ErrNotFound` when the server of a machine with
+**Implemented: option 1 — the recreate half.** `ensureServer` now returns a
+wrapped `cloud.ErrNotFound` when the server of a machine with
 `Status.Initialization.Provisioned` has disappeared, instead of calling
-`CreateServer`. Regression test: *"does not silently recreate the server of an
-already-provisioned machine"* in `controller/stackitmachine_controller_test.go`.
+`CreateServer` ([PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4)).
+Regression test: *"does not silently recreate the server of an already-provisioned
+machine"* in `controller/stackitmachine_controller_test.go`. No further VM is
+created, and no wrong bootstrap data is applied.
+
+**⚠️ The reporting half of option 1 is still open.** The guard stops the damage
+but produces no terminal state:
+
+- The error is wrapped `cloud.ErrNotFound`, which `CloudFailureResult` treats as
+  retryable. The machine therefore reconciles forever against a server that can
+  never come back — exactly the *"surface a failure condition"* part of option 1
+  that the sentence below asks for, and it is not implemented.
+- The provider has **no** `failureReason`/`failureMessage` at all
+  (`grep -rn "failureReason" api/` returns nothing), so CAPI has nothing to key
+  remediation on. That is also why the MHC question above stays coupled to this
+  bug rather than becoming independent as claimed.
+- `status.instanceState` and `status.addresses` keep describing the deleted
+  server. Anything reading the status — including an operator — is told the
+  machine still exists.
+
+Until this half lands, the outcome is a machine stuck in a retry loop instead of
+one silently replaced: better, but still not remediable without manual action.
 
 1. **Guard the recreate.** Treat "instance ID was set, server is now gone" as a
    terminal condition for an already-initialised machine
@@ -219,3 +239,31 @@ report state, the Machine controller decides on replacement.
   `STACKIT_E2E_NODE_REF`) already asserts exactly this — it simply never
   deletes a VM out-of-band. Extending that spec with an out-of-band delete
   would turn this bug into an automated regression test.
+
+---
+
+## Follow-up: `status.ready` is cleared on only three of five failure paths
+
+Found reviewing [PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4),
+2026-08-14. Status: ⚠️ **open**.
+
+**Location:** [`controller/stackitmachine_infrastructure.go`](../controller/stackitmachine_infrastructure.go),
+`reconcileNormal`.
+
+The PR added `sm.Status.Ready = false` before each of the three
+`CloudFailureResult` calls, because a machine that fails mid-reconcile otherwise
+keeps `status.ready: true` while its conditions say `False` — a contradiction
+between the boolean and the conditions in the same status.
+
+The same function has two further early returns that do not clear it: the
+bootstrap-data path and the credentials path. Both are reachable *after* a
+machine became ready — a rotated or deleted credentials Secret is the ordinary
+case — and both leave the identical contradiction the fix set out to remove.
+
+The cluster controller does not have this gap: `reconcileNormal` in
+[`controller/stackitcluster_infrastructure.go:45`](../controller/stackitcluster_infrastructure.go)
+clears `sc.Status.Ready` in the equivalent credentials path.
+
+**Fix:** clear `sm.Status.Ready` on all five paths — or, better, once at the top
+of the failure handling instead of at each call site, which is what let two
+paths be missed in the first place.
