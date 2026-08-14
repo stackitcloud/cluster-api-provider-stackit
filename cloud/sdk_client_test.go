@@ -471,7 +471,10 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 			// Answer the way the real API does for an already-attached group.
 			attachCallCount++
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"code":400,"msg":"request invalid: Invalid input for security_groups. Reason: Duplicate items in the list."}`))
+			writeJSON(t, w, map[string]any{
+				"code": 400,
+				"msg":  "request invalid: Invalid input for security_groups. Reason: Duplicate items in the list.",
+			})
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
 			writeJSON(t, w, map[string]any{"items": []any{}})
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/public-ips"):
