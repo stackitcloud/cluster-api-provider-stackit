@@ -283,6 +283,37 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue(), "cluster stayed in Terminating because the finalizer was never removed")
 	})
 
+	It("tears the bastion down when disabled even if its status was never persisted", func() {
+		// Counterpart to the deletion path: disabling the bastion used to be
+		// gated on hasBastionStatus alone. With the status lost, nothing was torn
+		// down while the condition reported "bastion disabled" — leaving port 22
+		// open for the rest of the cluster's life.
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted bastion status and its condition")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.Bastion = infrav1.StackitBastionStatus{}
+		got.Status.Conditions = nil
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		By("disabling the bastion")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion.Enabled = false
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"bastion kept running with port 22 open while reporting itself disabled")
+		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())
