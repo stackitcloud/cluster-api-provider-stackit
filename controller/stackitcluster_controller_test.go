@@ -247,6 +247,43 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
 	})
 
+	It("finalizes deletion when the credentials Secret is already gone", func() {
+		// A missing credentials Secret cannot be recovered from, and it commonly
+		// disappears first during namespace teardown. Broadening the delete gate
+		// to spec.Bastion.Enabled made a working cloud client mandatory for every
+		// bastion cluster, which would strand such a cluster in Terminating.
+		createOwnerCluster(ctx, clusterName+"-nocreds", namespace)
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
+		})
+		orphaned := newStackitCluster(clusterName+"-nocreds", namespace, false)
+		orphaned.Spec.CredentialsSecretRef.Name = credentials
+		orphaned.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Create(ctx, orphaned)).To(Succeed())
+		defer deleteIfExists(ctx, orphaned)
+
+		key := types.NamespacedName{Namespace: namespace, Name: orphaned.Name}
+		req := reconcile.Request{NamespacedName: key}
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("removing the credentials Secret, as namespace teardown would")
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: credentials, Namespace: namespace},
+		})).To(Succeed())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred(), "deletion must not block on a Secret that can never come back")
+
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, key, &infrav1.StackitCluster{}))
+		}).Should(BeTrue(), "cluster stayed in Terminating because the finalizer was never removed")
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -197,6 +198,20 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 		sc.Spec.APIServerLoadBalancer.Enabled || sc.Spec.Bastion.Enabled {
 		cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
 		if err != nil {
+			// A missing credentials Secret can never be recovered from — it
+			// commonly disappears first during namespace teardown. Blocking here
+			// would strand the cluster in Terminating forever, so finalize and
+			// make the possible leak loud instead. Any other credentials problem
+			// is fixable, so keep retrying for those.
+			if apierrors.IsNotFound(err) {
+				if r.Recorder != nil {
+					r.Recorder.Eventf(sc, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+						"Credentials Secret is gone; finalizing without cloud cleanup. "+
+							"Any remaining STACKIT resources for this cluster must be removed manually: %v", err)
+				}
+				controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
+				return nil
+			}
 			util.SetConditions(
 				&sc.Status.Conditions,
 				sc.Generation,
