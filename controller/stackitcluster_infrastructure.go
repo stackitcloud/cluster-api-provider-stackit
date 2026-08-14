@@ -193,7 +193,14 @@ func bootstrapTargetIP(network *cloud.Network) string {
 
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope.ClusterScope) error {
 	sc := s.StackitCluster
-	if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) || sc.Spec.APIServerLoadBalancer.Enabled {
+	// Both the load balancer and the bastion are gated by their spec flag, not
+	// only by persisted status: a resource can be created and the reconcile can
+	// stop before the status patch lands. Relying on status alone would skip
+	// cleanup entirely and leak the bastion server, its public IP and its
+	// security groups. The tag-based lookups in DeleteBastion tolerate an empty
+	// status, so running the block without one is safe.
+	if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) ||
+		sc.Spec.APIServerLoadBalancer.Enabled || sc.Spec.Bastion.Enabled {
 		cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
 		if err != nil {
 			util.SetConditions(
@@ -222,7 +229,11 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 				)
 			}
 		}
-		if hasBastionStatus(sc.Status.Bastion) {
+		// Driven by intent as well as by status: DeleteBastion and
+		// DeleteNodeSSHAccess resolve their resources by tag when the status
+		// fields are empty, so this also cleans up a bastion whose status patch
+		// never landed.
+		if hasBastionStatus(sc.Status.Bastion) || sc.Spec.Bastion.Enabled {
 			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
 				return err
 			}
