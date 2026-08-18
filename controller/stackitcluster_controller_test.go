@@ -314,6 +314,36 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 	})
 
+	It("tears the bastion down when disabled even if only its status was lost", func() {
+		// Narrower than the case above: the condition survives and still reports
+		// the bastion as available, only the bastion status fields are gone.
+		// Gating the cleanup on hasBastionStatus left the server running here.
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted bastion status while keeping the conditions")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.Bastion = infrav1.StackitBastionStatus{}
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Available")
+
+		By("disabling the bastion")
+		got.Spec.Bastion.Enabled = false
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"bastion kept running because cleanup was gated on the bastion status")
+		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())

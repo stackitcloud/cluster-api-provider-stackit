@@ -30,6 +30,10 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
+// bastionDisabledReason is read back to decide whether the cleanup below
+// already ran, so it must not drift.
+const bastionDisabledReason = "Skipped"
+
 func (r *StackitClusterReconciler) reconcileBastion(
 	ctx context.Context,
 	cloudClient cloud.Client,
@@ -45,17 +49,14 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 
 	if !sc.Spec.Bastion.Enabled {
-		// Status alone is not proof that no bastion exists: EnsureBastion can
-		// succeed and the status patch can be lost, after which disabling the
-		// bastion would silently leave it running with port 22 open — while the
-		// condition below claims it is disabled.
-		//
-		// The BastionReady condition lives in the same status subresource, so it
-		// is missing in exactly that case. Using it as the trigger keeps the
-		// tag-based cleanup to once per cluster instead of once per reconcile,
-		// which matters because this path runs for every cluster without a
-		// bastion.
-		if hasBastionStatus(sc.Status.Bastion) || meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition) == nil {
+		// The condition carries this reason only after a cleanup has succeeded,
+		// so anything else means we may still own bastion resources — including
+		// the case where EnsureBastion succeeded but its status patch was lost.
+		// Keying on it instead of on the status keeps the tag-based cleanup to
+		// once per cluster rather than once per reconcile, which matters because
+		// this path runs for every cluster without a bastion.
+		condition := meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition)
+		if condition == nil || condition.Reason != bastionDisabledReason {
 			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil {
 				return ctrl.Result{}, false, err
 			}
@@ -67,7 +68,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 				r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 			}
 		}
-		s.SetConditions(metav1.ConditionTrue, "Skipped", "bastion disabled", infrav1.ClusterBastionReadyCondition)
+		s.SetConditions(metav1.ConditionTrue, bastionDisabledReason, "bastion disabled", infrav1.ClusterBastionReadyCondition)
 		return ctrl.Result{}, true, nil
 	}
 
