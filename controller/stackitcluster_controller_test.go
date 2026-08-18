@@ -60,7 +60,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		}
 
 		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
-		createOwnerCluster(ctx, clusterName, namespace)
+		createOwnerCluster(ctx, clusterName)
 		stackitClust = newStackitCluster(clusterName, namespace, true)
 		stackitClust.Spec.CredentialsSecretRef.Name = credentials
 		Expect(k8sClient.Create(ctx, stackitClust)).To(Succeed())
@@ -208,7 +208,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		// balancer was gated on its spec flag. A bastion created without its
 		// status patch landing (process restart, conflict) therefore skipped
 		// cleanup entirely and leaked server, public IP and security group.
-		createOwnerCluster(ctx, clusterName+"-nolb", namespace)
+		createOwnerCluster(ctx, clusterName+"-nolb")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
 		})
@@ -251,7 +251,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		// disappears first during namespace teardown. Broadening the delete gate
 		// to spec.Bastion.Enabled made a working cloud client mandatory for every
 		// bastion cluster, which would strand such a cluster in Terminating.
-		createOwnerCluster(ctx, clusterName+"-nocreds", namespace)
+		createOwnerCluster(ctx, clusterName+"-nocreds")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
 		})

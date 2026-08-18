@@ -67,7 +67,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		}
 
 		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
-		createOwnerCluster(ctx, clusterName, namespace)
+		createOwnerCluster(ctx, clusterName)
 		createReadyStackitCluster(ctx, clusterName, namespace, credentials)
 		createOwnerMachine(ctx, machineName, namespace, clusterName, stackitName, nil)
 		stackitMach = newStackitMachine(stackitName, namespace, machineName)
