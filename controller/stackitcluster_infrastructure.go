@@ -31,34 +31,39 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
-func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope.ClusterScope) (ctrl.Result, error) {
+func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	sc := s.StackitCluster
+	cluster := clusterScope.StackitCluster
 
-	if !controllerutil.ContainsFinalizer(sc, infrav1.ClusterFinalizer) {
-		controllerutil.AddFinalizer(sc, infrav1.ClusterFinalizer)
+	if !controllerutil.ContainsFinalizer(cluster, infrav1.ClusterFinalizer) {
+		controllerutil.AddFinalizer(cluster, infrav1.ClusterFinalizer)
 	}
-	sc.Status.FailureDomains = stackitFailureDomains(sc.Spec.Region)
+	cluster.Status.FailureDomains = stackitFailureDomains(cluster.Spec.Region)
 
-	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
+	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, cluster)
 	if err != nil {
-		sc.Status.Ready = false
+		cluster.Status.Ready = false
 		return util.CredentialFailureResult(
-			&sc.Status.Conditions,
-			sc.Generation,
+			&cluster.Status.Conditions,
+			cluster.Generation,
 			err,
 			infrav1.ClusterCredentialsReadyCondition,
 			infrav1.ClusterReadyCondition,
 		)
 	}
-	s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.ClusterCredentialsReadyCondition)
+	clusterScope.SetConditions(
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterCredentialsReadyCondition,
+	)
 
-	network, err := cloudClient.GetNetwork(ctx, sc.Spec.Network.ID)
+	network, err := cloudClient.GetNetwork(ctx, cluster.Spec.Network.ID)
 	if err != nil {
-		sc.Status.Ready = false
+		cluster.Status.Ready = false
 		return util.CloudFailureResult(
-			&sc.Status.Conditions,
-			sc.Generation,
+			&cluster.Status.Conditions,
+			cluster.Generation,
 			"NetworkNotFound",
 			err,
 			retryableErrorRequeueAfter,
@@ -67,21 +72,26 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 			infrav1.ClusterReadyCondition,
 		)
 	}
-	s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.ClusterNetworkReadyCondition)
+	clusterScope.SetConditions(
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterNetworkReadyCondition,
+	)
 
-	if sc.Spec.APIServerLoadBalancer.Enabled {
+	if cluster.Spec.APIServerLoadBalancer.Enabled {
 		lb, err := cloudClient.EnsureAPIServerLoadBalancer(
 			ctx,
 			loadbalancerservice.APIServerInput(
-				sc,
+				cluster,
 				[]cloud.LoadBalancerTargetInput{loadbalancerservice.BootstrapTarget(bootstrapTargetIP(network))},
 			),
 		)
 		if err != nil {
-			sc.Status.Ready = false
+			cluster.Status.Ready = false
 			return util.CloudFailureResult(
-				&sc.Status.Conditions,
-				sc.Generation,
+				&cluster.Status.Conditions,
+				cluster.Generation,
 				"LoadBalancerError",
 				err,
 				retryableErrorRequeueAfter,
@@ -90,45 +100,65 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 				infrav1.ClusterReadyCondition,
 			)
 		}
-		hadLoadBalancerID := sc.Status.APIServerLoadBalancerID != ""
+		hadLoadBalancerID := cluster.Status.APIServerLoadBalancerID != ""
 		if lb != nil {
-			sc.Status.APIServerLoadBalancerID = lb.ID
+			cluster.Status.APIServerLoadBalancerID = lb.ID
 			if !hadLoadBalancerID && lb.ID != "" && r.Recorder != nil {
 				r.Recorder.Eventf(
-					sc, nil, corev1.EventTypeNormal, "LoadBalancerCreated", "Create",
+					cluster, nil, corev1.EventTypeNormal, "LoadBalancerCreated", "Create",
 					"Created API server load balancer %s", lb.ID,
 				)
 			}
 		}
 		if lb == nil || lb.IP == "" {
-			s.SetNotReady("Provisioning", "waiting for API server load balancer IP address", infrav1.ClusterLoadBalancerReadyCondition, infrav1.ClusterReadyCondition)
+			clusterScope.SetNotReady(
+				"Provisioning",
+				"waiting for API server load balancer IP address",
+				infrav1.ClusterLoadBalancerReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		endpoint := clusterv1.APIEndpoint{
 			Host: lb.IP,
 			Port: defaultAPIServerPort,
 		}
-		s.SetAPIServerEndpoint(endpoint)
-		s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.ClusterLoadBalancerReadyCondition)
+		clusterScope.SetAPIServerEndpoint(endpoint)
+		clusterScope.SetConditions(
+			metav1.ConditionTrue,
+			"Available",
+			"",
+			infrav1.ClusterLoadBalancerReadyCondition,
+		)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(
-				sc, nil, corev1.EventTypeNormal, "LoadBalancerReady", "SetReady",
+				cluster, nil, corev1.EventTypeNormal, "LoadBalancerReady", "SetReady",
 				"API server load balancer is ready at %s", lb.IP,
 			)
 		}
-	} else if sc.Spec.ControlPlaneEndpoint.Host != "" {
-		sc.Status.APIServerEndpoint = sc.Spec.ControlPlaneEndpoint
-		s.SetConditions(metav1.ConditionTrue, "Skipped", "external endpoint provided", infrav1.ClusterLoadBalancerReadyCondition)
+	} else if cluster.Spec.ControlPlaneEndpoint.Host != "" {
+		cluster.Status.APIServerEndpoint = cluster.Spec.ControlPlaneEndpoint
+		clusterScope.SetConditions(
+			metav1.ConditionTrue,
+			"Skipped",
+			"external endpoint provided",
+			infrav1.ClusterLoadBalancerReadyCondition,
+		)
 	} else {
-		s.SetNotReady("EndpointMissing", "apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty", infrav1.ClusterLoadBalancerReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.SetNotReady(
+			"EndpointMissing",
+			"apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty",
+			infrav1.ClusterLoadBalancerReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{}, nil
 	}
 
-	if result, ready, err := r.reconcileBastion(ctx, cloudClient, s); err != nil {
-		sc.Status.Ready = false
+	if result, ready, err := r.reconcileBastion(ctx, cloudClient, clusterScope); err != nil {
+		cluster.Status.Ready = false
 		return util.CloudFailureResult(
-			&sc.Status.Conditions,
-			sc.Generation,
+			&cluster.Status.Conditions,
+			cluster.Generation,
 			"BastionError",
 			err,
 			retryableErrorRequeueAfter,
@@ -140,8 +170,8 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, s *scope
 		return result, nil
 	}
 
-	s.SetReady()
-	log.V(1).Info("StackitCluster ready", "endpoint", sc.Status.APIServerEndpoint)
+	clusterScope.SetReady()
+	log.V(1).Info("StackitCluster ready", "endpoint", cluster.Status.APIServerEndpoint)
 	return ctrl.Result{}, nil
 }
 
@@ -192,8 +222,9 @@ func bootstrapTargetIP(network *cloud.Network) string {
 	return "10.0.0.1"
 }
 
-func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope.ClusterScope) error {
-	sc := s.StackitCluster
+func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) error {
+	cluster := clusterScope.StackitCluster
+
 	// Cleanup runs unconditionally. Neither spec nor status is a trustworthy
 	// record of what exists in the cloud: a resource can be created before its
 	// status patch lands, and disabling the load balancer or the bastion leaves
@@ -201,7 +232,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 	// DeleteNodeSSHAccess all fall back to tag lookups and tolerate NotFound, so
 	// asking for everything costs a handful of list calls once per cluster and
 	// removes every combination in which a resource could be missed.
-	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
+	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, cluster)
 	if err != nil {
 		// A missing credentials Secret can never be recovered from — it commonly
 		// disappears first during namespace teardown. Blocking here would strand
@@ -210,16 +241,16 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 		// retrying for those.
 		if apierrors.IsNotFound(err) {
 			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+				r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
 					"Credentials Secret is gone; finalizing without cloud cleanup. "+
 						"Any remaining STACKIT resources for this cluster must be removed manually: %v", err)
 			}
-			controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
+			controllerutil.RemoveFinalizer(cluster, infrav1.ClusterFinalizer)
 			return nil
 		}
 		util.SetConditions(
-			&sc.Status.Conditions,
-			sc.Generation,
+			&cluster.Status.Conditions,
+			cluster.Generation,
 			metav1.ConditionFalse,
 			"CredentialsInvalid",
 			err.Error(),
@@ -227,7 +258,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 		)
 		return err
 	}
-	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, sc)
+	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, cluster)
 	if err != nil {
 		return err
 	}
@@ -235,31 +266,31 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope
 		if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
 			return err
 		}
-		sc.Status.APIServerLoadBalancerID = ""
+		cluster.Status.APIServerLoadBalancerID = ""
 		if r.Recorder != nil {
 			r.Recorder.Eventf(
-				sc, nil, corev1.EventTypeNormal, "LoadBalancerDeleted", "Delete",
+				cluster, nil, corev1.EventTypeNormal, "LoadBalancerDeleted", "Delete",
 				"Deleted API server load balancer %s", loadBalancerID,
 			)
 		}
 	}
-	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
+	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(cluster)); err != nil && !cloud.IsNotFound(err) {
 		return err
 	}
-	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(sc, nil), cloud.Bastion{
-		ServerID:        sc.Status.Bastion.ServerID,
-		PublicIPID:      sc.Status.Bastion.PublicIPID,
-		PublicIP:        sc.Status.Bastion.PublicIP,
-		SecurityGroupID: sc.Status.Bastion.SecurityGroupID,
+	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(cluster, nil), cloud.Bastion{
+		ServerID:        cluster.Status.Bastion.ServerID,
+		PublicIPID:      cluster.Status.Bastion.PublicIPID,
+		PublicIP:        cluster.Status.Bastion.PublicIP,
+		SecurityGroupID: cluster.Status.Bastion.SecurityGroupID,
 	}); err != nil && !cloud.IsNotFound(err) {
 		return err
 	}
-	if hasBastionStatus(sc.Status.Bastion) {
-		s.ClearBastionStatus()
+	if hasBastionStatus(cluster.Status.Bastion) {
+		clusterScope.ClearBastionStatus()
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
+			r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 		}
 	}
-	controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
+	controllerutil.RemoveFinalizer(cluster, infrav1.ClusterFinalizer)
 	return nil
 }
