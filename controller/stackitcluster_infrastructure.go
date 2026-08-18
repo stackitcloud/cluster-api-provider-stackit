@@ -194,76 +194,70 @@ func bootstrapTargetIP(network *cloud.Network) string {
 
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, s *scope.ClusterScope) error {
 	sc := s.StackitCluster
-	// Both the load balancer and the bastion are gated by their spec flag, not
-	// only by persisted status: a resource can be created and the reconcile can
-	// stop before the status patch lands. Relying on status alone would skip
-	// cleanup entirely and leak the bastion server, its public IP and its
-	// security groups. The tag-based lookups in DeleteBastion tolerate an empty
-	// status, so running the block without one is safe.
-	if sc.Status.APIServerLoadBalancerID != "" || hasBastionStatus(sc.Status.Bastion) ||
-		sc.Spec.APIServerLoadBalancer.Enabled || sc.Spec.Bastion.Enabled {
-		cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
-		if err != nil {
-			// A missing credentials Secret can never be recovered from — it
-			// commonly disappears first during namespace teardown. Blocking here
-			// would strand the cluster in Terminating forever, so finalize and
-			// make the possible leak loud instead. Any other credentials problem
-			// is fixable, so keep retrying for those.
-			if apierrors.IsNotFound(err) {
-				if r.Recorder != nil {
-					r.Recorder.Eventf(sc, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
-						"Credentials Secret is gone; finalizing without cloud cleanup. "+
-							"Any remaining STACKIT resources for this cluster must be removed manually: %v", err)
-				}
-				controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
-				return nil
+	// Cleanup runs unconditionally. Neither spec nor status is a trustworthy
+	// record of what exists in the cloud: a resource can be created before its
+	// status patch lands, and disabling the load balancer or the bastion leaves
+	// the running resource behind. ResolveID, DeleteBastion and
+	// DeleteNodeSSHAccess all fall back to tag lookups and tolerate NotFound, so
+	// asking for everything costs a handful of list calls once per cluster and
+	// removes every combination in which a resource could be missed.
+	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, sc)
+	if err != nil {
+		// A missing credentials Secret can never be recovered from — it commonly
+		// disappears first during namespace teardown. Blocking here would strand
+		// the cluster in Terminating forever, so finalize and make the possible
+		// leak loud instead. Any other credentials problem is fixable, so keep
+		// retrying for those.
+		if apierrors.IsNotFound(err) {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(sc, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+					"Credentials Secret is gone; finalizing without cloud cleanup. "+
+						"Any remaining STACKIT resources for this cluster must be removed manually: %v", err)
 			}
-			util.SetConditions(
-				&sc.Status.Conditions,
-				sc.Generation,
-				metav1.ConditionFalse,
-				"CredentialsInvalid",
-				err.Error(),
-				infrav1.ClusterCredentialsReadyCondition,
+			controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)
+			return nil
+		}
+		util.SetConditions(
+			&sc.Status.Conditions,
+			sc.Generation,
+			metav1.ConditionFalse,
+			"CredentialsInvalid",
+			err.Error(),
+			infrav1.ClusterCredentialsReadyCondition,
+		)
+		return err
+	}
+	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, sc)
+	if err != nil {
+		return err
+	}
+	if loadBalancerID != "" {
+		if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
+			return err
+		}
+		sc.Status.APIServerLoadBalancerID = ""
+		if r.Recorder != nil {
+			r.Recorder.Eventf(
+				sc, nil, corev1.EventTypeNormal, "LoadBalancerDeleted", "Delete",
+				"Deleted API server load balancer %s", loadBalancerID,
 			)
-			return err
 		}
-		loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, sc)
-		if err != nil {
-			return err
-		}
-		if loadBalancerID != "" {
-			if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
-				return err
-			}
-			sc.Status.APIServerLoadBalancerID = ""
-			if r.Recorder != nil {
-				r.Recorder.Eventf(
-					sc, nil, corev1.EventTypeNormal, "LoadBalancerDeleted", "Delete",
-					"Deleted API server load balancer %s", loadBalancerID,
-				)
-			}
-		}
-		// Driven by intent as well as by status: DeleteBastion and
-		// DeleteNodeSSHAccess resolve their resources by tag when the status
-		// fields are empty, so this also cleans up a bastion whose status patch
-		// never landed.
-		if hasBastionStatus(sc.Status.Bastion) || sc.Spec.Bastion.Enabled {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
-				return err
-			}
-			if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(sc, nil), cloud.Bastion{
-				ServerID:        sc.Status.Bastion.ServerID,
-				PublicIPID:      sc.Status.Bastion.PublicIPID,
-				PublicIP:        sc.Status.Bastion.PublicIP,
-				SecurityGroupID: sc.Status.Bastion.SecurityGroupID,
-			}); err != nil && !cloud.IsNotFound(err) {
-				return err
-			}
-			s.ClearBastionStatus()
-			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
-			}
+	}
+	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
+		return err
+	}
+	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(sc, nil), cloud.Bastion{
+		ServerID:        sc.Status.Bastion.ServerID,
+		PublicIPID:      sc.Status.Bastion.PublicIPID,
+		PublicIP:        sc.Status.Bastion.PublicIP,
+		SecurityGroupID: sc.Status.Bastion.SecurityGroupID,
+	}); err != nil && !cloud.IsNotFound(err) {
+		return err
+	}
+	if hasBastionStatus(sc.Status.Bastion) {
+		s.ClearBastionStatus()
+		if r.Recorder != nil {
+			r.Recorder.Eventf(sc, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 		}
 	}
 	controllerutil.RemoveFinalizer(sc, infrav1.ClusterFinalizer)

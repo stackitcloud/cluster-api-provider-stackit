@@ -344,6 +344,35 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 	})
 
+	It("cleans up the load balancer during deletion when it was disabled and its status was lost", func() {
+		// Counterpart to the bastion case: flipping apiServerLoadBalancer.enabled
+		// off neither deletes the load balancer nor clears its ID, so with the
+		// status patch lost the deletion gate matched nothing and the load
+		// balancer stayed behind.
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		By("losing the persisted load balancer ID")
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.APIServerLoadBalancerID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		By("disabling the load balancer")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.APIServerLoadBalancer.Enabled = false
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		By("deleting the cluster")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0),
+			"load balancer leaked because cleanup was gated on spec and status")
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())
