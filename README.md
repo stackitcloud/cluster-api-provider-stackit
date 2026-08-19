@@ -1,7 +1,7 @@
 # Kubernetes Cluster API Provider STACKIT (CAPSTK)
 
 <p align="center">
-<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png"  width="100x"><a href="https://stackit.com/"><img width="192x" src="docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
+<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png" height="100px"><a href="https://stackit.com/"><img height="100px" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
 </p>
 
 <p align="center">
@@ -22,9 +22,9 @@ Cluster API Provider STACKIT is abbreviated as CAPSTK.
 
 > ### ⚠️ WARNING ⚠️ 
 > 
-> **`cluster-api-provider-stackit` is not an official STACKIT project. It has been developed almost exclusively through AI-assisted tooling by a single person.**
+> **`cluster-api-provider-stackit` is not an officially supported STACKIT project and is still in active development.**
 > 
-> The implementation is validated through end-to-end tests, but it has not yet received the same level of manual review, production hardening, or long-term operational validation as a mature provider.
+> The implementation is validated through end-to-end tests, but it has not yet received the same level of quality reviews, production hardening, or long-term operational validation as a mature provider or officially supported STACKIT projects.
 > 
 > Use at your own risk. Please review the code carefully before using it in production environments.
 

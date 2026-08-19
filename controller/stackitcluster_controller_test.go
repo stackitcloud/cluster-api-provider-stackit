@@ -21,7 +21,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -61,7 +60,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		}
 
 		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
-		createOwnerCluster(ctx, clusterName, namespace)
+		createOwnerCluster(ctx, clusterName)
 		stackitClust = newStackitCluster(clusterName, namespace, true)
 		stackitClust.Spec.CredentialsSecretRef.Name = credentials
 		Expect(k8sClient.Create(ctx, stackitClust)).To(Succeed())
@@ -89,9 +88,9 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.APIServerEndpoint).To(Equal(got.Spec.ControlPlaneEndpoint))
 		Expect(got.Status.APIServerLoadBalancerID).NotTo(BeEmpty())
 		Expect(got.Status.FailureDomains).To(ConsistOf(
-			clusterv1.FailureDomain{Name: "eu01-1", ControlPlane: ptr.To(true), Attributes: map[string]string{"region": "eu01"}},
-			clusterv1.FailureDomain{Name: "eu01-2", ControlPlane: ptr.To(true), Attributes: map[string]string{"region": "eu01"}},
-			clusterv1.FailureDomain{Name: "eu01-3", ControlPlane: ptr.To(true), Attributes: map[string]string{"region": "eu01"}},
+			clusterv1.FailureDomain{Name: "eu01-1", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
+			clusterv1.FailureDomain{Name: "eu01-2", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
+			clusterv1.FailureDomain{Name: "eu01-3", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
 		))
 		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionTrue, "Available")
@@ -209,7 +208,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		// balancer was gated on its spec flag. A bastion created without its
 		// status patch landing (process restart, conflict) therefore skipped
 		// cleanup entirely and leaked server, public IP and security group.
-		createOwnerCluster(ctx, clusterName+"-nolb", namespace)
+		createOwnerCluster(ctx, clusterName+"-nolb")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
 		})
@@ -252,7 +251,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		// disappears first during namespace teardown. Broadening the delete gate
 		// to spec.Bastion.Enabled made a working cloud client mandatory for every
 		// bastion cluster, which would strand such a cluster in Terminating.
-		createOwnerCluster(ctx, clusterName+"-nocreds", namespace)
+		createOwnerCluster(ctx, clusterName+"-nocreds")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
 		})
@@ -315,6 +314,65 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 	})
 
+	It("tears the bastion down when disabled even if only its status was lost", func() {
+		// Narrower than the case above: the condition survives and still reports
+		// the bastion as available, only the bastion status fields are gone.
+		// Gating the cleanup on hasBastionStatus left the server running here.
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted bastion status while keeping the conditions")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.Bastion = infrav1.StackitBastionStatus{}
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Available")
+
+		By("disabling the bastion")
+		got.Spec.Bastion.Enabled = false
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"bastion kept running because cleanup was gated on the bastion status")
+		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
+	})
+
+	It("cleans up the load balancer during deletion when it was disabled and its status was lost", func() {
+		// Counterpart to the bastion case: flipping apiServerLoadBalancer.enabled
+		// off neither deletes the load balancer nor clears its ID, so with the
+		// status patch lost the deletion gate matched nothing and the load
+		// balancer stayed behind.
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		By("losing the persisted load balancer ID")
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.APIServerLoadBalancerID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		By("disabling the load balancer")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.APIServerLoadBalancer.Enabled = false
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		By("deleting the cluster")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0),
+			"load balancer leaked because cleanup was gated on spec and status")
+	})
+
 	It("validates bastion specs", func() {
 		spec := validBastionSpec()
 		Expect(validateBastionSpec(spec)).To(Succeed())
@@ -324,51 +382,19 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("creates the bastion with cloud-init user data from a ConfigMap", func() {
-		got := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		cloudInitName := "bastion-cloud-init-" + clusterName
-		cloudInit := "#cloud-config\npackages:\n- htop\n"
-		createCloudInitConfigMap(ctx, cloudInitName, namespace, "userData", cloudInit)
-		got.Spec.Bastion = validBastionSpec()
-		got.Spec.Bastion.CloudInitRef = &infrav1.StackitBastionCloudInitRef{
-			Kind: "ConfigMap",
-			Name: cloudInitName,
-			Key:  "userData",
-		}
-		Expect(k8sClient.Update(ctx, got)).To(Succeed())
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
-		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(cloudInit))))
-		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(cloudInit))
+		expectBastionCloudInit(
+			ctx, reconciler, request, stackitKey, fakeCloud,
+			"ConfigMap", "bastion-cloud-init-"+clusterName,
+			"#cloud-config\npackages:\n- htop\n", createCloudInitConfigMap,
+		)
 	})
 
 	It("creates the bastion with cloud-init user data from a Secret", func() {
-		got := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		cloudInitName := "bastion-cloud-init-secret-" + clusterName
-		cloudInit := "#cloud-config\npackages:\n- jq\n"
-		createCloudInitSecret(ctx, cloudInitName, namespace, "userData", cloudInit)
-		got.Spec.Bastion = validBastionSpec()
-		got.Spec.Bastion.CloudInitRef = &infrav1.StackitBastionCloudInitRef{
-			Kind: "Secret",
-			Name: cloudInitName,
-			Key:  "userData",
-		}
-		Expect(k8sClient.Update(ctx, got)).To(Succeed())
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
-		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(cloudInit))))
-		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(cloudInit))
+		expectBastionCloudInit(
+			ctx, reconciler, request, stackitKey, fakeCloud,
+			"Secret", "bastion-cloud-init-secret-"+clusterName,
+			"#cloud-config\npackages:\n- jq\n", createCloudInitSecret,
+		)
 	})
 
 	It("marks the bastion not ready when cloud-init ref is missing", func() {
@@ -491,7 +517,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	It("does not call the cloud API when the owning Cluster is paused", func() {
 		cluster := &clusterv1.Cluster{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())
-		cluster.Spec.Paused = ptr.To(true)
+		cluster.Spec.Paused = new(true)
 		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
 
 		cloudClientFactoryCalls := 0
@@ -628,6 +654,36 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(requests).To(BeEmpty())
 	})
 })
+
+func expectBastionCloudInit(
+	ctx context.Context,
+	reconciler *StackitClusterReconciler,
+	request reconcile.Request,
+	stackitKey types.NamespacedName,
+	fakeCloud *cloudfake.Client,
+	kind, cloudInitName, cloudInit string,
+	createCloudInit func(context.Context, string, string, string, string),
+) {
+	got := &infrav1.StackitCluster{}
+	Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+	createCloudInit(ctx, cloudInitName, got.Namespace, "userData", cloudInit)
+	got.Spec.Bastion = validBastionSpec()
+	got.Spec.Bastion.CloudInitRef = &infrav1.StackitBastionCloudInitRef{
+		Kind: kind,
+		Name: cloudInitName,
+		Key:  "userData",
+	}
+	Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+	result, err := reconciler.Reconcile(ctx, request)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(result).To(Equal(reconcile.Result{}))
+
+	Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+	Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
+	Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(cloudInit))))
+	Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(cloudInit))
+}
 
 func newStackitCluster(name, namespace string, lbEnabled bool) *infrav1.StackitCluster {
 	return &infrav1.StackitCluster{

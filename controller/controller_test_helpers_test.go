@@ -73,9 +73,9 @@ func createCloudInitSecret(ctx context.Context, name, namespace, key, value stri
 	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 }
 
-func createOwnerCluster(ctx context.Context, name, namespace string) {
+func createOwnerCluster(ctx context.Context, name string) {
 	cluster := &clusterv1.Cluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: clusterv1.ClusterSpec{
 			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
 				APIGroup: infrav1.GroupVersion.Group,

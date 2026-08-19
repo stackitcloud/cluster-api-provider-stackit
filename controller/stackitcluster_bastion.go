@@ -30,94 +30,128 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
+// bastionDisabledReason is read back to decide whether the cleanup below
+// already ran, so it must not drift.
+const bastionDisabledReason = "Skipped"
+
 func (r *StackitClusterReconciler) reconcileBastion(
 	ctx context.Context,
 	cloudClient cloud.Client,
-	s *scope.ClusterScope,
+	clusterScope *scope.ClusterScope,
 ) (ctrl.Result, bool, error) {
-	sc := s.StackitCluster
-	input := bastionservice.Input(sc, nil)
+	cluster := clusterScope.StackitCluster
+	input := bastionservice.Input(cluster, nil)
 	status := cloud.Bastion{
-		ServerID:        sc.Status.Bastion.ServerID,
-		PublicIPID:      sc.Status.Bastion.PublicIPID,
-		PublicIP:        sc.Status.Bastion.PublicIP,
-		SecurityGroupID: sc.Status.Bastion.SecurityGroupID,
+		ServerID:        cluster.Status.Bastion.ServerID,
+		PublicIPID:      cluster.Status.Bastion.PublicIPID,
+		PublicIP:        cluster.Status.Bastion.PublicIP,
+		SecurityGroupID: cluster.Status.Bastion.SecurityGroupID,
 	}
 
-	if !sc.Spec.Bastion.Enabled {
-		// Status alone is not proof that no bastion exists: EnsureBastion can
-		// succeed and the status patch can be lost, after which disabling the
-		// bastion would silently leave it running with port 22 open — while the
-		// condition below claims it is disabled.
-		//
-		// The BastionReady condition lives in the same status subresource, so it
-		// is missing in exactly that case. Using it as the trigger keeps the
-		// tag-based sweep to once per cluster instead of once per reconcile,
-		// which matters because this path runs for every cluster without a
-		// bastion.
-		sweep := hasBastionStatus(sc.Status.Bastion) ||
-			meta.FindStatusCondition(sc.Status.Conditions, infrav1.ClusterBastionReadyCondition) == nil
-		if sweep {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil {
+	if !cluster.Spec.Bastion.Enabled {
+		// The condition carries this reason only after a cleanup has succeeded,
+		// so anything else means we may still own bastion resources — including
+		// the case where EnsureBastion succeeded but its status patch was lost.
+		// Keying on it instead of on the status keeps the tag-based cleanup to
+		// once per cluster rather than once per reconcile, which matters because
+		// this path runs for every cluster without a bastion.
+		condition := meta.FindStatusCondition(cluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
+		if condition == nil || condition.Reason != bastionDisabledReason {
+			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(cluster)); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			if err := cloudClient.DeleteBastion(ctx, input, status); err != nil {
 				return ctrl.Result{}, false, err
 			}
-			s.ClearBastionStatus()
+			clusterScope.ClearBastionStatus()
 			if r.Recorder != nil {
-				r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionDeleted", "Deleted bastion")
+				r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 			}
 		}
-		s.SetConditions(metav1.ConditionTrue, "Skipped", "bastion disabled", infrav1.ClusterBastionReadyCondition)
+		clusterScope.SetConditions(
+			metav1.ConditionTrue,
+			bastionDisabledReason,
+			"bastion disabled",
+			infrav1.ClusterBastionReadyCondition,
+		)
 		return ctrl.Result{}, true, nil
 	}
 
-	if err := validateBastionSpec(sc.Spec.Bastion); err != nil {
-		s.SetNotReady("InvalidBastionSpec", err.Error(), infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+	if err := validateBastionSpec(cluster.Spec.Bastion); err != nil {
+		clusterScope.SetNotReady(
+			"InvalidBastionSpec",
+			err.Error(),
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{}, false, nil
 	}
 
-	cloudInit, err := r.resolveBastionCloudInit(ctx, sc)
+	cloudInit, err := r.resolveBastionCloudInit(ctx, cluster)
 	if err != nil {
-		s.SetNotReady("CloudInitRefError", err.Error(), infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.SetNotReady(
+			"CloudInitRefError",
+			err.Error(),
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{}, false, nil
 	}
 	input.CloudInit = cloudInit
 
-	if bastionNeedsRecreate(sc, cloudInit) {
-		if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(sc)); err != nil && !cloud.IsNotFound(err) {
+	if bastionNeedsRecreate(cluster, cloudInit) {
+		if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(cluster)); err != nil && !cloud.IsNotFound(err) {
 			return ctrl.Result{}, false, err
 		}
 		if err := cloudClient.DeleteBastion(ctx, input, status); err != nil && !cloud.IsNotFound(err) {
 			return ctrl.Result{}, false, err
 		}
-		s.ClearBastionStatus()
-		s.SetNotReady("Recreating", "recreating bastion because cloudInitRef content changed", infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.ClearBastionStatus()
+		clusterScope.SetNotReady("Recreating", "recreating bastion because cloudInitRef content changed", infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionRecreating", "Recreating bastion because cloudInitRef content changed")
+			r.Recorder.Eventf(
+				cluster, nil, corev1.EventTypeNormal, "BastionRecreating", "Recreate",
+				"Recreating bastion because cloudInitRef content changed",
+			)
 		}
 		return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, false, nil
 	}
 
-	hadBastionStatus := hasBastionStatus(sc.Status.Bastion)
+	hadBastionStatus := hasBastionStatus(cluster.Status.Bastion)
 	bastion, err := cloudClient.EnsureBastion(ctx, input)
 	if err != nil {
 		return ctrl.Result{}, false, err
 	}
-	s.SetBastionStatus(bastion, bastionCloudInitHash(cloudInit))
+	clusterScope.SetBastionStatus(bastion, bastionCloudInitHash(cloudInit))
 	if !hadBastionStatus && r.Recorder != nil {
-		r.Recorder.Eventf(sc, corev1.EventTypeNormal, "BastionCreated", "Created bastion %s", bastion.ServerID)
+		r.Recorder.Eventf(
+			cluster, nil, corev1.EventTypeNormal, "BastionCreated", "Create", "Created bastion %s", bastion.ServerID,
+		)
 	}
 	if bastion.ServerState != "" && bastion.ServerState != "ACTIVE" {
-		s.SetNotReady("Provisioning", fmt.Sprintf("bastion server state is %s", bastion.ServerState), infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.SetNotReady(
+			"Provisioning",
+			fmt.Sprintf("bastion server state is %s", bastion.ServerState),
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
 	if bastion.PublicIP == "" {
-		s.SetNotReady("Provisioning", "waiting for bastion public IP address", infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.SetNotReady(
+			"Provisioning",
+			"waiting for bastion public IP address",
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 	}
-	s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.ClusterBastionReadyCondition)
+	clusterScope.SetConditions(
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterBastionReadyCondition,
+	)
 	return ctrl.Result{}, true, nil
 }
 

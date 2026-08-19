@@ -116,9 +116,8 @@ clusterctl init \
  After the workload API is reachable, install a CNI:
  
  ```sh
- export KUBECONF_WORKERCLUSTER=/tmp/"${CLUSTER_NAME}".kubeconfig
- clusterctl get kubeconfig "${CLUSTER_NAME}" -n "${NAMESPACE}" > "${KUBECONF_WORKERCLUSTER}"
- make install-workload-cni WORKLOAD_KUBECONFIG="${KUBECONF_WORKERCLUSTER}"
+ clusterctl get kubeconfig "${CLUSTER_NAME}" -n "${NAMESPACE}" > /tmp/"${CLUSTER_NAME}".kubeconfig
+ make install-workload-cni WORKLOAD_KUBECONFIG=/tmp/"${CLUSTER_NAME}".kubeconfig
  ```
  
  ## Clean up

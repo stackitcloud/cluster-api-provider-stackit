@@ -28,6 +28,8 @@ linters:
       logcheck:
         type: "module"
         description: Checks Go logging calls for Kubernetes logging conventions.
+    lll:
+      line-length: 200
     revive:
       rules:
         - name: comment-spacings
@@ -45,6 +47,9 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - lll
+        path: webhook/*
     paths:
       - third_party$
       - builtin$
