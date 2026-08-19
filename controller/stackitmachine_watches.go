@@ -14,8 +14,10 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	clusterutil "sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -37,14 +39,30 @@ func (r *StackitMachineReconciler) stackitMachineRequestsForStackitCluster(ctx c
 		return nil
 	}
 
+	// Machine.spec.clusterName names the owning Cluster, not the StackitCluster,
+	// and nothing forces the two to share a name — a ClusterClass-generated
+	// infrastructureRef carries a random suffix. Resolve the owning Cluster
+	// first, then match against its name.
+	cluster, err := clusterutil.GetOwnerCluster(ctx, r.Client, stackitCluster.ObjectMeta)
+	switch {
+	case apierrors.IsNotFound(err) || cluster == nil:
+		return nil
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "Failed to get owning Cluster for StackitCluster watch", "stackitCluster", client.ObjectKeyFromObject(stackitCluster))
+		return nil
+	}
+
 	machines := &clusterv1.MachineList{}
-	if err := r.List(ctx, machines, client.InNamespace(stackitCluster.Namespace)); err != nil {
+	if err := r.List(ctx, machines,
+		client.InNamespace(stackitCluster.Namespace),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name},
+	); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to list Machines for StackitCluster watch", "stackitCluster", client.ObjectKeyFromObject(stackitCluster))
 		return nil
 	}
 
 	return stackitMachineRequestsForMachines(machines.Items, func(machine clusterv1.Machine) bool {
-		return machine.Spec.ClusterName == stackitCluster.Name
+		return machine.Spec.ClusterName == cluster.Name
 	})
 }
 

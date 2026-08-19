@@ -402,6 +402,50 @@ var _ = Describe("StackitMachine Controller", func() {
 		Expect(requests).To(ConsistOf(request))
 	})
 
+	// Regression test for debug/watch-wiring-bug.md defect 2: the mapper matched
+	// Machine.spec.clusterName against the StackitCluster name, so it enqueued
+	// nothing as soon as the two differed. Every other spec here hides the bug
+	// because createOwnerCluster gives the Cluster and its infrastructureRef the
+	// same name; a ClusterClass-generated infrastructureRef never does.
+	It("maps StackitCluster events when the StackitCluster name differs from the Cluster name", func() {
+		suffix := time.Now().UnixNano()
+		ownerClusterName := fmt.Sprintf("owner-%d", suffix)
+		infraClusterName := ownerClusterName + "-infra"
+		otherMachineName := fmt.Sprintf("other-machine-%d", suffix)
+		otherStackitName := fmt.Sprintf("other-stackit-machine-%d", suffix)
+
+		By("creating a Cluster whose infrastructureRef points at a differently named StackitCluster")
+		ownerCluster := &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: ownerClusterName, Namespace: namespace},
+			Spec: clusterv1.ClusterSpec{
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: infrav1.GroupVersion.Group,
+					Kind:     "StackitCluster",
+					Name:     infraClusterName,
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, ownerCluster)).To(Succeed())
+
+		infraCluster := newStackitCluster(infraClusterName, namespace, false)
+		infraCluster.OwnerReferences[0].Name = ownerClusterName
+		Expect(k8sClient.Create(ctx, infraCluster)).To(Succeed())
+
+		createOwnerMachine(ctx, otherMachineName, namespace, ownerClusterName, otherStackitName, nil)
+
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: otherMachineName, Namespace: namespace}})
+			deleteIfExists(ctx, infraCluster)
+			deleteIfExists(ctx, ownerCluster)
+		})
+
+		By("mapping the StackitCluster event onto the Machine owned by its Cluster")
+		requests := reconciler.stackitMachineRequestsForStackitCluster(ctx, infraCluster)
+		Expect(requests).To(ConsistOf(reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: namespace, Name: otherStackitName},
+		}), "the StackitCluster watch must resolve its owning Cluster instead of matching on its own name")
+	})
+
 	It("maps bootstrap Secret events to StackitMachine reconcile requests", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: bootstrapName, Namespace: namespace}}
