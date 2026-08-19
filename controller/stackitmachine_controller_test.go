@@ -69,7 +69,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
 		createOwnerCluster(ctx, clusterName)
 		createReadyStackitCluster(ctx, clusterName, namespace, credentials)
-		createOwnerMachine(ctx, machineName, namespace, clusterName, stackitName, nil)
+		createOwnerMachine(ctx, machineName, clusterName, stackitName)
 		stackitMach = newStackitMachine(stackitName, namespace, machineName)
 		Expect(k8sClient.Create(ctx, stackitMach)).To(Succeed())
 	})
@@ -431,7 +431,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		infraCluster.OwnerReferences[0].Name = ownerClusterName
 		Expect(k8sClient.Create(ctx, infraCluster)).To(Succeed())
 
-		createOwnerMachine(ctx, otherMachineName, namespace, ownerClusterName, otherStackitName, nil)
+		createOwnerMachine(ctx, otherMachineName, ownerClusterName, otherStackitName)
 
 		DeferCleanup(func() {
 			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: otherMachineName, Namespace: namespace}})
