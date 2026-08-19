@@ -12,6 +12,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -222,8 +224,32 @@ func bootstrapTargetIP(network *cloud.Network) string {
 	return "10.0.0.1"
 }
 
-func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) error {
+func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {
 	stackitCluster := clusterScope.StackitCluster
+
+	// Machines resolve their credentials and project context through this
+	// StackitCluster, so removing the finalizer while any of them remain leaves
+	// them unable to delete their own servers. Cluster API orders this correctly
+	// when deletion starts at the Cluster, but a namespace teardown or a direct
+	// delete of this object bypasses that ordering entirely.
+	//
+	// Selects the same way util/collections.GetFilteredMachinesForCluster does,
+	// inlined because that package pulls in the kubeadm bootstrap API for a
+	// query this short. Cluster API sets the label on every Machine it owns.
+	machines := &clusterv1.MachineList{}
+	if err := r.List(ctx, machines,
+		client.InNamespace(clusterScope.Cluster.Namespace),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterScope.Cluster.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterScope.Cluster.Name, err)
+	}
+	if len(machines.Items) > 0 {
+		logf.FromContext(ctx).Info(
+			"Waiting for Machines to be deleted before removing the StackitCluster finalizer",
+			"remainingMachines", len(machines.Items),
+		)
+		return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
+	}
 
 	// Cleanup runs unconditionally. Neither spec nor status is a trustworthy
 	// record of what exists in the cloud: a resource can be created before its
@@ -243,10 +269,10 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			if r.Recorder != nil {
 				r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
 					"Credentials Secret is gone; finalizing without cloud cleanup. "+
-						"Any remaining STACKIT resources for this stackitCluster must be removed manually: %v", err)
+						"Any remaining STACKIT resources for this cluster must be removed manually: %v", err)
 			}
 			controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
-			return nil
+			return ctrl.Result{}, nil
 		}
 		util.SetConditions(
 			&stackitCluster.Status.Conditions,
@@ -256,15 +282,15 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			err.Error(),
 			infrav1.ClusterCredentialsReadyCondition,
 		)
-		return err
+		return ctrl.Result{}, err
 	}
 	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, stackitCluster)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if loadBalancerID != "" {
 		if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
-			return err
+			return ctrl.Result{}, err
 		}
 		stackitCluster.Status.APIServerLoadBalancerID = ""
 		if r.Recorder != nil {
@@ -275,7 +301,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		}
 	}
 	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil && !cloud.IsNotFound(err) {
-		return err
+		return ctrl.Result{}, err
 	}
 	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
@@ -283,7 +309,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		PublicIP:        stackitCluster.Status.Bastion.PublicIP,
 		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
 	}); err != nil && !cloud.IsNotFound(err) {
-		return err
+		return ctrl.Result{}, err
 	}
 	if hasBastionStatus(stackitCluster.Status.Bastion) {
 		clusterScope.ClearBastionStatus()
@@ -292,5 +318,5 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		}
 	}
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
-	return nil
+	return ctrl.Result{}, nil
 }

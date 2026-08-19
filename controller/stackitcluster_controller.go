@@ -54,6 +54,7 @@ type StackitClusterReconciler struct {
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -94,7 +95,7 @@ func (r *StackitClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	util.SetPausedCondition(&stackitCluster.Status.Conditions, stackitCluster.Generation, false, "")
 
 	if !stackitCluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, clusterScope)
+		return r.reconcileDelete(ctx, clusterScope)
 	}
 	return r.reconcileNormal(ctx, clusterScope)
 }

@@ -580,6 +580,68 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// Regression tests for debug/deletion-bug.md: the finalizer used to go away
+	// regardless of remaining Machines. Their controllers reach credentials and
+	// project context through this StackitCluster, so once it is gone they can
+	// neither delete their servers nor drop their own finalizers — the VMs are
+	// orphaned and the Machines hang. Cluster API orders this correctly when the
+	// deletion starts at the Cluster, but a namespace teardown or a direct
+	// delete of this object bypasses that ordering.
+	It("keeps the finalizer while Machines still exist for the cluster", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		machineName := "machine-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+		})
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		By("requeueing instead of tearing down shared infrastructure")
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(deleteRequeueAfter))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer),
+			"the finalizer must survive while a Machine still needs the StackitCluster")
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1),
+			"the load balancer must not be deleted while Machines still exist")
+	})
+
+	It("removes the finalizer once the last Machine is gone", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		machineName := "machine-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(deleteRequeueAfter))
+
+		By("deleting the last Machine")
+		deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{})
+			return apierrors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
+
 	It("keeps the finalizer when load balancer deletion returns a transient error", func() {
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
