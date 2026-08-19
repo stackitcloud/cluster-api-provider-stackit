@@ -44,9 +44,9 @@ found.** Every known defect reproduces from the same, relocated code:
 | Known defect | Location on `refactor` | Reproduced? |
 | --- | --- | --- |
 | Security group attached twice in `EnsureBastion` | `cloud/sdk_client.go:263` | ✅ yes — same transient 404 `BastionError` |
-| `allowedCIDRs` rules never removed | `cloud/sdk_client.go:692` | not exercised (needs a CIDR change) |
-| `bastionNeedsRecreate` only watches cloud-init | `controller/stackitcluster_bastion.go:136` | not exercised |
-| `ensureServer` recreates unconditionally | `controller/stackitmachine_infrastructure.go:205` | ✅ yes — see below |
+| `allowedCIDRs` rules never removed | `cloud/sdk_client.go:698` | not exercised (needs a CIDR change) |
+| `bastionNeedsRecreate` only watches cloud-init | `controller/stackitcluster_bastion.go:183` | not exercised |
+| `ensureServer` recreates unconditionally | `controller/stackitmachine_infrastructure.go:212` | ✅ yes — see below |
 | Template hardcodes `replicas: 3` | `templates/cluster-template-bastion.yaml:160` | ✅ yes |
 | Stuck deletion on simultaneous delete | `controller/stackitmachine_controller.go:87-94` | ✖️ did not trigger — but code path unchanged, so **not fixed** |
 
@@ -173,6 +173,13 @@ the CIDR test.
   duplicate security-group attach, `allowedCIDRs` never revoked, and the
   unconditional server recreate. `cloud` coverage 39.1 % → 55.5 %,
   `controller` 70.2 % → 71.0 %.
+- **2026-08-19:** this branch had independently re-implemented PR #4's fixes
+  (same behaviour, different code) instead of merging it; the 14 affected
+  source files were replaced 1:1 with `main`'s actual merged version, and
+  every `file:line` reference in this folder that pointed at current (not
+  historical pre-fix) code was re-checked against the synced code and
+  corrected where it had drifted. Items 8–10 below, and items 1–2, remain
+  unimplemented in `main` as of this sync — re-verified, not just assumed.
 
 ### Open
 

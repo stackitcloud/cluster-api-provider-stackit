@@ -483,7 +483,12 @@ prematurely); only once no `Machine` remains does
 `StackitCluster.reconcileDelete` clean up load balancer/bastion and remove
 its own finalizer.
 
-### Code changes — `internal/controller/stackitcluster_controller.go`
+### Code changes — `controller/stackitcluster_infrastructure.go` /
+`controller/stackitcluster_controller.go`
+
+`reconcileDelete` lives in `stackitcluster_infrastructure.go`; the new watch
+wiring (`stackitClusterRequestsForMachine`, `SetupWithManager`, RBAC marker)
+belongs in `stackitcluster_controller.go` as shown further below.
 
 **New helper `listClusterMachines`** — filters server-side via the
 `clusterv1.ClusterNameLabel` (`cluster.x-k8s.io/cluster-name`) that CAPI
@@ -510,14 +515,14 @@ network/serialization overhead when many clusters share a namespace.
 
 *Why a label selector instead of a field indexer:* a field indexer on
 `spec.clusterName` would work but requires a cache-backed client. The
-existing test suite client (`internal/controller/suite_test.go:90`) is a
+existing test suite client (`controller/suite_test.go:90`) is a
 direct, non-cached API-server client (`client.New(cfg, ...)`) with no
 manager or cache. Switching would affect all existing tests in
 `stackitcluster_controller_test.go` / `stackitmachine_controller_test.go`
 and risk cache-sync flakiness. `client.MatchingLabels` works identically
 against envtest and a real cluster with no `suite_test.go` changes, and the
 label is set by CAPI itself on every `Machine` (the test helper
-`createOwnerMachine` in `controller_test_helpers_test.go:94-101` sets it
+`createOwnerMachine` in `controller_test_helpers_test.go:90-101` sets it
 too).
 
 **Guard at the start of `reconcileDelete`:**
@@ -565,15 +570,18 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForMachine(ctx context.
 }
 ```
 
-Uses the existing `isStackitClusterRef` (`stackitcluster_controller.go:588-592`).
+Uses the same `InfrastructureRef` `Kind`/`APIGroup`/`Name` check already inlined
+in `stackitClusterRequestsForCluster` (`stackitcluster_controller.go:107-108`) —
+there is no standalone `isStackitClusterRef` helper today, so implementing this
+fix means extracting that check into a shared function (or duplicating it).
 
-**Register the watch** in `SetupWithManager` (`stackitcluster_controller.go:595-603`):
+**Register the watch** in `SetupWithManager` (`stackitcluster_controller.go:153-161`):
 
 ```go
 Watches(&clusterv1.Machine{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForMachine)).
 ```
 
-**Add the RBAC marker** above `Reconcile` (`stackitcluster_controller.go:68-73`)
+**Add the RBAC marker** above `Reconcile` (`stackitcluster_controller.go:53-59`)
 — permission to list `Machine`s is currently missing:
 
 ```go
@@ -582,31 +590,31 @@ Watches(&clusterv1.Machine{}, handler.EnqueueRequestsFromMapFunc(r.stackitCluste
 
 Then run `make manifests` so `config/rbac/role.yaml` picks up the new rule.
 
-### Tests — `internal/controller/stackitcluster_controller_test.go`
+### Tests — `controller/stackitcluster_controller_test.go`
 
 1. **"keeps the finalizer while Machines still exist for the cluster"** —
    setup as in the existing `"deletes the provider-managed load balancer and
-   removes the finalizer"` (line 423-442), but create a `Machine` for the
+   removes the finalizer"` (line 562-580), but create a `Machine` for the
    same `clusterName` via `createOwnerMachine` before the `Delete`. After
    `k8sClient.Delete` + `reconciler.Reconcile`, expect `err == nil`, the
    finalizer still set, and `fakeCloud.LoadBalancerCount() == 1` (LB **not**
    cleaned up yet).
-2. **Regression:** the existing test at line 423-442 must keep passing
+2. **Regression:** the existing test at line 562-580 must keep passing
    unchanged (no `Machine` exists for the cluster there).
 3. **"removes the finalizer once the last Machine is gone"** — like test 1,
    but after the first reconcile delete the `Machine` and reconcile again;
    expect the finalizer removed, LB cleaned up, `StackitCluster` gone
-   (analogous to the `Eventually(...IsNotFound...)` at line 438-441).
+   (analogous to the `Eventually(...IsNotFound...)` at line 577-579).
 4. **"maps Machine events to StackitCluster reconcile requests"** —
    analogous to the existing `"maps owning Cluster events..."` (line
-   462-468): create a `Machine` with `spec.clusterName = clusterName`, call
+   601-607): create a `Machine` with `spec.clusterName = clusterName`, call
    `stackitClusterRequestsForMachine`, expect `[]reconcile.Request{request}`;
    plus a case where a different `clusterName` returns `nil`.
 
 ### Verification
 
 1. `go build ./...` — compiles without new errors.
-2. `go test ./internal/controller/...` — new and existing tests pass, in
+2. `go test ./controller/...` — new and existing tests pass, in
    particular the four above plus all existing deletion tests in
    `stackitmachine_controller_test.go`.
 3. `golangci-lint run` — no new findings.
