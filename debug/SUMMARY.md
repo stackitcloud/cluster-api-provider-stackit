@@ -231,7 +231,19 @@ the CIDR test.
     ([machine-recreate-bug.md](machine-recreate-bug.md#follow-up-statusready-is-cleared-on-only-three-of-five-failure-paths))
     — the bootstrap-data and credentials paths still leave `ready: true` next to
     conditions saying `False`. The cluster controller already does this.
-11. Optional e2e specs for the three fixed defects — deferred, with the required
+11. Route the four direct `cluster.Status.Ready = false` assignments in
+    `StackitCluster.reconcileNormal`
+    (`controller/stackitcluster_infrastructure.go:45,63,91,158`) through
+    `ClusterScope.SetNotReady` instead, mirroring item 10 on the machine side —
+    a consistency-only follow-up explicitly flagged as out of scope for PR #4
+    by [@Herbaert](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4#discussion_r3803129927).
+12. Standardise on speaking variable names and lightly-expanded call
+    formatting across all Go files, per
+    [PR #4's diff](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4/changes/b77942006315e9c320ea8aff09246233d48db230)
+    — e.g. `stackitcluster_infrastructure.go` spells out `clusterScope`/`cluster`
+    while `stackitmachine_infrastructure.go` abbreviates the same value to
+    `s`/`sm`.
+13. Optional e2e specs for the three fixed defects — deferred, with the required
    work written up per spec in
    [test-strategy.md](test-strategy.md#optional-e2e-specs--deferred-and-what-each-would-need).
 
