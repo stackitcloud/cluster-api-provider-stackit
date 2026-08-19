@@ -386,6 +386,44 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// Regression test for debug/deletion-bug.md section A: an empty
+	// status.instanceID was taken as proof that no VM had ever been created, so
+	// the finalizer went away without a single cloud call. If CreateServer had
+	// succeeded and the status patch had not, that server kept running, tagged
+	// and unreferenced by any object.
+	It("deletes a tagged server whose instance ID was lost from the status", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted instance ID, as if the status patch never landed")
+		got := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.InstanceID = ""
+		got.Status.ProviderID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.ProviderID = nil
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		By("deleting the StackitMachine")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"the tagged server leaked because deletion trusted the empty status")
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+			return apierrors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
+
 	It("maps owning Machine events to StackitMachine reconcile requests", func() {
 		machine := &clusterv1.Machine{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())

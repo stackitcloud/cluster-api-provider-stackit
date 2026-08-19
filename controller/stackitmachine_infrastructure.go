@@ -161,18 +161,26 @@ func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
 
 func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
 	stackitMachine := machineScope.StackitMachine
-	needsLoadBalancerCleanup := isControlPlaneMachine(machineScope.Machine) &&
-		machineScope.StackitCluster.Spec.APIServerLoadBalancer.Enabled &&
-		machineScope.StackitCluster.Status.APIServerLoadBalancerID != ""
-	if stackitMachine.Status.InstanceID == "" && !needsLoadBalancerCleanup {
-		controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
-		}
-		return nil
-	}
+
+	// The cloud client is built unconditionally: an empty status.instanceID is
+	// not proof that no server exists, so every deletion has to ask the cloud
+	// before it may drop the finalizer.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, machineScope.StackitCluster)
 	if err != nil {
+		// A missing credentials Secret can never be recovered from, and it
+		// commonly disappears first during namespace teardown. Blocking here
+		// would strand the Machine in Terminating forever, so finalize and make
+		// the possible leak loud instead — the same trade the cluster side
+		// makes. Any other credentials problem is fixable, so keep retrying.
+		if apierrors.IsNotFound(err) {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+					"Credentials Secret is gone; finalizing without cloud cleanup. "+
+						"Any remaining STACKIT server for this machine must be removed manually: %v", err)
+			}
+			controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
+			return nil
+		}
 		_, resultErr := util.CredentialFailureResult(
 			&stackitMachine.Status.Conditions,
 			stackitMachine.Generation,
@@ -184,25 +192,48 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 	if err := r.deleteAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope); err != nil {
 		return err
 	}
-	if stackitMachine.Status.InstanceID == "" {
-		controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
-		}
-		return nil
-	}
-	instanceID := stackitMachine.Status.InstanceID
-	if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
+
+	instanceID, err := r.resolveServerForDeletion(ctx, cloudClient, machineScope)
+	if err != nil {
 		return err
 	}
-	machineScope.ClearInstance()
-	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
-	if r.Recorder != nil {
-		r.Recorder.Eventf(
-			stackitMachine, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance %s", instanceID,
-		)
+	if instanceID != "" {
+		if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
+			return err
+		}
+		machineScope.ClearInstance()
+		if r.Recorder != nil {
+			r.Recorder.Eventf(
+				stackitMachine, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance %s", instanceID,
+			)
+		}
 	}
+	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
 	return nil
+}
+
+// resolveServerForDeletion reports the ID of the server backing this machine, or
+// an empty string once the cloud confirms none exists.
+//
+// status.instanceID alone is not enough: CreateServer can succeed and the status
+// patch can be lost, leaving a tagged server that no field on the object refers
+// to. The tags carry the Machine UID and therefore still identify that server.
+func (r *StackitMachineReconciler) resolveServerForDeletion(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
+) (string, error) {
+	if instanceID := machineScope.StackitMachine.Status.InstanceID; instanceID != "" {
+		return instanceID, nil
+	}
+	server, err := cloudClient.FindServerByTags(ctx, machineScope.Tags())
+	if err != nil {
+		if cloud.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return server.ID, nil
 }
 
 func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machine *clusterv1.Machine) ([]byte, metav1.ConditionStatus, string, string) {
