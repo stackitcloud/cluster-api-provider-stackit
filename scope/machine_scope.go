@@ -44,7 +44,7 @@ func NewMachineScope(
 	stackitCluster *infrav1.StackitCluster,
 	stackitMachine *infrav1.StackitMachine,
 ) (*MachineScope, error) {
-	ph, err := patch.NewHelper(stackitMachine, k8sClient)
+	patchHelper, err := patch.NewHelper(stackitMachine, k8sClient)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func NewMachineScope(
 		Machine:        machine,
 		StackitCluster: stackitCluster,
 		StackitMachine: stackitMachine,
-		patchHelper:    ph,
+		patchHelper:    patchHelper,
 	}, nil
 }
 

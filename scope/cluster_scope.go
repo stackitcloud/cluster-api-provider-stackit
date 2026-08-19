@@ -41,17 +41,17 @@ type ClusterScope struct {
 func NewClusterScope(
 	k8sClient client.Client,
 	cluster *clusterv1.Cluster,
-	sc *infrav1.StackitCluster,
+	stackitCluster *infrav1.StackitCluster,
 ) (*ClusterScope, error) {
-	ph, err := patch.NewHelper(sc, k8sClient)
+	patchHelper, err := patch.NewHelper(stackitCluster, k8sClient)
 	if err != nil {
 		return nil, err
 	}
 	return &ClusterScope{
 		Client:         k8sClient,
 		Cluster:        cluster,
-		StackitCluster: sc,
-		patchHelper:    ph,
+		StackitCluster: stackitCluster,
+		patchHelper:    patchHelper,
 	}, nil
 }
 
