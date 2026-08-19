@@ -1,8 +1,11 @@
 # Bug: stuck cluster deletion orphans VMs
 
-Date: 2026-08-03, updated 2026-08-11 after the refactor run
+Date: 2026-08-03, updated 2026-08-11 after the refactor run, fixed 2026-08-19
 Cluster: `stackit-workload`
-Status: ⚠️ **open** — root cause identified, fix specified below, **not implemented**
+Status: ✅ **fixed (2026-08-19)** — see [Fix as implemented](#fix-as-implemented).
+The investigation below is left as recorded; it describes the state before the
+fix. Two adjacent defects found while reviewing the fix against the CAPI
+contract remain open — see items 11 and 12 in [SUMMARY.md](SUMMARY.md).
 
 Deleting `Cluster`, `StackitCluster` and all `Machine`s at the same time
 (e.g. `kubectl delete -f cluster.yaml` on a manifest containing all of them)
@@ -245,7 +248,7 @@ This produces two separate problems:
    `StackitClusterReconciler.reconcileDelete`, which should refuse to remove
    its own finalizer while `StackitMachine`s still exist for the cluster —
    a standard pattern for CAPI infrastructure providers.
-   → see [Fix plan](#fix-plan-not-yet-implemented).
+   → see [Fix as implemented](#fix-as-implemented).
 
 ## Related: two more orphan-leak paths on deletion (2026-08-14)
 
@@ -261,7 +264,7 @@ server can be created and the reconcile can stop before the status patch lands
 (process restart, conflict, lost connection). From then on the object claims
 nothing exists while the VM is running and tagged.
 
-### A. Machine finalizer removed while a tagged VM may still exist
+### A. Machine finalizer removed while a tagged VM may still exist — ✅ fixed (2026-08-19)
 
 [`controller/stackitmachine_infrastructure.go`](../controller/stackitmachine_infrastructure.go),
 `reconcileDelete`:
@@ -279,9 +282,27 @@ finalizer goes away without a single cloud call. If `CreateServer` had
 succeeded and the status patch had not, that VM is now unreferenced and
 unreachable through any controller.
 
-**Fix:** before removing the finalizer, look the server up by `s.Tags()` and
-delete it if found, treating not-found as success. The tags are already
-sufficient for this — `cloud.CleanupByTags` does exactly this kind of lookup.
+**Fix — ✅ done (2026-08-19).** `reconcileDelete` no longer has a status-only
+exit. It resolves the server through the new `resolveServerForDeletion`, which
+returns `status.instanceID` when set and otherwise asks the cloud via
+`FindServerByTags(machineScope.Tags())` — the tags carry the Machine UID, so
+they identify exactly this machine's server. The finalizer is removed only once
+the cloud reports a genuine not-found or the server has been deleted; any other
+cloud error keeps it. Guarded by *"deletes a tagged server whose instance ID was
+lost from the status"*, proven to fail without the fix.
+
+Two consequences worth knowing:
+
+- There were **two** status-trusting early returns, not the one quoted above —
+  the second sat after the load-balancer target cleanup. Both are gone.
+- The first one exited *before* the cloud client was built, so the fix has to
+  build it unconditionally. To keep that from trading orphaned VMs for stuck
+  Machines, the credentials path now tolerates a missing Secret exactly as the
+  cluster side does (defect C below): a `CleanupSkipped` warning event, then
+  finalize, rather than hanging in `Terminating` forever.
+
+This is the *symptom*. The root cause is that the finalizer is not persisted
+before the first cloud call at all — see item 12 in [SUMMARY.md](SUMMARY.md).
 
 ### B. Cluster cleanup skipped entirely when bastion status is empty
 
@@ -459,7 +480,57 @@ $ kubectl get cluster -A
 **Result:** Empty output — `Cluster stackit-workload` fully gone, cleanup
 complete.
 
-## Fix plan (not yet implemented)
+## Fix as implemented
+
+✅ **Landed 2026-08-19.** The plan below is kept as written, because the
+implementation deviates from it in one deliberate way that is worth recording.
+
+> This section was titled *"Fix plan (not yet implemented)"* until 2026-08-19.
+> The `run-*.md` protocols still link to that anchor; per this folder's
+> convention they are left as recorded, so those links now land at the top of
+> this document instead of on this section.
+
+**What landed.** `StackitClusterReconciler.reconcileDelete` changed its
+signature from `error` to `(ctrl.Result, error)` and now starts by listing
+`Machine`s for the owning `Cluster` — `client.InNamespace` plus
+`client.MatchingLabels{clusterv1.ClusterNameLabel: …}`, exactly the selection
+the plan proposed. If any remain, it logs and returns
+`ctrl.Result{RequeueAfter: deleteRequeueAfter}` (5 s) without touching the load
+balancer, the bastion or the finalizer. Guarded by *"keeps the finalizer while
+Machines still exist for the cluster"* and *"removes the finalizer once the last
+Machine is gone"*, both proven to fail without the guard.
+
+**Deviation 1 — no `Machine` watch.** The plan's second half
+(`stackitClusterRequestsForMachine`, the `Watches(&clusterv1.Machine{}, …)`
+registration and the RBAC marker) was **dropped**. It only existed because the
+plan's guard returned `nil` *without* a requeue and therefore needed an event to
+make progress. With the upstream-standard `RequeueAfter`, the watch is
+redundant — CAPI itself, CAPA, CAPO and CAPH all use a plain requeue here and
+register no such watch. The RBAC marker for `machines` was added to the cluster
+controller anyway, so the permission is declared where it is used;
+`make manifests` produces no diff, since `config/rbac/role.yaml` already carried
+the rule from the machine controller.
+
+**Deviation 2 — no `collections` import.** The plan suggested
+`util/collections.GetFilteredMachinesForCluster`. That package pulls in the
+kubeadm bootstrap API, which would add `k8s.io/cluster-bootstrap` to `go.mod`
+for a six-line query. The same selection is inlined instead, with a comment
+naming the upstream helper it mirrors.
+
+**Why the guard is needed at all, given CAPI already orders deletion.** Verified
+against `internal/controllers/cluster/cluster_controller.go` in CAPI v1.13.2:
+the `Cluster` controller deletes descendants first, requeues at `:389-403` while
+any remain, and only afterwards deletes the infrastructure cluster (`:447-484`),
+holding its own finalizer until that is gone. So when deletion *starts at the
+`Cluster`*, the ordering is already correct. The guard covers the paths that
+bypass it — a namespace teardown, which stamps every object with a deletion
+timestamp at once, and a direct `kubectl delete stackitcluster`. That is
+precisely the scenario this document opens with. CAPA, CAPO and CAPH implement
+the same guard for the same reason; CAPG does not.
+
+---
+
+### Original plan, as written before implementation
 
 `StackitClusterReconciler.reconcileDelete` must only remove its finalizer
 once no `Machine`s remain for the associated `Cluster`. That keeps the
