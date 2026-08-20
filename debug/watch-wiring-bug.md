@@ -1,8 +1,8 @@
 # Bugs: watch wiring — objects that never get re-reconciled
 
-Date: 2026-08-14, updated 2026-08-19
+Date: 2026-08-14, updated 2026-08-20
 Source: Copilot review on [PR #1](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/1), verified against the code here
-Status: ⚠️ **partially fixed** — defect 2 fixed on 2026-08-19, defect 1 still open
+Status: ✅ **fixed** — defect 2 on 2026-08-19, defect 1 on 2026-08-20
 
 Two defects where a change that *should* trigger a reconcile does not, so the
 affected object stays in a stale state until something unrelated wakes it up.
@@ -10,10 +10,13 @@ Both were found by reading the watch setup; neither is visible in any of the
 manual runs in this folder, because both need a specific configuration or
 recovery sequence to show up.
 
-## 1. Correcting an invalid credentials Secret does not re-reconcile the cluster
+## 1. Correcting an invalid credentials Secret does not re-reconcile the cluster — ✅ fixed (2026-08-20)
 
 **Location:** [`controller/stackitcluster_controller.go`](../controller/stackitcluster_controller.go),
 `SetupWithManager`, and `stackitClusterRequestsForCloudInitRef` (same file).
+
+The investigation below describes the state **before** the fix; see
+[Fix as implemented](#fix-as-implemented-2026-08-20) at the end of this section.
 
 ```go
 Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
@@ -73,9 +76,9 @@ CAPV and CAPH. Four things change how this should be fixed:
   resourceVersion are cached; credential bytes never enter the informer.
 - **The existing cloud-init mapper has a second, undocumented defect for this
   purpose:** it lists only within `obj.GetNamespace()`
-  (`stackitcluster_controller.go:131`). `CredentialsSecretRef` is a
+  (`stackitcluster_controller.go:139`). `CredentialsSecretRef` is a
   `corev1.SecretReference` whose `Namespace` is optional
-  (`api/v1alpha1/stackitcluster_types.go:46-48`), so a credentials mapper has to
+  (`api/v1alpha1/stackitcluster_types.go:46-48`, field on line 48), so a credentials mapper has to
   search across namespaces. `util.CredentialsSecretKey`
   (`util/reconcile.go:84-93`) already resolves that defaulting and should be
   reused.
@@ -83,6 +86,45 @@ CAPV and CAPH. Four things change how this should be fixed:
 This fix therefore belongs together with the Secret-caching item in
 [SUMMARY.md](SUMMARY.md) — both change the same `Watches(&corev1.Secret{}, …)`
 call, and doing them separately means touching it twice.
+
+### Fix as implemented (2026-08-20)
+
+A second `Watches(&corev1.Secret{}, …)` on the cluster controller, backed by a
+new mapper `stackitClusterRequestsForCredentialsSecret`. The existing cloud-init
+mapper was left untouched, so nothing about the bastion path changed.
+
+The mapper lists StackitClusters **without a namespace filter** and compares
+each one's `util.CredentialsSecretKey` against the Secret's key — that is the
+one thing the cloud-init mapper gets wrong for this purpose, and reusing
+`CredentialsSecretKey` also inherits the `credentialsSecretRef.namespace`
+defaulting for free. `config/rbac/role.yaml` is already a `ClusterRole` with
+`secrets` and `stackitclusters` at `get;list;watch`, so `make manifests`
+produces no diff.
+
+Guarded by three specs in `controller/stackitcluster_controller_test.go` —
+*"maps credentials Secret events to StackitCluster reconcile requests"*, *"maps
+credentials Secret events from a different namespace than the StackitCluster"*
+and *"ignores Secret events that no StackitCluster uses as credentials"*. Both
+positive specs were proven to fail when pointed at the old cloud-init mapper.
+
+**Two deliberate omissions.**
+
+- *No Secret watch on the machine side*, contrary to the note above. The machine
+  controller already watches its `StackitCluster`, and this fix makes a
+  corrected Secret reconcile that object — which bumps its `resourceVersion` via
+  `clusterScope.PatchObject` — so `stackitMachineRequestsForStackitCluster`
+  re-enqueues the affected Machines through the existing chain. Adding a second
+  path would be redundant. Note this is an inference from the watch wiring: the
+  envtest suite calls `Reconcile` directly and never exercises the manager's
+  informers, so it cannot prove the chain end to end.
+- *No `PartialObjectMetadata` watch and no label selector.* The Secret-caching
+  item (15) was fixed first and independently, in `cmd/manager/main.go`: a
+  `cache.Options` `Transform` nils out `Data` before anything enters the
+  informer, and `client.Options.Cache.DisableFor` sends the reads that need the
+  real bytes to the API server. That covers every Secret this provider watches,
+  not just the credentials one, so switching this watch to metadata-only would
+  add nothing. CAPI's label selector was deliberately **not** copied — see
+  [SUMMARY.md](SUMMARY.md) for why it would break the watches here.
 
 ---
 
@@ -160,5 +202,15 @@ credentials-recovery sequence, the second needs a `StackitCluster` whose name
 differs from its `Cluster`. Both are cheap to cover at the
 [envtest level](test-strategy.md) — the fake cloud client is not involved in
 either, only the watch wiring and reconcile gating. Defect 2 was closed exactly
-that way on 2026-08-19; defect 1 still needs its recovery-after-invalid-Secret
-spec.
+that way on 2026-08-19, defect 1 on 2026-08-20.
+
+## Correction to the v1beta2 notes above (2026-08-20)
+
+One claim in the *"v1beta1 → v1beta2 traps"* list needs qualifying, because
+fixing item 11 in [SUMMARY.md](SUMMARY.md) depended on it: the wrapped error
+`clusterutil.GetOwnerCluster` returns for a deleted owner **is** detectable with
+`apierrors.IsNotFound`. Both wrapper types in `github.com/pkg/errors` v0.9.1
+(`withStack` and `withMessage`) implement `Unwrap()`, and
+`reasonAndCodeForError` in `k8s.io/apimachinery` v0.35.4 uses `errors.As`, which
+follows the chain. Verified by reading both modules' source. No
+`errors.Cause`-style unwrapping is needed anywhere for this.

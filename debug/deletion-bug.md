@@ -4,8 +4,10 @@ Date: 2026-08-03, updated 2026-08-11 after the refactor run, fixed 2026-08-19
 Cluster: `stackit-workload`
 Status: ✅ **fixed (2026-08-19)** — see [Fix as implemented](#fix-as-implemented).
 The investigation below is left as recorded; it describes the state before the
-fix. Two adjacent defects found while reviewing the fix against the CAPI
-contract remain open — see items 11 and 12 in [SUMMARY.md](SUMMARY.md).
+fix. The two adjacent defects found while reviewing the fix against the CAPI
+contract were fixed on 2026-08-20 — see
+[The two adjacent contract defects](#the-two-adjacent-contract-defects-fixed-2026-08-20)
+at the end of this document.
 
 Deleting `Cluster`, `StackitCluster` and all `Machine`s at the same time
 (e.g. `kubectl delete -f cluster.yaml` on a manifest containing all of them)
@@ -16,17 +18,17 @@ all three test runs, see [run-main1-3-deletion.md](run-main1-3-deletion.md),
 [run-main2-3-deletion.md](run-main2-3-deletion.md) and
 [run-refactor1-3-deletion.md](run-refactor1-3-deletion.md).
 
-⚠️ **It is a race, not a deterministic failure.**
+⚠️ **It was a race, not a deterministic failure.**
 [run-refactor1-4-bastion.md](run-refactor1-4-bastion.md) ran `kubectl delete -f
 cluster-bastion.yaml` deliberately and it completed **cleanly** — everything
-gone in 60 seconds with zero orphaned resources. That is not a fix: the
-responsible code path is unchanged (see [Root cause](#root-cause)), and
-`controller/stackitmachine_controller.go:87-94` still returns before any delete
-handling and without a requeue when the `StackitCluster` is already gone.
-Whether the bug bites depends on whether CAPI finishes deleting the
-`StackitMachine`s before the `StackitCluster` finalizer is released. A single
-clean run therefore proves nothing — do not treat it as evidence that the issue
-is resolved.
+gone in 60 seconds with zero orphaned resources. At the time that was not
+evidence of a fix: the responsible code path was unchanged (see
+[Root cause](#root-cause)), and `StackitMachineReconciler.Reconcile` still
+returned before any delete handling, and without a requeue, when the
+`StackitCluster` was already gone. Whether the bug bit depended on whether CAPI
+finished deleting the `StackitMachine`s before the `StackitCluster` finalizer was
+released, so a single clean run proved nothing. Both halves are closed now — the
+deletion-order guard on 2026-08-19 and the early return itself on 2026-08-20.
 
 ## Investigation
 
@@ -301,8 +303,10 @@ Two consequences worth knowing:
   cluster side does (defect C below): a `CleanupSkipped` warning event, then
   finalize, rather than hanging in `Terminating` forever.
 
-This is the *symptom*. The root cause is that the finalizer is not persisted
-before the first cloud call at all — see item 12 in [SUMMARY.md](SUMMARY.md).
+This is the *symptom*. The root cause — the finalizer is not persisted before
+the first cloud call at all — was fixed on 2026-08-20; see
+[The two adjacent contract defects](#the-two-adjacent-contract-defects-fixed-2026-08-20).
+The tag lookup stays as the safety net for objects created before that fix.
 
 ### B. Cluster cleanup skipped entirely when bastion status is empty
 
@@ -479,6 +483,78 @@ $ kubectl get cluster -A
 
 **Result:** Empty output — `Cluster stackit-workload` fully gone, cleanup
 complete.
+
+## The two adjacent contract defects, fixed 2026-08-20
+
+✅ Found while reviewing the 2026-08-19 fix against the CAPI contract and tracked
+as items 11 and 12 in [SUMMARY.md](SUMMARY.md). Both are the same family as
+everything above — an object that can no longer be deleted, or a cloud resource
+nothing points at — reached by two more routes.
+
+### A missing owner blocked deletion (item 11)
+
+Every owner check sat **in front of** the `DeletionTimestamp` branch, so an
+object whose owner disappeared first could never finish deleting. That is
+exactly the situation this document opens with, and the deletion-order guard
+above only makes it less likely, not impossible: a namespace teardown or a
+direct `kubectl delete` still stamps everything at once.
+
+Both reconcilers now check their owners **after** branching on deletion.
+
+- **Cluster side:** `clusterutil.GetOwnerCluster` returns an error once the
+  owning `Cluster` is gone, and that error was returned from `Reconcile` — a
+  permanent failure retried forever. It is now tolerated while deleting, and
+  `reconcileDelete` takes the cluster name from the `Cluster` **ownerReference**,
+  which outlives the object it points at, so the Machine guard above keeps
+  working. Owner references are always same-namespace, so the namespace comes
+  from the StackitCluster itself.
+- **Machine side:** three early returns had this shape, not the one the finding
+  recorded — `machine == nil` and `cluster == nil` as well as
+  `stackitCluster == nil`. All three moved. `reconcileDelete` now finalizes with
+  a `CleanupSkipped` warning event naming the missing object: without the
+  StackitCluster there are no credentials, project or region to build a cloud
+  client from, and without the `Cluster`/`Machine` there are no tags to identify
+  the server with (`machineScope.Tags()` reads exactly those two). A loud leak
+  beats an object that can never be deleted — the same trade the missing-Secret
+  path in section C makes.
+
+Only a genuinely absent owner is tolerated — `NotFound` or
+`clusterutil.ErrNoCluster`, behind a small `ownerGone` helper. A transient API
+error still fails the reconcile, so it can never be mistaken for "the owner is
+gone" and drop a finalizer over a running server.
+
+**Correction to the finding:** `GetOwnerMachine` and `GetClusterFromMetadata`
+return an *error* when the owner is missing, not `(nil, nil)`. The finding
+assumed the latter for the machine side.
+
+Guarded by *"finalizes deletion when the owning Cluster is already gone"* and
+*"still waits for Machines when the owning Cluster is already gone"* on the
+cluster side, and a three-entry `DescribeTable` *"finalizes deletion when an
+owning object is already gone"* on the machine side. All five were proven to fail
+against the previous code.
+
+### The finalizer was not persisted before the first cloud call (item 12)
+
+`AddFinalizer` only mutated the in-memory object; the write to etcd happened in
+the deferred `PatchObject` at the end of `Reconcile` — *after* `CreateServer`.
+A process dying, restarting or hitting a patch conflict in between left a running
+server behind an object carrying no finalizer to clean it up. This is the root
+cause whose symptom section A cleans up after.
+
+Both `reconcileNormal` functions now call `PatchObject` immediately after
+`AddFinalizer`, before any cloud call can run — CAPA's *"register the finalizer
+immediately to avoid orphaning resources on delete"*. This works because
+`patch.Helper` snapshots the object once in `NewHelper` and re-diffs the current
+state against that same snapshot on every `Patch`, so the early call sends a
+finalizer-only patch and the later deferred call still computes a correct,
+larger diff.
+
+Guarded by *"persists the finalizer before creating the server"* and *"persists
+the finalizer before the first cloud call"*. Both prove the **ordering**, not
+just the end state: `cloud/fake.Client` gained non-consuming `BeforeCreateServer`
+and `BeforeGetNetwork` hooks, and the specs read the StackitMachine /
+StackitCluster back from the API server from inside the cloud call. Reverting
+either patch fails the corresponding spec.
 
 ## Fix as implemented
 
