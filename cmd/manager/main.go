@@ -25,11 +25,14 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -54,6 +57,43 @@ func init() {
 
 	utilruntime.Must(infrastructurev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+// managerCacheOptions keeps Secret data out of the shared informer cache. Both
+// controllers watch Secrets — credentials, bootstrap data and the bastion
+// cloud-init — and a watch only needs an object's identity to enqueue a
+// reconcile, never its contents, so caching credential bytes in memory buys
+// nothing and exposes them to anything that can read the process.
+//
+// Deliberately no label selector on the entry, unlike Cluster API's own
+// equivalent in internal/setup: the Secrets this provider watches carry no
+// common label, so restricting the cache by one would silently stop the
+// watches from firing rather than only hardening them.
+func managerCacheOptions() cache.Options {
+	return cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Secret{}: {
+				Transform: func(in any) (any, error) {
+					if secret, ok := in.(*corev1.Secret); ok {
+						secret.Data = nil
+					}
+					return in, nil
+				},
+			},
+		},
+	}
+}
+
+// managerClientOptions turns every Secret read into a live lookup. The cache no
+// longer holds Secret data (see managerCacheOptions), so the reads that need
+// the real bytes — util.BuildCloudClient and the bootstrap-data fetch — have to
+// bypass it.
+func managerClientOptions() client.Options {
+	return client.Options{
+		Cache: &client.CacheOptions{
+			DisableFor: []client.Object{&corev1.Secret{}},
+		},
+	}
 }
 
 // nolint:gocyclo
@@ -160,6 +200,8 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  managerCacheOptions(),
+		Client:                 managerClientOptions(),
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
