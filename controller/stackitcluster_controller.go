@@ -150,44 +150,6 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCloudInitRef(ctx con
 	return requests
 }
 
-// stackitClusterRequestsForCredentialsSecret enqueues every StackitCluster whose
-// credentialsSecretRef points at the given Secret.
-//
-// Without it, correcting an invalid credentials Secret never reaches the
-// cluster: CredentialFailureResult deliberately returns without a requeue,
-// because retrying invalid credentials in a hot loop helps nobody — which only
-// works if fixing them triggers a reconcile.
-func (r *StackitClusterReconciler) stackitClusterRequestsForCredentialsSecret(ctx context.Context, obj client.Object) []reconcile.Request {
-	secret, ok := obj.(*corev1.Secret)
-	if !ok {
-		return nil
-	}
-
-	// Listed across all namespaces on purpose: CredentialsSecretRef.Namespace is
-	// optional, so the Secret may well live somewhere other than the
-	// StackitCluster that references it.
-	clusters := &infrav1.StackitClusterList{}
-	if err := r.List(ctx, clusters); err != nil {
-		logf.FromContext(ctx).Error(err, "Failed to list StackitClusters for credentials Secret watch", "secret", client.ObjectKeyFromObject(secret))
-		return nil
-	}
-
-	secretKey := client.ObjectKeyFromObject(secret)
-	requests := make([]reconcile.Request, 0, len(clusters.Items))
-	for _, cluster := range clusters.Items {
-		if util.CredentialsSecretKey(&cluster) != secretKey {
-			continue
-		}
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Namespace: cluster.Namespace,
-				Name:      cluster.Name,
-			},
-		})
-	}
-	return requests
-}
-
 // SetupWithManager registers the controller with the manager.
 func (r *StackitClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -195,7 +157,6 @@ func (r *StackitClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCluster)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCredentialsSecret)).
 		Named("stackitcluster").
 		Complete(r)
 }

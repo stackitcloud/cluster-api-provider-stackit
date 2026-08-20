@@ -78,6 +78,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 			&stackitMachine.Status.Conditions,
 			stackitMachine.Generation,
 			err,
+			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
 			infrav1.MachineReadyCondition,
 		)
@@ -193,6 +194,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 			&stackitMachine.Status.Conditions,
 			stackitMachine.Generation,
 			err,
+			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
 		)
 		return resultErr

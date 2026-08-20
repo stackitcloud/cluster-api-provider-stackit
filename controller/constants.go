@@ -19,8 +19,10 @@ const (
 
 	retryableErrorRequeueAfter = 5 * time.Second
 
-	// deleteRequeueAfter paces the wait for dependent objects to disappear
-	// during deletion. Matches what Cluster API and the other infrastructure
-	// providers use for the same purpose.
+	// deleteRequeueAfter paces the wait for dependent objects to disappear during deletion.
 	deleteRequeueAfter = 5 * time.Second
+
+	// credentialsRetryRequeueAfter paces retries of invalid credentials, which
+	// need an operator to fix the Secret before they can succeed.
+	credentialsRetryRequeueAfter = time.Minute
 )
