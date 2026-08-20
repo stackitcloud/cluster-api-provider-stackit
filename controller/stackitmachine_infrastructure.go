@@ -162,6 +162,22 @@ func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
 func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
 	stackitMachine := machineScope.StackitMachine
 
+	// Without one of the owning objects the server can no longer be reached at
+	// all: the StackitCluster carries the credentials, the project and the
+	// region, and the Cluster and Machine names make up the tags that identify
+	// the server. Blocking here would leave the StackitMachine in Terminating
+	// forever, so finalize and make the possible leak loud instead — the same
+	// trade the missing-credentials path below makes.
+	if missing := missingOwner(machineScope); missing != "" {
+		if r.Recorder != nil {
+			r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+				"%s is gone; finalizing without cloud cleanup. "+
+					"Any remaining STACKIT server for this machine must be removed manually.", missing)
+		}
+		controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
+		return nil
+	}
+
 	// The cloud client is built unconditionally: an empty status.instanceID is
 	// not proof that no server exists, so every deletion has to ask the cloud
 	// before it may drop the finalizer.
@@ -210,6 +226,20 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 	}
 	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
 	return nil
+}
+
+// missingOwner names the first owning object that no longer exists, or an empty
+// string once all of them are present.
+func missingOwner(machineScope *scope.MachineScope) string {
+	switch {
+	case machineScope.Machine == nil:
+		return "Owning Machine"
+	case machineScope.Cluster == nil:
+		return "Owning Cluster"
+	case machineScope.StackitCluster == nil:
+		return "Owning StackitCluster"
+	}
+	return ""
 }
 
 // resolveServerForDeletion reports the ID of the server backing this machine, or

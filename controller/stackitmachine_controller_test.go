@@ -424,6 +424,44 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// Every one of these owning objects used to be checked before the
+	// DeletionTimestamp branch and returned without a requeue, so a
+	// StackitMachine whose owner disappeared first — a namespace teardown
+	// deletes in no particular order — could never be deleted again.
+	DescribeTable("finalizes deletion when an owning object is already gone",
+		func(deleteOwner func()) {
+			updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+			createBootstrapSecret(ctx, bootstrapName)
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			deleteOwner()
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1),
+				"without the owning objects there are no credentials and no tags, so the server cannot be reached")
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+				return apierrors.IsNotFound(err)
+			}).Should(BeTrue())
+		},
+		Entry("owning Machine", func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+		}),
+		Entry("owning Cluster", func() {
+			deleteIfExists(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace}})
+		}),
+		Entry("owning StackitCluster", func() {
+			deleteIfExists(ctx, &infrav1.StackitCluster{ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace}})
+		}),
+	)
+
 	It("maps owning Machine events to StackitMachine reconcile requests", func() {
 		machine := &clusterv1.Machine{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
