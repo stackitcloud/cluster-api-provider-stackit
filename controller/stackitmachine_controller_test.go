@@ -132,12 +132,12 @@ var _ = Describe("StackitMachine Controller", func() {
 	})
 
 	It("does not silently recreate the server of an already-provisioned machine", func() {
-		// Regression test for debug/machine-recreate-bug.md: when the backing
-		// server disappears out-of-band, ensureServer used to call CreateServer
-		// again, replaying the original bootstrap data. The replacement either
-		// never rejoins (different IP) or rejoins while Machine and Node keep
-		// pointing at the deleted server (same IP) — neither restores the
-		// cluster, and both consume another VM unnoticed.
+		// When the backing server disappears out-of-band, ensureServer used to
+		// call CreateServer again, replaying the original bootstrap data — which
+		// is pinned to the previous identity. The replacement either never
+		// rejoins (different IP) or rejoins while Machine and Node keep pointing
+		// at the deleted server (same IP) — neither restores the cluster, and
+		// both consume another VM unnoticed.
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
 
@@ -386,11 +386,10 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
-	// Regression test for debug/deletion-bug.md section A: an empty
-	// status.instanceID was taken as proof that no VM had ever been created, so
-	// the finalizer went away without a single cloud call. If CreateServer had
-	// succeeded and the status patch had not, that server kept running, tagged
-	// and unreferenced by any object.
+	// An empty status.instanceID used to be taken as proof that no VM had ever
+	// been created, so the finalizer went away without a single cloud call. If
+	// CreateServer had succeeded and the status patch had not, that server kept
+	// running, tagged and unreferenced by any object.
 	It("deletes a tagged server whose instance ID was lost from the status", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
@@ -478,11 +477,11 @@ var _ = Describe("StackitMachine Controller", func() {
 		Expect(requests).To(ConsistOf(request))
 	})
 
-	// Regression test for debug/watch-wiring-bug.md defect 2: the mapper matched
-	// Machine.spec.clusterName against the StackitCluster name, so it enqueued
-	// nothing as soon as the two differed. Every other spec here hides the bug
-	// because createOwnerCluster gives the Cluster and its infrastructureRef the
-	// same name; a ClusterClass-generated infrastructureRef never does.
+	// The mapper used to match Machine.spec.clusterName against the
+	// StackitCluster name, so it enqueued nothing as soon as the two differed.
+	// Every other spec here hides the bug because createOwnerCluster gives the
+	// Cluster and its infrastructureRef the same name; a ClusterClass-generated
+	// infrastructureRef never does.
 	It("maps StackitCluster events when the StackitCluster name differs from the Cluster name", func() {
 		suffix := time.Now().UnixNano()
 		ownerClusterName := fmt.Sprintf("owner-%d", suffix)

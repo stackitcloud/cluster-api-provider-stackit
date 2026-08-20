@@ -204,11 +204,11 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("cleans up bastion resources during deletion even when bastion status was never persisted", func() {
-		// Regression test for debug/deletion-bug.md: the cloud-cleanup block used
-		// to be gated on persisted status for the bastion, while the load
-		// balancer was gated on its spec flag. A bastion created without its
-		// status patch landing (process restart, conflict) therefore skipped
-		// cleanup entirely and leaked server, public IP and security group.
+		// The cloud-cleanup block used to be gated on persisted status for the
+		// bastion, while the load balancer was gated on its spec flag. A bastion
+		// created without its status patch landing (process restart, conflict)
+		// therefore skipped cleanup entirely and leaked server, public IP and
+		// security group.
 		createOwnerCluster(ctx, clusterName+"-nolb")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
@@ -581,13 +581,13 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
-	// Regression tests for debug/deletion-bug.md: the finalizer used to go away
-	// regardless of remaining Machines. Their controllers reach credentials and
-	// project context through this StackitCluster, so once it is gone they can
-	// neither delete their servers nor drop their own finalizers — the VMs are
-	// orphaned and the Machines hang. Cluster API orders this correctly when the
-	// deletion starts at the Cluster, but a namespace teardown or a direct
-	// delete of this object bypasses that ordering.
+	// The finalizer used to go away regardless of remaining Machines. Their
+	// controllers reach credentials and project context through this
+	// StackitCluster, so once it is gone they can neither delete their servers
+	// nor drop their own finalizers — the VMs are orphaned and the Machines
+	// hang. Cluster API orders this correctly when the deletion starts at the
+	// Cluster, but a namespace teardown or a direct delete of this object
+	// bypasses that ordering.
 	It("keeps the finalizer while Machines still exist for the cluster", func() {
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
