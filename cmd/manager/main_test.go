@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 )
 
@@ -40,6 +41,9 @@ func TestManagerCacheOptionsStripsSecretData(t *testing.T) {
 	}
 
 	out, err := transform(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl", Operation: metav1.ManagedFieldsOperationUpdate}},
+		},
 		Data: map[string][]byte{"credentials": []byte("service-account-key")},
 	})
 	if err != nil {
@@ -51,6 +55,9 @@ func TestManagerCacheOptionsStripsSecretData(t *testing.T) {
 	}
 	if secret.Data != nil {
 		t.Errorf("Transform left Secret data in the cache: %v", secret.Data)
+	}
+	if secret.ManagedFields != nil {
+		t.Errorf("Transform left managed fields in the cache: %v", secret.ManagedFields)
 	}
 }
 

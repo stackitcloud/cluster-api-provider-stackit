@@ -63,12 +63,15 @@ func init() {
 // controllers watch Secrets — credentials, bootstrap data and the bastion
 // cloud-init — and a watch only needs an object's identity to enqueue a
 // reconcile, never its contents, so caching credential bytes in memory buys
-// nothing and exposes them to anything that can read the process.
+// nothing and exposes them to anything that can read the process. Managed
+// fields go with them: nothing here reads them, and they are usually the
+// largest part of what is left once the data is gone.
 //
 // Deliberately no label selector on the entry, unlike Cluster API's own
-// equivalent in internal/setup: the Secrets this provider watches carry no
-// common label, so restricting the cache by one would silently stop the
-// watches from firing rather than only hardening them.
+// equivalent in internal/setup. Cluster API only watches Secrets it stamps
+// itself, whereas the credentials and bastion cloud-init Secrets here are
+// created by the user and carry no labels, so a selector would silently stop
+// those watches from firing rather than only hardening the cache.
 func managerCacheOptions() cache.Options {
 	return cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
@@ -76,6 +79,7 @@ func managerCacheOptions() cache.Options {
 				Transform: func(in any) (any, error) {
 					if secret, ok := in.(*corev1.Secret); ok {
 						secret.Data = nil
+						secret.SetManagedFields(nil)
 					}
 					return in, nil
 				},
