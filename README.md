@@ -61,9 +61,13 @@ Check out the [Quick Start](./quick-start.md) for launching a cluster on STACKIT
 This provider's versions are compatible with the following versions of Cluster API
 and support all Kubernetes versions that is supported by its compatible Cluster API version:
 
-|                          | Cluster API v1alpha4 (v0.4) | Cluster API v1beta1 (v1.x) |
-| ------------------------ | :-------------------------: | :------------------------: |
-| CAPSTK v1alpha1 `(main)` |              x              |             ✓              |
+|                          | Cluster API v1alpha4 (v0.4) | Cluster API v1beta1 | Cluster API v1beta2 |
+| ------------------------ | :-------------------------: | :-----------------: | :-----------------: |
+| CAPSTK v1alpha1 `(main)` |              x              |          x          |          ✓          |
+
+This provider implements the **v1beta2** contract, as declared in
+[`metadata.yaml`](metadata.yaml), and is built against `sigs.k8s.io/cluster-api`
+v1.13.2.
 
 (See [Kubernetes support matrix](https://cluster-api.sigs.k8s.io/reference/versions.html) of Cluster API versions).
 
