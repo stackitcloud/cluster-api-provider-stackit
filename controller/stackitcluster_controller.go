@@ -69,12 +69,19 @@ func (r *StackitClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	cluster, err := clusterutil.GetOwnerCluster(ctx, r.Client, stackitCluster.ObjectMeta)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get owner cluster: %w", err)
-	}
-	if cluster == nil {
-		log.Info("StackitCluster has no owning Cluster yet, requeueing")
+	deleting := !stackitCluster.DeletionTimestamp.IsZero()
+	cluster, ownerErr := clusterutil.GetOwnerCluster(ctx, r.Client, stackitCluster.ObjectMeta)
+	switch {
+	case ownerGone(ownerErr) && deleting:
+		// The owning Cluster is already gone and can never come back, so
+		// returning the error here would retry forever without this object ever
+		// reaching reconcileDelete. Deletion must not be blocked by a
+		// precondition only the normal path needs.
+		log.Info("Owning Cluster is gone, continuing deletion without it")
+	case ownerErr != nil:
+		return ctrl.Result{}, fmt.Errorf("get owner cluster: %w", ownerErr)
+	case cluster == nil && !deleting:
+		log.Info("StackitCluster has no owning Cluster yet, waiting")
 		return ctrl.Result{}, nil
 	}
 

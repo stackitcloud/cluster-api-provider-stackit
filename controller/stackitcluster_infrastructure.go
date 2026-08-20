@@ -224,6 +224,17 @@ func bootstrapTargetIP(network *cloud.Network) string {
 	return "10.0.0.1"
 }
 
+// ownerClusterName reports the name of the Cluster this StackitCluster belongs
+// to, without needing that Cluster to still exist.
+func ownerClusterName(stackitCluster *infrav1.StackitCluster) string {
+	for _, ref := range stackitCluster.OwnerReferences {
+		if ref.Kind == "Cluster" {
+			return ref.Name
+		}
+	}
+	return ""
+}
+
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {
 	stackitCluster := clusterScope.StackitCluster
 
@@ -236,12 +247,21 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 	// Selects the same way util/collections.GetFilteredMachinesForCluster does,
 	// inlined because that package pulls in the kubeadm bootstrap API for a
 	// query this short. Cluster API sets the label on every Machine it owns.
+	//
+	// The Cluster itself may already be gone — a namespace teardown deletes it
+	// in no particular order — so the name is taken from the ownerReference,
+	// which outlives it. Owner references are always same-namespace, so the
+	// StackitCluster's own namespace is the right one either way.
+	clusterName := ownerClusterName(stackitCluster)
+	if clusterScope.Cluster != nil {
+		clusterName = clusterScope.Cluster.Name
+	}
 	machines := &clusterv1.MachineList{}
 	if err := r.List(ctx, machines,
-		client.InNamespace(clusterScope.Cluster.Namespace),
-		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterScope.Cluster.Name},
+		client.InNamespace(stackitCluster.Namespace),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName},
 	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterScope.Cluster.Name, err)
+		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterName, err)
 	}
 	if len(machines.Items) > 0 {
 		logf.FromContext(ctx).Info(
