@@ -232,44 +232,19 @@ func bootstrapTargetIP(network *cloud.Network) string {
 	return "10.0.0.1"
 }
 
-// ownerClusterName reports the name of the Cluster this StackitCluster belongs
-// to, without needing that Cluster to still exist.
-func ownerClusterName(stackitCluster *infrav1.StackitCluster) string {
-	for _, ref := range stackitCluster.OwnerReferences {
-		if ref.Kind == "Cluster" {
-			return ref.Name
-		}
-	}
-	return ""
-}
-
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {
 	stackitCluster := clusterScope.StackitCluster
 
 	// Machines resolve their credentials and project context through this
-	// StackitCluster, so removing the finalizer while any of them remain leaves
-	// them unable to delete their own servers. Cluster API orders this correctly
-	// when deletion starts at the Cluster, but a namespace teardown or a direct
-	// delete of this object bypasses that ordering entirely.
-	//
+	// StackitCluster, so the finalizer has to stay while any of them remain.
 	// Selects the same way util/collections.GetFilteredMachinesForCluster does,
-	// inlined because that package pulls in the kubeadm bootstrap API for a
-	// query this short. Cluster API sets the label on every Machine it owns.
-	//
-	// The Cluster itself may already be gone — a namespace teardown deletes it
-	// in no particular order — so the name is taken from the ownerReference,
-	// which outlives it. Owner references are always same-namespace, so the
-	// StackitCluster's own namespace is the right one either way.
-	clusterName := ownerClusterName(stackitCluster)
-	if clusterScope.Cluster != nil {
-		clusterName = clusterScope.Cluster.Name
-	}
+	// inlined because that package pulls in the kubeadm bootstrap API.
 	machines := &clusterv1.MachineList{}
 	if err := r.List(ctx, machines,
-		client.InNamespace(stackitCluster.Namespace),
-		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName},
+		client.InNamespace(clusterScope.Cluster.Namespace),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterScope.Cluster.Name},
 	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterName, err)
+		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterScope.Cluster.Name, err)
 	}
 	if len(machines.Items) > 0 {
 		logf.FromContext(ctx).Info(

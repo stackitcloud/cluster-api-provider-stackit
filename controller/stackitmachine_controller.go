@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -67,31 +66,31 @@ func (r *StackitMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// The owning objects are resolved as far as they still exist. While the
-	// object is being deleted an owner that is simply gone is tolerated, so the
-	// checks that need one sit behind the deletion branch below rather than in
-	// front of it. Every other error still fails, so a transient API problem
-	// cannot be mistaken for a missing owner and drop the finalizer over a
-	// server that is still running.
-	deleting := !stackitMachine.DeletionTimestamp.IsZero()
+	machine, err := clusterutil.GetOwnerMachine(ctx, r.Client, stackitMachine.ObjectMeta)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get owner machine: %w", err)
+	}
+	if machine == nil {
+		log.Info("StackitMachine has no owning Machine yet, requeueing")
+		return ctrl.Result{}, nil
+	}
 
-	machine, ownerErr := clusterutil.GetOwnerMachine(ctx, r.Client, stackitMachine.ObjectMeta)
-	if ownerErr != nil && (!deleting || !ownerGone(ownerErr)) {
-		return ctrl.Result{}, fmt.Errorf("get owner machine: %w", ownerErr)
+	cluster, err := clusterutil.GetClusterFromMetadata(ctx, r.Client, machine.ObjectMeta)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get cluster from machine metadata: %w", err)
 	}
-	var cluster *clusterv1.Cluster
-	if machine != nil {
-		cluster, ownerErr = clusterutil.GetClusterFromMetadata(ctx, r.Client, machine.ObjectMeta)
-		if ownerErr != nil && (!deleting || !ownerGone(ownerErr)) {
-			return ctrl.Result{}, fmt.Errorf("get cluster from machine metadata: %w", ownerErr)
-		}
+	if cluster == nil {
+		log.Info("Machine has no owning Cluster yet, requeueing")
+		return ctrl.Result{}, nil
 	}
-	var stackitCluster *infrav1.StackitCluster
-	if cluster != nil {
-		stackitCluster, err = r.getStackitCluster(ctx, cluster)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+
+	stackitCluster, err := r.getStackitCluster(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if stackitCluster == nil {
+		log.Info("StackitCluster not found, requeueing")
+		return ctrl.Result{}, nil
 	}
 
 	machineScope, err := scope.NewMachineScope(r.Client, cluster, machine, stackitCluster, stackitMachine)
@@ -113,27 +112,7 @@ func (r *StackitMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if !stackitMachine.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, machineScope)
 	}
-
-	switch {
-	case machine == nil:
-		log.Info("StackitMachine has no owning Machine yet, waiting")
-		return ctrl.Result{}, nil
-	case cluster == nil:
-		log.Info("Machine has no owning Cluster yet, waiting")
-		return ctrl.Result{}, nil
-	case stackitCluster == nil:
-		log.Info("StackitCluster not found, waiting")
-		return ctrl.Result{}, nil
-	}
 	return r.reconcileNormal(ctx, machineScope)
-}
-
-// ownerGone reports whether err means the owning object no longer exists, as
-// opposed to not being readable right now. GetOwnerMachine and GetOwnerCluster
-// surface a plain NotFound; GetClusterFromMetadata reports ErrNoCluster when the
-// Machine has lost the label naming its Cluster.
-func ownerGone(err error) bool {
-	return apierrors.IsNotFound(err) || errors.Is(err, clusterutil.ErrNoCluster)
 }
 
 // SetupWithManager registers the controller with the manager.
