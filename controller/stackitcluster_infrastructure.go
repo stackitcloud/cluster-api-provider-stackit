@@ -39,6 +39,14 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 
 	if !controllerutil.ContainsFinalizer(stackitCluster, infrav1.ClusterFinalizer) {
 		controllerutil.AddFinalizer(stackitCluster, infrav1.ClusterFinalizer)
+		// Persisted immediately, before anything can create a cloud resource.
+		// AddFinalizer only mutates the object in memory; it otherwise reaches
+		// etcd through the deferred PatchObject at the end of Reconcile, and a
+		// process that dies in between leaves a load balancer or a bastion
+		// running behind an object that carries no finalizer to clean it up.
+		if err := clusterScope.PatchObject(ctx); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
+		}
 	}
 	stackitCluster.Status.FailureDomains = stackitFailureDomains(stackitCluster.Spec.Region)
 

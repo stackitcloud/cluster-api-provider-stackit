@@ -386,6 +386,31 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// AddFinalizer only mutated the object in memory, and the write to etcd
+	// happened in the deferred PatchObject at the end of Reconcile — after
+	// CreateServer. A process dying in between left a running server behind an
+	// object with no finalizer to clean it up. The hook observes API server
+	// state from inside the cloud call, so it proves the ordering rather than
+	// only the end result.
+	It("persists the finalizer before creating the server", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+
+		var finalizersAtCreate []string
+		fakeCloud.BeforeCreateServer = func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			finalizersAtCreate = got.Finalizers
+		}
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		Expect(finalizersAtCreate).To(ContainElement(infrav1.MachineFinalizer),
+			"the server was created while the API server had no finalizer to clean it up")
+	})
+
 	// An empty status.instanceID used to be taken as proof that no VM had ever
 	// been created, so the finalizer went away without a single cloud call. If
 	// CreateServer had succeeded and the status patch had not, that server kept
