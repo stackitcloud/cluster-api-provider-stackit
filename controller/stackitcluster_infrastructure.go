@@ -57,6 +57,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			&stackitCluster.Status.Conditions,
 			stackitCluster.Generation,
 			err,
+			credentialsRetryRequeueAfter,
 			infrav1.ClusterCredentialsReadyCondition,
 			infrav1.ClusterReadyCondition,
 		)

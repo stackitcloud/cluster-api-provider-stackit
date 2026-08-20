@@ -220,7 +220,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
 	})
 
-	It("marks credentials invalid without requeueing on unauthorized credentials", func() {
+	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
@@ -229,13 +229,25 @@ var _ = Describe("StackitMachine Controller", func() {
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
+		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
 		Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 		got := &infrav1.StackitMachine{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		By("correcting the credentials")
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return fakeCloud, nil
+		}
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
 	It("does not call the cloud API when the owning Cluster is paused", func() {

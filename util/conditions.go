@@ -81,15 +81,21 @@ func SetConditions(
 	}
 }
 
+// CredentialFailureResult records the failure and decides how to retry.
+//
+// Invalid credentials need an operator to fix the Secret, so they requeue on a
+// slow timer rather than returning an error and spinning through the controller
+// backoff. The reconcile reads the Secret again, which is what picks up the fix.
 func CredentialFailureResult(
 	conditions *[]metav1.Condition,
 	generation int64,
 	err error,
+	requeueAfter time.Duration,
 	conditionTypes ...string,
 ) (ctrl.Result, error) {
 	SetConditions(conditions, generation, metav1.ConditionFalse, "CredentialsInvalid", err.Error(), conditionTypes...)
 	if cloud.IsUnauthorized(err) || cloud.IsInvalidInput(err) || errors.Is(err, ErrCredentialsInvalid) {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, err
 }
