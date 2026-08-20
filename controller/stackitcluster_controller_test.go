@@ -581,6 +581,28 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// AddFinalizer only mutated the object in memory, and the write to etcd
+	// happened in the deferred PatchObject at the end of Reconcile — after the
+	// load balancer and the bastion had been created. A process dying in between
+	// left those resources behind an object with no finalizer to clean them up.
+	// GetNetwork is the first cloud call of the reconcile, so a hook there
+	// proves the ordering rather than only the end result.
+	It("persists the finalizer before the first cloud call", func() {
+		var finalizersAtFirstCall []string
+		fakeCloud.BeforeGetNetwork = func() {
+			got := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			finalizersAtFirstCall = got.Finalizers
+		}
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		Expect(finalizersAtFirstCall).To(ContainElement(infrav1.ClusterFinalizer),
+			"cloud resources were created while the API server had no finalizer to clean them up")
+	})
+
 	// The finalizer used to go away regardless of remaining Machines. Their
 	// controllers reach credentials and project context through this
 	// StackitCluster, so once it is gone they can neither delete their servers

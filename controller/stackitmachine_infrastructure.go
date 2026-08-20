@@ -38,6 +38,14 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 
 	if !controllerutil.ContainsFinalizer(stackitMachine, infrav1.MachineFinalizer) {
 		controllerutil.AddFinalizer(stackitMachine, infrav1.MachineFinalizer)
+		// Persisted immediately, before CreateServer can run. AddFinalizer only
+		// mutates the object in memory; it otherwise reaches etcd through the
+		// deferred PatchObject at the end of Reconcile, and a process that dies
+		// in between leaves a server running behind an object that carries no
+		// finalizer to clean it up.
+		if err := machineScope.PatchObject(ctx); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
+		}
 	}
 
 	if !machineScope.StackitCluster.Status.Ready {

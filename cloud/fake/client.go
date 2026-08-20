@@ -55,6 +55,14 @@ type Client struct {
 	FailNextEnsureNodeSSH error
 	FailNextDeleteNodeSSH error
 
+	// Before* hooks, if non-nil, run before the call they belong to does any
+	// work. They let a test observe API server state at the exact moment a cloud
+	// call is about to happen — for instance to assert a finalizer was persisted
+	// before the first resource could be created. Unlike FailNext*, they are not
+	// consumed and fire on every call.
+	BeforeCreateServer func()
+	BeforeGetNetwork   func()
+
 	// CreateServerCalls counts successful CreateServer calls (for idempotency
 	// assertions).
 	CreateServerCalls  int
@@ -171,6 +179,9 @@ func (c *Client) CreateServer(_ context.Context, input cloud.CreateServerInput) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.BeforeCreateServer != nil {
+		c.BeforeCreateServer()
+	}
 	if err := consume(&c.FailNextCreateServer); err != nil {
 		return nil, err
 	}
@@ -215,6 +226,9 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.BeforeGetNetwork != nil {
+		c.BeforeGetNetwork()
+	}
 	if err := consume(&c.FailNextGetNetwork); err != nil {
 		return nil, err
 	}
