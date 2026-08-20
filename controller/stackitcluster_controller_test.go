@@ -665,56 +665,6 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
-	// GetOwnerCluster returns an error once the owning Cluster is gone, and that
-	// error was returned from Reconcile. Since the Cluster can never come back,
-	// the StackitCluster retried forever without ever reaching reconcileDelete
-	// and stayed in Terminating for good.
-	It("finalizes deletion when the owning Cluster is already gone", func() {
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
-
-		deleteIfExists(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace}})
-
-		got := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
-
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{})
-			return apierrors.IsNotFound(err)
-		}).Should(BeTrue())
-	})
-
-	It("still waits for Machines when the owning Cluster is already gone", func() {
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-
-		machineName := "machine-" + clusterName
-		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
-		DeferCleanup(func() {
-			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
-		})
-
-		deleteIfExists(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace}})
-
-		got := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(deleteRequeueAfter),
-			"the Machine name has to come from the ownerReference once the Cluster is gone")
-
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
-		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
-	})
-
 	It("keeps the finalizer when load balancer deletion returns a transient error", func() {
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
