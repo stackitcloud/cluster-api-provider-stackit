@@ -200,13 +200,14 @@ the CIDR test.
   own commit with a regression test proven to fail without its fix. Items 13 and
   14 were deliberately left out of scope.
   - *Item 15:* `cmd/manager/main.go` now passes `cache.Options` whose
-    `ByObject` entry for Secrets nils out `Data` before anything enters the
-    informer, plus `client.Options` with `DisableFor` Secrets so the reads that
-    need the real bytes bypass the cache. **No label selector**, unlike CAPI's
-    own `internal/setup`: the Secrets this provider watches (credentials,
-    bootstrap data, cloud-init) share no label, so a selector would silently
-    stop the watches instead of only hardening them. `StringData` is left alone
-    — the API server never returns it.
+    `ByObject` entry for Secrets nils out `Data` **and the managed fields**
+    before anything enters the informer, plus `client.Options` with `DisableFor`
+    Secrets so the reads that need the real bytes bypass the cache. Managed
+    fields were added in a follow-up commit after noticing CAPI strips them in
+    the same `Transform`; they are the largest part of what survives once the
+    data is gone. `StringData` is left alone — the API server never returns it.
+    See [How the other providers solve this](#how-the-other-providers-solve-the-secret-cache)
+    for why no label selector was copied and what the trade costs.
   - *Item 1:* a second `Watches(&corev1.Secret{}, …)` on the cluster controller,
     backed by the new `stackitClusterRequestsForCredentialsSecret`. It lists
     StackitClusters **across all namespaces** and compares via
@@ -333,6 +334,55 @@ fixed on 2026-08-20; 13 and 14 are still open and keep their numbers.
   scoping decision, not an oversight — run
   `make test-e2e-workload-upgrade-workers`,
   `…-upgrade-control-plane`, `…-topology` and `…-scale` to close it.
+
+## How the other providers solve the Secret cache
+
+Checked against upstream `main` on 2026-08-20 while reviewing the item 15 fix,
+because the obvious question is why CAPI's own hardening was not copied wholesale.
+Short answer: **CAPA and CAPG do not solve it at all**, and CAPI's version does
+not transfer unchanged.
+
+| | Secret cache hardened? | Secret watch? |
+| --- | --- | --- |
+| CAPA | ✖️ only `DefaultNamespaces` + `SyncPeriod` in `main.go` | ✖️ none |
+| CAPG | ✖️ identical | ✖️ none |
+| CAPI core | ✅ label selector + `Transform` (`Data` *and* `managedFields`) + `DisableFor` | ✅ as `PartialObjectMetadata` |
+
+CAPA reads bootstrap data through the manager's **cached** client
+(`machineScope.GetRawBootstrapDataWithFormat`), which makes controller-runtime
+start a Secret informer lazily on the first read — so every Secret, `Data`
+included, ends up in memory anyway. Reads stay cheap; a corrected credentials
+Secret never triggers a reconcile, which is the ecosystem-wide gap already noted
+in [watch-wiring-bug.md](watch-wiring-bug.md).
+
+**Why CAPI's label selector does not transfer.** CAPI only watches Secrets it
+stamps itself, so `cluster.x-k8s.io/cluster-name` always matches. Here it would
+not: the bootstrap-data Secret does carry that label (Cluster API's
+`kubeadmconfig_controller.go` sets it), but the credentials and bastion
+cloud-init Secrets are created by the user — `kubectl create secret generic`,
+see [../docs/src/getting-started/credentials.md](../docs/src/getting-started/credentials.md)
+— and carry no labels at all. A selector would therefore have silently disabled
+the very watch item 1 adds.
+
+**What the trade costs.** `DisableFor` turns every Secret read into a live API
+call: one per cluster reconcile, two per machine reconcile (credentials plus
+bootstrap data). CAPI compensates with a second, caching client
+(`secretCachingClient`) for the Secrets it reads hot; this provider has no such
+compensation, which is acceptable at the fleet sizes in scope but is the first
+thing to revisit if API-server load ever becomes a concern.
+
+**Worth knowing:** the exposure predates this work. The bastion cloud-init watch
+already pulled every Secret in the management cluster into the informer — the
+cache is cluster-wide, `main.go` sets no `DefaultNamespaces` — and
+`BuildCloudClient` read through the cached client, so the service-account keys
+were already in memory. Item 1 did not create that; item 15 cleans it up.
+
+**One step further, deliberately not taken:** watching Secrets as
+`PartialObjectMetadata` against a dedicated metadata-only cache, the way CAPI's
+`ClusterResourceSet` controller does. The informer would then hold names, labels
+and `resourceVersion` and nothing else. With `Data` and `managedFields` already
+stripped the remaining gain is small, and the cost is a second cache plus
+`WatchesRawSource` wiring in `main.go`.
 
 ## Convention for this folder
 

@@ -119,12 +119,17 @@ positive specs were proven to fail when pointed at the old cloud-init mapper.
   informers, so it cannot prove the chain end to end.
 - *No `PartialObjectMetadata` watch and no label selector.* The Secret-caching
   item (15) was fixed first and independently, in `cmd/manager/main.go`: a
-  `cache.Options` `Transform` nils out `Data` before anything enters the
-  informer, and `client.Options.Cache.DisableFor` sends the reads that need the
-  real bytes to the API server. That covers every Secret this provider watches,
-  not just the credentials one, so switching this watch to metadata-only would
-  add nothing. CAPI's label selector was deliberately **not** copied — see
-  [SUMMARY.md](SUMMARY.md) for why it would break the watches here.
+  `cache.Options` `Transform` nils out `Data` and the managed fields before
+  anything enters the informer, and `client.Options.Cache.DisableFor` sends the
+  reads that need the real bytes to the API server. That covers every Secret
+  this provider watches, not just the credentials one, so switching this watch
+  to metadata-only would add little. CAPI's label selector was deliberately
+  **not** copied: it works there because CAPI only watches Secrets it labels
+  itself, whereas the credentials Secret here is created by the user with
+  `kubectl create secret generic` and carries no labels — a selector would have
+  silently disabled this very watch. See
+  [SUMMARY.md](SUMMARY.md#how-the-other-providers-solve-the-secret-cache) for
+  the full comparison against CAPA, CAPG and CAPI core, and what the trade costs.
 
 ---
 
