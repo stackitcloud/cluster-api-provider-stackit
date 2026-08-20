@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
@@ -698,6 +699,48 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret)).To(Succeed())
 		requests = reconciler.stackitClusterRequestsForCloudInitRef(ctx, secret)
 		Expect(requests).To(Equal([]reconcile.Request{request}))
+	})
+
+	It("maps credentials Secret events to StackitCluster reconcile requests", func() {
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: credentials, Namespace: namespace}, secret)).To(Succeed())
+
+		requests := reconciler.stackitClusterRequestsForCredentialsSecret(ctx, secret)
+		Expect(requests).To(Equal([]reconcile.Request{request}))
+	})
+
+	It("maps credentials Secret events from a different namespace than the StackitCluster", func() {
+		otherNamespace := "credentials-elsewhere"
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: otherNamespace},
+		}))).To(Succeed())
+
+		otherCredentials := credentials + "-elsewhere"
+		createCredentialsSecret(ctx, otherCredentials, otherNamespace, testProjectID)
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: otherCredentials, Namespace: otherNamespace}})
+		})
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.CredentialsSecretRef = corev1.SecretReference{Name: otherCredentials, Namespace: otherNamespace}
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: otherCredentials, Namespace: otherNamespace}, secret)).To(Succeed())
+
+		requests := reconciler.stackitClusterRequestsForCredentialsSecret(ctx, secret)
+		Expect(requests).To(Equal([]reconcile.Request{request}),
+			"credentialsSecretRef.namespace is optional, so the mapper must not be limited to the Secret's own namespace")
+	})
+
+	It("ignores Secret events that no StackitCluster uses as credentials", func() {
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: credentials, Namespace: namespace}, secret)).To(Succeed())
+		secret.Name = credentials + "-unused"
+
+		requests := reconciler.stackitClusterRequestsForCredentialsSecret(ctx, secret)
+		Expect(requests).To(BeEmpty())
 	})
 
 	It("ignores Cluster events for other infrastructure providers", func() {
