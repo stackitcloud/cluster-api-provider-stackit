@@ -54,9 +54,9 @@ found.** Every known defect reproduces from the same, relocated code:
 
 | Document | Status | Summary |
 | --- | --- | --- |
-| [deletion-bug.md](deletion-bug.md) | ✅ fixed | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously could strand machines and orphan VMs. **Fixed 2026-08-19:** `StackitCluster.reconcileDelete` now keeps its finalizer with `RequeueAfter` while Machines remain, and `StackitMachine.reconcileDelete` looks the server up by tags before dropping its own. **Three further orphan-leak paths** were added on 2026-08-14 — the first two from the Copilot review, both caused by trusting persisted status over the cloud; a third came out of reviewing [PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4) — bastion cleanup by intent and a deleted credentials Secret no longer stranding the cluster in `Terminating` are fixed as well. The two adjacent paths that could still block deletion from *outside* this document — a missing owner and an unpersisted finalizer — were fixed on 2026-08-20 (items 11 and 12). |
+| [deletion-bug.md](deletion-bug.md) | ✅ fixed | Deleting `Cluster`+`StackitCluster`+`Machine`s simultaneously could strand machines and orphan VMs. **Fixed 2026-08-19:** `StackitCluster.reconcileDelete` now keeps its finalizer with `RequeueAfter` while Machines remain, and `StackitMachine.reconcileDelete` looks the server up by tags before dropping its own. **Three further orphan-leak paths** were added on 2026-08-14 — the first two from the Copilot review, both caused by trusting persisted status over the cloud; a third came out of reviewing [PR #4](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/4) — bastion cleanup by intent and a deleted credentials Secret no longer stranding the cluster in `Terminating` are fixed as well. Of the two adjacent paths that could still block deletion from *outside* this document, the unpersisted finalizer (item 12) was fixed on 2026-08-20; the missing owner (item 11) was fixed and then reverted on 2026-08-21 as unreachable — see [How the other providers order deletion](#how-the-other-providers-order-deletion). |
 | [bastion-bug.md](bastion-bug.md) | ⚠️ partially fixed | Five code-confirmed defects. **Fixed:** security group attached twice (the first fix removed the call and was itself a regression — now an idempotent re-attach), `allowedCIDRs` never revoked (**security-relevant**), hardcoded `replicas: 3`, and disabling the bastion not tearing it down. **Still open:** `bastionNeedsRecreate` only watches cloud-init, and the CIDR revoke compares prefixes as strings. |
-| [watch-wiring-bug.md](watch-wiring-bug.md) | ✅ fixed | Two defects where a change that should trigger a reconcile does not. **Fixed 2026-08-19:** the StackitCluster→Machine predicate matched `Machine.spec.clusterName` against the StackitCluster name; it now resolves the owning `Cluster` first. **Fixed 2026-08-20:** the credentials Secret is watched by a mapper of its own, so a corrected Secret re-reconciles the cluster. From the Copilot review, verified in code. |
+| [watch-wiring-bug.md](watch-wiring-bug.md) | ✅ fixed | Two defects where a change that should trigger a reconcile does not. **Fixed 2026-08-19:** the StackitCluster→Machine predicate matched `Machine.spec.clusterName` against the StackitCluster name; it now resolves the owning `Cluster` first. **Fixed 2026-08-20, reworked 2026-08-21:** correcting an invalid credentials Secret now takes effect because `CredentialFailureResult` requeues instead of returning without one. The Secret watch that first solved this was dropped after review. From the Copilot review, verified in code. |
 | [machine-recreate-bug.md](machine-recreate-bug.md) | ✅ fixed | `ensureServer()` recreated a missing server unconditionally, even for a machine that had already joined. Fixed 2026-08-12 with an envtest regression test; `run-refactor1-2` had found a worse variant than previously known — see below. |
 
 **Where each defect should be covered by tests** — unit, envtest or e2e — is
@@ -195,40 +195,10 @@ the CIDR test.
   dropping its finalizer, so a lost status patch no longer orphans a VM.
   Reviewing that work against the CAPI contract surfaced four further
   defects — items 11–15 below.
-- **2026-08-20, same branch:** the four contract findings that belong to the
-  watch-wiring and deletion family — items 1, 11, 12 and 15 — each landed as its
-  own commit with a regression test proven to fail without its fix. Items 13 and
-  14 were deliberately left out of scope.
-  - *Item 15:* `cmd/manager/main.go` now passes `cache.Options` whose
-    `ByObject` entry for Secrets nils out `Data` **and the managed fields**
-    before anything enters the informer, plus `client.Options` with `DisableFor`
-    Secrets so the reads that need the real bytes bypass the cache. Managed
-    fields were added in a follow-up commit after noticing CAPI strips them in
-    the same `Transform`; they are the largest part of what survives once the
-    data is gone. `StringData` is left alone — the API server never returns it.
-    See [How the other providers solve this](#how-the-other-providers-solve-the-secret-cache)
-    for why no label selector was copied and what the trade costs.
-  - *Item 1:* a second `Watches(&corev1.Secret{}, …)` on the cluster controller,
-    backed by the new `stackitClusterRequestsForCredentialsSecret`. It lists
-    StackitClusters **across all namespaces** and compares via
-    `util.CredentialsSecretKey`, because `credentialsSecretRef.namespace` is
-    optional — the defect the existing cloud-init mapper still has. No Secret
-    watch was added on the machine side: the existing
-    `stackitMachineRequestsForStackitCluster` already re-enqueues Machines once
-    the StackitCluster reconciles again.
-  - *Item 11:* all the owner checks moved behind the deletion branch. The
-    cluster controller tolerates a `NotFound` from `clusterutil.GetOwnerCluster`
-    while deleting and takes the Cluster name from the `ownerReference`, which
-    outlives the Cluster. The machine controller does the same for **three**
-    early returns, not the one recorded in the finding — `machine == nil` and
-    `cluster == nil` had the identical shape — and `reconcileDelete` finalizes
-    with a `CleanupSkipped` event when any owner is missing, since without them
-    there are neither credentials nor tags to reach the server with. Only a
-    genuinely absent owner is tolerated (`NotFound` or `clusterutil.ErrNoCluster`),
-    so a transient API error cannot be mistaken for it and drop the finalizer
-    over a running server. **Correction to the finding:** `GetOwnerMachine` and
-    `GetClusterFromMetadata` return an *error* for a missing owner, not
-    `(nil, nil)`.
+- **2026-08-20, same branch:** items 1, 11, 12 and 15 each landed as their own
+  commit with a regression test proven to fail without its fix. Items 13 and 14
+  were deliberately left out of scope. **Two of the four were reverted a day
+  later after review — see the 2026-08-21 entry.** What survived:
   - *Item 12:* both `reconcileNormal` functions call `PatchObject` immediately
     after `AddFinalizer`, before any cloud call. `patch.Helper` snapshots the
     object once in `NewHelper` and re-diffs against that snapshot on every
@@ -236,6 +206,8 @@ the CIDR test.
     than after the fact: `cloud/fake.Client` gained non-consuming
     `BeforeCreateServer`/`BeforeGetNetwork` hooks, and the specs read the API
     server from inside the cloud call.
+  - *Item 1:* solved, but by a requeue rather than the Secret watch this entry
+    originally described — see the 2026-08-21 entry.
   - **Correction to the earlier research** in
     [watch-wiring-bug.md](watch-wiring-bug.md): the wrapped error from
     `clusterutil.GetOwnerCluster` *is* detectable with `apierrors.IsNotFound`.
@@ -246,6 +218,47 @@ the CIDR test.
     this folder never leaves the repository, so those pointers would dangle the
     moment the code is contributed upstream. The comments now describe the
     defect they guard against on their own.
+- **2026-08-21, after review on [PR #17](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/17):**
+  the maintainer asked for less complexity for cases that do not occur in
+  practice, and for markedly shorter comments. Verifying each objection against
+  upstream code settled three of them and refuted one.
+  - *Item 11 reverted.* The objection was right. CAPI's own
+    `cluster_controller.go` removes the `Cluster` finalizer only after both the
+    descendants and the infrastructure cluster are gone (`:62-75`, `:132-161`),
+    so the `Cluster` cannot vanish while the `StackitCluster` still exists —
+    the assumption the fix rested on does not hold. CAPA's
+    `awsmachine_controller.go` also places all three owner checks **before** the
+    deletion branch, exactly the shape this repository had before the fix. Since
+    the root cause of the documented incident was the missing Machine guard,
+    which is in place, item 11 was only defence-in-depth for an unreachable
+    case. `ownerGone`, `missingOwner`, `ownerClusterName` and five specs went
+    with it. **Back on the open list.**
+  - *Item 15 reverted.* Confirmed: neither CAPA nor CAPG configures anything
+    beyond `DefaultNamespaces` and `SyncPeriod`. `cmd/manager/main.go` is
+    byte-identical to `main` again and `main_test.go` is deleted — the objection
+    that it only exercised controller-runtime rather than this provider's logic
+    is fair. **Back on the open list.**
+  - *Item 1 solved differently.* The maintainer suggested reading the Secret on
+    every reconcile instead of watching it. The reconcile already did read it on
+    every pass; the missing piece was that `CredentialFailureResult` returned
+    **without** a requeue, so nothing re-triggered a reconcile after a
+    correction. It now returns `RequeueAfter: credentialsRetryRequeueAfter`
+    (1 minute), and the mapper, the second watch and the three mapper specs are
+    gone. Two specs cover the real scenario end to end: invalid credentials →
+    requeue → correct them → `Ready`.
+  - *The Machine guard stays.* The claim that no other provider has such a check
+    is refuted — see
+    [How the other providers order deletion](#how-the-other-providers-order-deletion).
+  - *Naming left as is.* The suggestion to call the local `cluster` instead of
+    `stackitCluster` rests on "we never actually work with the cluster-api
+    cluster object anywhere", which is not the case: both `ClusterScope` and
+    `MachineScope` hold `Cluster` **and** `StackitCluster`, and the CAPI object
+    is read by `util.ReconciliationPaused`, by the Machine guard and by
+    `MachineScope.Tags()`.
+  - *Comments trimmed across the whole `controller` package*, not only where the
+    review pointed: 42 lines out, 20 in. Rule applied throughout — at most one
+    or two sentences, describing the current state, never what the code used to
+    do.
 
 ### Open
 
@@ -304,11 +317,28 @@ so a closed item is struck from this list without renumbering the rest.
 ### Open — from the CAPI contract review (2026-08-19)
 
 Found by reviewing the provider against the [Cluster API Book](https://cluster-api.sigs.k8s.io/developer/providers/contracts/),
-contract version v1beta2, with CAPI v1.13.2 read from the module cache and
-CAPA/CAPG/CAPO consulted for how they solve the same problems. None of these
-were introduced by the fixes above; all four predate them. Items 11 and 12 were
-fixed on 2026-08-20; 13 and 14 are still open and keep their numbers.
+contract version v1beta2, with CAPI v1.13.2 read from the module cache for the
+contract itself and CAPA/CAPG/CAPO consulted for how they solve the same
+problems. None of these were introduced by the fixes above; all four predate
+them. Item 12 was fixed on 2026-08-20; item 11 was fixed and then reverted after
+review on 2026-08-21 and is open again. Numbers are never reused.
 
+**Read these findings with the methodology caveat.** The two that did not survive
+review — items 11 and 15 — were the two argued from the book's wording and from
+Cluster API core's internals rather than from what the providers do. See
+[Cluster API core is not a reference for this repository](#cluster-api-core-is-not-a-reference-for-this-repository).
+Items 13 and 14 have not been checked against CAPA, CAPG and CAPO yet; do that
+before acting on either.
+
+11. **A missing owner blocks deletion — open by decision, not by oversight.**
+    Both reconcilers check their owners before the `DeletionTimestamp` branch, so
+    an object whose owner is already gone cannot finish deleting. The fix was
+    reverted on 2026-08-21 because the case is unreachable through the normal
+    path: CAPI's `cluster_controller.go` holds the `Cluster` finalizer until the
+    infrastructure cluster is gone, and the Machine guard closes the route the
+    documented incident took. CAPA orders its own owner checks the same way. Pick
+    this up only with a concrete reproduction — reaching it needs a force-removed
+    finalizer or a provider running without the CAPI controller.
 13. **`Machine.spec.failureDomain` is ignored.** The cluster publishes three
     failure domains (`stackitcluster_infrastructure.go:51`), so KCP spreads
     control-plane Machines across them via `Machine.spec.failureDomain` — but the
@@ -326,6 +356,16 @@ fixed on 2026-08-20; 13 and 14 are still open and keep their numbers.
     parallel and even documents in the type as *"Cluster API v1beta2 contract
     state"*. Both are set separately and can drift; this is also the root of
     items 8 and 9.
+15. **Every Secret in the management cluster is cached, including its `Data` —
+    open by decision.** The cache is cluster-wide (`main.go` sets no
+    `DefaultNamespaces`) and the bastion cloud-init watch pulls every Secret into
+    the informer, so the service-account keys sit in memory. A `Transform` that
+    nils `Data` and the managed fields plus `DisableFor` on the client closed
+    this on 2026-08-20 and was reverted on 2026-08-21: neither CAPA nor CAPG
+    hardens the Secret cache, and the maintainer prefers `DefaultNamespaces` and
+    `SyncPeriod` like the other providers. Those two need new CLI flags and are
+    therefore a feature rather than a fix — the natural next step here. See
+    [How the other providers solve the Secret cache](#how-the-other-providers-solve-the-secret-cache).
 
 ### Not covered
 
@@ -335,18 +375,59 @@ fixed on 2026-08-20; 13 and 14 are still open and keep their numbers.
   `make test-e2e-workload-upgrade-workers`,
   `…-upgrade-control-plane`, `…-topology` and `…-scale` to close it.
 
+## How the other providers order deletion
+
+Checked against upstream `main` on 2026-08-21, because the PR #17 review objected
+that no other provider guards its finalizer against remaining Machines. Two of
+the three largest do.
+
+| Provider | Machine guard in the cluster's `reconcileDelete` | Owner checks before the `DeletionTimestamp` branch |
+| --- | --- | --- |
+| CAPO | ✅ `collections.GetFilteredMachinesForCluster` → `RequeueAfter: 5 * time.Second` | — |
+| CAPA | ✅ `dependencyCount()` over the cluster-name label → `RequeueAfter: deleteRequeueAfter` | ✅ all three, before it |
+| CAPG | ✖️ removes the finalizer unconditionally | — |
+
+CAPO's comment states the same reasoning this provider uses: *"Wait for machines
+to be deleted before removing the finalizer as they depend on this resource to
+deprovision. Additionally it appears that allowing the Kubernetes API to vanish
+too quickly will upset the capi kubeadm control plane controller."*
+
+**The two questions are separate, which is what made the review confusing.**
+Whether the `Cluster` can outlive the `StackitCluster` (item 11) and whether
+`Machine`s can outlive it (the guard) have different answers. CAPI guarantees the
+first ordering, so item 11 was reverted. It does not help with the second: a
+`kubectl delete -f cluster.yaml` or a namespace teardown deletes the
+`StackitCluster` **directly**, bypassing the `Cluster` controller entirely — the
+route that stranded three worker Machines for two days in
+[deletion-bug.md](deletion-bug.md). The guard stays.
+
+The right-hand column is also the correction to the item 11 finding: CAPA does
+what this repository did *before* the fix, so the book's wording alone was not
+sufficient grounds for the change.
+
 ## How the other providers solve the Secret cache
 
-Checked against upstream `main` on 2026-08-20 while reviewing the item 15 fix,
-because the obvious question is why CAPI's own hardening was not copied wholesale.
-Short answer: **CAPA and CAPG do not solve it at all**, and CAPI's version does
-not transfer unchanged.
+Checked against upstream `main`, CAPA and CAPG on 2026-08-20 and CAPO on
+2026-08-21.
 
-| | Secret cache hardened? | Secret watch? |
-| --- | --- | --- |
-| CAPA | ✖️ only `DefaultNamespaces` + `SyncPeriod` in `main.go` | ✖️ none |
-| CAPG | ✖️ identical | ✖️ none |
-| CAPI core | ✅ label selector + `Transform` (`Data` *and* `managedFields`) + `DisableFor` | ✅ as `PartialObjectMetadata` |
+| | `Transform` stripping Secret data | `DisableFor` Secrets on the client | Secret watch |
+| --- | --- | --- | --- |
+| CAPA | ✖️ | ✖️ | ✖️ none |
+| CAPG | ✖️ | ✖️ | ✖️ none |
+| CAPO | ✖️ | ✅ `ConfigMap` **and** `Secret` | ✖️ none |
+
+**CAPO is the interesting one, and it was missed on 2026-08-20.** It sets
+`DisableFor` for ConfigMaps and Secrets and nothing else — no `Transform`, no
+selector. That is not a weaker version of item 15, it is a cheaper route to the
+same end: with every Secret read bypassing the cache *and* no controller watching
+Secrets, controller-runtime never starts a Secret informer at all, so there is
+nothing to strip.
+
+**That route is closed here**, which is the substantive difference. The bastion
+cloud-init watch means a Secret informer exists whatever the client does, so
+`DisableFor` alone would not keep credential bytes out of memory — it would only
+add live reads. Dropping that watch is not an option; the cloud-init ConfigMap or
+Secret can be edited with nothing else changing.
 
 CAPA reads bootstrap data through the manager's **cached** client
 (`machineScope.GetRawBootstrapDataWithFormat`), which makes controller-runtime
@@ -355,34 +436,59 @@ included, ends up in memory anyway. Reads stay cheap; a corrected credentials
 Secret never triggers a reconcile, which is the ecosystem-wide gap already noted
 in [watch-wiring-bug.md](watch-wiring-bug.md).
 
-**Why CAPI's label selector does not transfer.** CAPI only watches Secrets it
-stamps itself, so `cluster.x-k8s.io/cluster-name` always matches. Here it would
-not: the bootstrap-data Secret does carry that label (Cluster API's
-`kubeadmconfig_controller.go` sets it), but the credentials and bastion
-cloud-init Secrets are created by the user — `kubectl create secret generic`,
-see [../docs/src/getting-started/credentials.md](../docs/src/getting-started/credentials.md)
-— and carry no labels at all. A selector would therefore have silently disabled
-the very watch item 1 adds.
+**Where the original finding came from, and why that was the flaw.** Item 15 was
+derived from Cluster API core's own manager setup, not from any provider — see
+[Cluster API core is not a reference for this repository](#cluster-api-core-is-not-a-reference-for-this-repository).
+The `Transform` and the selector have no provider precedent, which is what the
+PR #17 review said and why the fix was reverted. CAPO does establish precedent
+for `DisableFor`, but on its own it does not solve anything here (see above), so
+the revert stands either way.
 
-**What the trade costs.** `DisableFor` turns every Secret read into a live API
-call: one per cluster reconcile, two per machine reconcile (credentials plus
-bootstrap data). CAPI compensates with a second, caching client
-(`secretCachingClient`) for the Secrets it reads hot; this provider has no such
-compensation, which is acceptable at the fleet sizes in scope but is the first
-thing to revisit if API-server load ever becomes a concern.
+**What the trade would have cost.** `DisableFor` turns every Secret read into a
+live API call: one per cluster reconcile, two per machine reconcile (credentials
+plus bootstrap data). CAPO accepts exactly that cost; the difference is that it
+buys the whole benefit there and only part of it here.
 
-**Worth knowing:** the exposure predates this work. The bastion cloud-init watch
-already pulled every Secret in the management cluster into the informer — the
-cache is cluster-wide, `main.go` sets no `DefaultNamespaces` — and
-`BuildCloudClient` read through the cached client, so the service-account keys
-were already in memory. Item 1 did not create that; item 15 cleans it up.
+**Worth knowing:** the exposure predates all of this work and is still present.
+The bastion cloud-init watch pulls every Secret in the management cluster into
+the informer — the cache is cluster-wide, `main.go` sets no `DefaultNamespaces` —
+and `BuildCloudClient` reads through the cached client, so the service-account
+keys sit in memory. Item 1 did not create that, and reverting item 15 leaves it
+in place. `DefaultNamespaces` at least bounds it, which is the open follow-up.
 
-**One step further, deliberately not taken:** watching Secrets as
-`PartialObjectMetadata` against a dedicated metadata-only cache, the way CAPI's
-`ClusterResourceSet` controller does. The informer would then hold names, labels
-and `resourceVersion` and nothing else. With `Data` and `managedFields` already
-stripped the remaining gain is small, and the cost is a second cache plus
-`WatchesRawSource` wiring in `main.go`.
+## Cluster API core is not a reference for this repository
+
+Recorded on 2026-08-21, because two findings in this folder were built on it and
+one of them (item 15) did not survive review.
+
+**Cluster API core is the counterparty, not a peer.** It owns the `Cluster`,
+`Machine` and control-plane lifecycle and calls *into* infrastructure providers.
+The Secrets it handles — kubeconfigs, bootstrap data, CA material — it creates
+and labels itself, it reads some of them on a hot path, and it runs one manager
+for the whole management cluster. An infrastructure provider has none of that:
+its central Secret is a set of cloud credentials written by hand
+(`kubectl create secret generic`, see
+[../docs/src/getting-started/credentials.md](../docs/src/getting-started/credentials.md)),
+unlabelled, read once per reconcile. Patterns tuned for the first situation —
+the `ByObject` label selector, the `Transform`, `DisableFor` plus a second
+caching client, the `PartialObjectMetadata` watch in `ClusterResourceSet` —
+carry assumptions that simply do not hold here.
+
+**Use CAPA, CAPG and CAPO instead.** They solve the same problems under the same
+constraints, and where they agree that is real precedent; where they diverge (the
+Machine guard: CAPA and CAPO yes, CAPG no) the disagreement itself is the useful
+signal.
+
+**Cluster API core is still authoritative for two things**, and citing it for
+these is not the same mistake:
+
+- **Its observable behaviour**, because the provider has to interoperate with it.
+  That the `Cluster` controller holds its finalizer until the infrastructure
+  cluster is gone is a fact about the environment, and it is what settled item 11.
+- **The contract itself** — the field semantics and the book. Note the limit
+  though: the book's wording alone was what motivated item 11, and it was not
+  sufficient. Where the contract leaves room, check what the providers actually do
+  before changing anything.
 
 ## Convention for this folder
 

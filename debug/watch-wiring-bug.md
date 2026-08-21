@@ -1,8 +1,9 @@
 # Bugs: watch wiring — objects that never get re-reconciled
 
-Date: 2026-08-14, updated 2026-08-20
+Date: 2026-08-14, updated 2026-08-21
 Source: Copilot review on [PR #1](https://github.com/stackitcloud/cluster-api-provider-stackit/pull/1), verified against the code here
-Status: ✅ **fixed** — defect 2 on 2026-08-19, defect 1 on 2026-08-20
+Status: ✅ **fixed** — defect 2 on 2026-08-19, defect 1 on 2026-08-20 and
+reworked on 2026-08-21 after the PR #17 review
 
 Two defects where a change that *should* trigger a reconcile does not, so the
 affected object stays in a stale state until something unrelated wakes it up.
@@ -16,7 +17,7 @@ recovery sequence to show up.
 `SetupWithManager`, and `stackitClusterRequestsForCloudInitRef` (same file).
 
 The investigation below describes the state **before** the fix; see
-[Fix as implemented](#fix-as-implemented-2026-08-20) at the end of this section.
+[Fix as implemented](#fix-as-implemented-2026-08-20-reworked-2026-08-21) at the end of this section.
 
 ```go
 Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
@@ -54,8 +55,9 @@ credentials through the `StackitCluster`. Worth checking as part of the fix.
 
 ### What the CAPI research added (2026-08-19)
 
-Checked against CAPI v1.13.2 read from the module cache, plus CAPA, CAPG, CAPO,
-CAPV and CAPH. Four things change how this should be fixed:
+Checked against CAPA, CAPG, CAPO, CAPV and CAPH, plus CAPI v1.13.2 from the
+module cache for the contract and its helpers. Four things change how this should
+be fixed — the fourth bullet was later struck, see there.
 
 - **There is no upstream helper.** `util.SecretToInfrastructureMapFunc` does not
   exist in v1.13.2 (verified by grep); `util/util.go` offers only
@@ -66,14 +68,14 @@ CAPV and CAPH. Four things change how this should be fixed:
   CAPA is worse off: `pkg/cloud/scope/session.go` caches sessions with no
   invalidation on Secret change, so a corrected Secret may not take effect there
   even after a reconcile. Do not copy any of them.
-- **The reference implementation lives in CAPI itself** — the
-  `ClusterResourceSet` controller
-  (`internal/controllers/clusterresourceset/clusterresourceset_controller.go:74-113`)
-  watches Secrets through
-  `WatchesRawSource(source.Kind(partialSecretCache, &metav1.PartialObjectMetadata{…}))`
-  gated by `predicates.TypedResourceIsChanged`, against a dedicated
-  metadata-only cache built in CAPI's `main.go:515-542`. Only names, labels and
-  resourceVersion are cached; credential bytes never enter the informer.
+- ~~**The reference implementation lives in CAPI itself**~~ — this pointed at the
+  `ClusterResourceSet` controller and its metadata-only Secret cache. **Struck on
+  2026-08-21:** Cluster API core is not a reference for an infrastructure
+  provider, see
+  [SUMMARY.md](SUMMARY.md#cluster-api-core-is-not-a-reference-for-this-repository).
+  It was also the source of item 15, the other finding that did not survive
+  review. The providers were the evidence that mattered, and the line above
+  already stated what they do.
 - **The existing cloud-init mapper has a second, undocumented defect for this
   purpose:** it lists only within `obj.GetNamespace()`
   (`stackitcluster_controller.go:139`). `CredentialsSecretRef` is a
@@ -87,49 +89,49 @@ This fix therefore belongs together with the Secret-caching item in
 [SUMMARY.md](SUMMARY.md) — both change the same `Watches(&corev1.Secret{}, …)`
 call, and doing them separately means touching it twice.
 
-### Fix as implemented (2026-08-20)
+> The conclusion above did not survive: the fix that landed touches no watch at
+> all, so the two items turned out to be independent. Kept as recorded.
 
-A second `Watches(&corev1.Secret{}, …)` on the cluster controller, backed by a
-new mapper `stackitClusterRequestsForCredentialsSecret`. The existing cloud-init
-mapper was left untouched, so nothing about the bastion path changed.
+### Fix as implemented (2026-08-20, reworked 2026-08-21)
 
-The mapper lists StackitClusters **without a namespace filter** and compares
-each one's `util.CredentialsSecretKey` against the Secret's key — that is the
-one thing the cloud-init mapper gets wrong for this purpose, and reusing
-`CredentialsSecretKey` also inherits the `credentialsSecretRef.namespace`
-defaulting for free. `config/rbac/role.yaml` is already a `ClusterRole` with
-`secrets` and `stackitclusters` at `get;list;watch`, so `make manifests`
-produces no diff.
+**What is in the tree now: a requeue, no watch.** `CredentialFailureResult`
+(`util/conditions.go`) takes a `requeueAfter` parameter and returns
+`ctrl.Result{RequeueAfter: …}` instead of a bare result for the invalid-credential
+cases. The callers pass `credentialsRetryRequeueAfter` (1 minute), long enough not
+to be a hot loop and short enough that an operator sees the effect of a
+correction. Nothing else was needed: the reconcile already reads the Secret on
+every pass, so the missing piece was only the trigger.
 
-Guarded by three specs in `controller/stackitcluster_controller_test.go` —
-*"maps credentials Secret events to StackitCluster reconcile requests"*, *"maps
-credentials Secret events from a different namespace than the StackitCluster"*
-and *"ignores Secret events that no StackitCluster uses as credentials"*. Both
-positive specs were proven to fail when pointed at the old cloud-init mapper.
+Two specs cover it, one per reconciler — *"requeues on unauthorized credentials
+and recovers once they are corrected"* — reconciling with a failing credentials
+factory, asserting the requeue and the `CredentialsInvalid` conditions, then
+swapping in a working factory and asserting `Ready`. Both were proven to fail
+with the requeue removed. They replace the previous mapper specs and test the
+defect end to end rather than the watch wiring.
 
-**Two deliberate omissions.**
+**The first attempt, and why it was dropped.** The original fix added a second
+`Watches(&corev1.Secret{}, …)` backed by a mapper
+`stackitClusterRequestsForCredentialsSecret`, which listed StackitClusters across
+all namespaces and compared `util.CredentialsSecretKey` — necessary because
+`credentialsSecretRef.namespace` is optional, the one thing the cloud-init mapper
+gets wrong for this purpose. The PR #17 review asked to avoid that complexity and
+read the Secret on every reconcile instead. Reading was never the gap, but the
+conclusion held: a requeue achieves the same recovery without a mapper, a second
+watch or the cross-namespace list. The watch, the mapper and its three specs are
+gone.
 
-- *No Secret watch on the machine side*, contrary to the note above. The machine
-  controller already watches its `StackitCluster`, and this fix makes a
-  corrected Secret reconcile that object — which bumps its `resourceVersion` via
-  `clusterScope.PatchObject` — so `stackitMachineRequestsForStackitCluster`
-  re-enqueues the affected Machines through the existing chain. Adding a second
-  path would be redundant. Note this is an inference from the watch wiring: the
-  envtest suite calls `Reconcile` directly and never exercises the manager's
-  informers, so it cannot prove the chain end to end.
-- *No `PartialObjectMetadata` watch and no label selector.* The Secret-caching
-  item (15) was fixed first and independently, in `cmd/manager/main.go`: a
-  `cache.Options` `Transform` nils out `Data` and the managed fields before
-  anything enters the informer, and `client.Options.Cache.DisableFor` sends the
-  reads that need the real bytes to the API server. That covers every Secret
-  this provider watches, not just the credentials one, so switching this watch
-  to metadata-only would add little. CAPI's label selector was deliberately
-  **not** copied: it works there because CAPI only watches Secrets it labels
-  itself, whereas the credentials Secret here is created by the user with
-  `kubectl create secret generic` and carries no labels — a selector would have
-  silently disabled this very watch. See
-  [SUMMARY.md](SUMMARY.md#how-the-other-providers-solve-the-secret-cache) for
-  the full comparison against CAPA, CAPG and CAPI core, and what the trade costs.
+The requeue also removes the reason the machine side was ever a question. It
+reaches its credentials through the `StackitCluster`, which now retries on its
+own, and the existing `stackitMachineRequestsForStackitCluster` re-enqueues the
+Machines once that object changes.
+
+**Not attempted, and now moot for this defect:** watching Secrets as
+`PartialObjectMetadata`, and CAPI's label selector on the informer. The selector
+would not have worked here in any case — CAPI only watches Secrets it labels
+itself, whereas the credentials Secret is created by the user with
+`kubectl create secret generic` and carries no labels. See
+[SUMMARY.md](SUMMARY.md#how-the-other-providers-solve-the-secret-cache) for the
+full comparison and what the cache trade costs.
 
 ---
 

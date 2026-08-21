@@ -4,9 +4,9 @@ Date: 2026-08-03, updated 2026-08-11 after the refactor run, fixed 2026-08-19
 Cluster: `stackit-workload`
 Status: ✅ **fixed (2026-08-19)** — see [Fix as implemented](#fix-as-implemented).
 The investigation below is left as recorded; it describes the state before the
-fix. The two adjacent defects found while reviewing the fix against the CAPI
-contract were fixed on 2026-08-20 — see
-[The two adjacent contract defects](#the-two-adjacent-contract-defects-fixed-2026-08-20)
+fix. Of the two adjacent defects found while reviewing it against the CAPI
+contract, one was fixed on 2026-08-20 and the other reverted a day later — see
+[The two adjacent contract defects](#the-two-adjacent-contract-defects)
 at the end of this document.
 
 Deleting `Cluster`, `StackitCluster` and all `Machine`s at the same time
@@ -27,8 +27,11 @@ evidence of a fix: the responsible code path was unchanged (see
 returned before any delete handling, and without a requeue, when the
 `StackitCluster` was already gone. Whether the bug bit depended on whether CAPI
 finished deleting the `StackitMachine`s before the `StackitCluster` finalizer was
-released, so a single clean run proved nothing. Both halves are closed now — the
-deletion-order guard on 2026-08-19 and the early return itself on 2026-08-20.
+released, so a single clean run proved nothing. The deletion-order guard closed
+that race on 2026-08-19. The early return in
+`StackitMachineReconciler.Reconcile` is still there by decision — with the guard
+in place it can no longer be reached this way; see
+[The two adjacent contract defects](#the-two-adjacent-contract-defects).
 
 ## Investigation
 
@@ -305,7 +308,7 @@ Two consequences worth knowing:
 
 This is the *symptom*. The root cause — the finalizer is not persisted before
 the first cloud call at all — was fixed on 2026-08-20; see
-[The two adjacent contract defects](#the-two-adjacent-contract-defects-fixed-2026-08-20).
+[The two adjacent contract defects](#the-two-adjacent-contract-defects).
 The tag lookup stays as the safety net for objects created before that fix.
 
 ### B. Cluster cleanup skipped entirely when bastion status is empty
@@ -484,54 +487,43 @@ $ kubectl get cluster -A
 **Result:** Empty output — `Cluster stackit-workload` fully gone, cleanup
 complete.
 
-## The two adjacent contract defects, fixed 2026-08-20
+## The two adjacent contract defects
 
-✅ Found while reviewing the 2026-08-19 fix against the CAPI contract and tracked
-as items 11 and 12 in [SUMMARY.md](SUMMARY.md). Both are the same family as
+Found while reviewing the 2026-08-19 fix against the CAPI contract and tracked as
+items 11 and 12 in [SUMMARY.md](SUMMARY.md). Both are the same family as
 everything above — an object that can no longer be deleted, or a cloud resource
-nothing points at — reached by two more routes.
+nothing points at — reached by two more routes. Item 12 is fixed; item 11 was
+fixed on 2026-08-20 and reverted on 2026-08-21.
 
-### A missing owner blocked deletion (item 11)
+### A missing owner blocks deletion — reverted (item 11)
 
-Every owner check sat **in front of** the `DeletionTimestamp` branch, so an
-object whose owner disappeared first could never finish deleting. That is
-exactly the situation this document opens with, and the deletion-order guard
-above only makes it less likely, not impossible: a namespace teardown or a
-direct `kubectl delete` still stamps everything at once.
+Every owner check sits **in front of** the `DeletionTimestamp` branch, so an
+object whose owner is already gone cannot finish deleting. A fix moving all of
+them behind the branch landed on 2026-08-20 and was reverted a day later after
+the PR #17 review. The reasoning for reverting, in the order it was checked:
 
-Both reconcilers now check their owners **after** branching on deletion.
+- **The case is unreachable through the normal path.** CAPI's
+  `cluster_controller.go` removes the `Cluster` finalizer only after both the
+  descendants and the infrastructure cluster are gone (`:62-75`, `:132-161`), so
+  the `Cluster` cannot vanish while the `StackitCluster` still exists. The
+  assumption the fix rested on does not hold.
+- **No major provider does it differently.** CAPA's `awsmachine_controller.go`
+  places all three owner checks before the deletion branch — the shape this
+  repository already had. The change came from the book's wording alone.
+- **The route the documented incident took is already closed** by the Machine
+  guard, which is in place and precedented (see
+  [SUMMARY.md](SUMMARY.md#how-the-other-providers-order-deletion)). Item 11 was
+  therefore defence-in-depth for a case with no reproduction.
 
-- **Cluster side:** `clusterutil.GetOwnerCluster` returns an error once the
-  owning `Cluster` is gone, and that error was returned from `Reconcile` — a
-  permanent failure retried forever. It is now tolerated while deleting, and
-  `reconcileDelete` takes the cluster name from the `Cluster` **ownerReference**,
-  which outlives the object it points at, so the Machine guard above keeps
-  working. Owner references are always same-namespace, so the namespace comes
-  from the StackitCluster itself.
-- **Machine side:** three early returns had this shape, not the one the finding
-  recorded — `machine == nil` and `cluster == nil` as well as
-  `stackitCluster == nil`. All three moved. `reconcileDelete` now finalizes with
-  a `CleanupSkipped` warning event naming the missing object: without the
-  StackitCluster there are no credentials, project or region to build a cloud
-  client from, and without the `Cluster`/`Machine` there are no tags to identify
-  the server with (`machineScope.Tags()` reads exactly those two). A loud leak
-  beats an object that can never be deleted — the same trade the missing-Secret
-  path in section C makes.
+Reverted with it: `ownerGone`, `missingOwner`, `ownerClusterName`, the
+`CleanupSkipped` path for a missing owner, and five specs.
 
-Only a genuinely absent owner is tolerated — `NotFound` or
-`clusterutil.ErrNoCluster`, behind a small `ownerGone` helper. A transient API
-error still fails the reconcile, so it can never be mistaken for "the owner is
-gone" and drop a finalizer over a running server.
-
-**Correction to the finding:** `GetOwnerMachine` and `GetClusterFromMetadata`
-return an *error* when the owner is missing, not `(nil, nil)`. The finding
-assumed the latter for the machine side.
-
-Guarded by *"finalizes deletion when the owning Cluster is already gone"* and
-*"still waits for Machines when the owning Cluster is already gone"* on the
-cluster side, and a three-entry `DescribeTable` *"finalizes deletion when an
-owning object is already gone"* on the machine side. All five were proven to fail
-against the previous code.
+**Correction to the finding, worth keeping:** `GetOwnerMachine` and
+`GetClusterFromMetadata` return an *error* when the owner is missing, not
+`(nil, nil)` — the finding assumed the latter for the machine side. Anyone
+picking this up again needs a concrete reproduction first; reaching the state
+requires a force-removed finalizer or a provider running without the CAPI
+controller.
 
 ### The finalizer was not persisted before the first cloud call (item 12)
 
@@ -581,8 +573,8 @@ Machine is gone"*, both proven to fail without the guard.
 registration and the RBAC marker) was **dropped**. It only existed because the
 plan's guard returned `nil` *without* a requeue and therefore needed an event to
 make progress. With the upstream-standard `RequeueAfter`, the watch is
-redundant — CAPI itself, CAPA, CAPO and CAPH all use a plain requeue here and
-register no such watch. The RBAC marker for `machines` was added to the cluster
+redundant — CAPA, CAPO and CAPH all use a plain requeue here and register no such
+watch. The RBAC marker for `machines` was added to the cluster
 controller anyway, so the permission is declared where it is used;
 `make manifests` produces no diff, since `config/rbac/role.yaml` already carried
 the rule from the machine controller.
