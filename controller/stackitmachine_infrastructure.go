@@ -38,11 +38,8 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 
 	if !controllerutil.ContainsFinalizer(stackitMachine, infrav1.MachineFinalizer) {
 		controllerutil.AddFinalizer(stackitMachine, infrav1.MachineFinalizer)
-		// Persisted immediately, before CreateServer can run. AddFinalizer only
-		// mutates the object in memory; it otherwise reaches etcd through the
-		// deferred PatchObject at the end of Reconcile, and a process that dies
-		// in between leaves a server running behind an object that carries no
-		// finalizer to clean it up.
+		// Persisted immediately, before CreateServer can run, to ensure no servers
+		// are running behind an object that carries no finalizer to clean it up.
 		if err := machineScope.PatchObject(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
 		}
@@ -171,16 +168,14 @@ func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
 func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
 	stackitMachine := machineScope.StackitMachine
 
-	// The cloud client is built unconditionally: an empty status.instanceID is
-	// not proof that no server exists, so every deletion has to ask the cloud
-	// before it may drop the finalizer.
+	// An empty status.instanceID is not proof that no server exists, so every
+	// deletion asks the cloud before dropping the finalizer.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, machineScope.StackitCluster)
 	if err != nil {
-		// A missing credentials Secret can never be recovered from, and it
-		// commonly disappears first during namespace teardown. Blocking here
-		// would strand the Machine in Terminating forever, so finalize and make
-		// the possible leak loud instead — the same trade the cluster side
-		// makes. Any other credentials problem is fixable, so keep retrying.
+		// A missing credentials Secret cannot be recovered from and commonly
+		// disappears first during namespace teardown, so finalize and make the
+		// possible leak loud rather than stranding the Machine in Terminating.
+		// Every other credentials problem is fixable and keeps retrying.
 		if apierrors.IsNotFound(err) {
 			if r.Recorder != nil {
 				r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
@@ -223,11 +218,9 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 }
 
 // resolveServerForDeletion reports the ID of the server backing this machine, or
-// an empty string once the cloud confirms none exists.
-//
-// status.instanceID alone is not enough: CreateServer can succeed and the status
-// patch can be lost, leaving a tagged server that no field on the object refers
-// to. The tags carry the Machine UID and therefore still identify that server.
+// an empty string once the cloud confirms none exists. It falls back to the tags,
+// which carry the Machine UID, because a lost status patch can leave a running
+// server that status.instanceID no longer names.
 func (r *StackitMachineReconciler) resolveServerForDeletion(
 	ctx context.Context,
 	cloudClient cloud.Client,
@@ -288,13 +281,8 @@ func (r *StackitMachineReconciler) ensureServer(
 		return nil, false, err
 	}
 
-	// The machine had already been provisioned and its server has since
-	// disappeared. Recreating it here would replay the original bootstrap data,
-	// which is pinned to the previous identity: the replacement either never
-	// rejoins (different IP) or rejoins while Machine/Node keep pointing at the
-	// deleted server (same IP). Neither restores the cluster, and both consume
-	// another VM silently. Surface it instead and let Cluster API decide to
-	// replace the Machine.
+	// Recreating the server would replay bootstrap data pinned to the previous
+	// identity, so surface the loss and let Cluster API replace the Machine.
 	if stackitMachine.Status.Initialization.Provisioned {
 		return nil, false, fmt.Errorf(
 			"%w: server %s for already-provisioned machine no longer exists; the Machine must be replaced",

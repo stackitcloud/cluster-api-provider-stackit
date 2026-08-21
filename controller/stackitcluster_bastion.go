@@ -49,12 +49,9 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 
 	if !stackitCluster.Spec.Bastion.Enabled {
-		// The condition carries this reason only after a cleanup has succeeded,
-		// so anything else means we may still own bastion resources — including
-		// the case where EnsureBastion succeeded but its status patch was lost.
-		// Keying on it instead of on the status keeps the tag-based cleanup to
-		// once per cluster rather than once per reconcile, which matters because
-		// this path runs for every cluster without a bastion.
+		// The reason is set only after a cleanup has succeeded, so anything else
+		// means bastion resources may still exist. Keying on it rather than on
+		// the status keeps the tag-based cleanup to once per cluster.
 		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
 			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil {

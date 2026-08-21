@@ -55,11 +55,9 @@ type Client struct {
 	FailNextEnsureNodeSSH error
 	FailNextDeleteNodeSSH error
 
-	// Before* hooks, if non-nil, run before the call they belong to does any
-	// work. They let a test observe API server state at the exact moment a cloud
-	// call is about to happen — for instance to assert a finalizer was persisted
-	// before the first resource could be created. Unlike FailNext*, they are not
-	// consumed and fire on every call.
+	// Before* hooks, if non-nil, run before the call they belong to. They let a
+	// test observe API server state at the exact moment a cloud call would
+	// happen. Unlike FailNext*, they are not consumed.
 	BeforeCreateServer func()
 	BeforeGetNetwork   func()
 
