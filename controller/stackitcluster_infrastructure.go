@@ -39,11 +39,9 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 
 	if !controllerutil.ContainsFinalizer(stackitCluster, infrav1.ClusterFinalizer) {
 		controllerutil.AddFinalizer(stackitCluster, infrav1.ClusterFinalizer)
-		// Persisted immediately, before anything can create a cloud resource.
-		// AddFinalizer only mutates the object in memory; it otherwise reaches
-		// etcd through the deferred PatchObject at the end of Reconcile, and a
-		// process that dies in between leaves a load balancer or a bastion
-		// running behind an object that carries no finalizer to clean it up.
+		// Persisted immediately, before any cloud resource can be created, to
+		// ensure nothing is running behind an object that carries no finalizer to
+		// clean it up.
 		if err := clusterScope.PatchObject(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
 		}
@@ -255,20 +253,15 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
 	}
 
-	// Cleanup runs unconditionally. Neither spec nor status is a trustworthy
-	// record of what exists in the cloud: a resource can be created before its
-	// status patch lands, and disabling the load balancer or the bastion leaves
-	// the running resource behind. ResolveID, DeleteBastion and
-	// DeleteNodeSSHAccess all fall back to tag lookups and tolerate NotFound, so
-	// asking for everything costs a handful of list calls once per cluster and
-	// removes every combination in which a resource could be missed.
+	// Cleanup runs unconditionally: neither spec nor status is a trustworthy
+	// record of what exists in the cloud. ResolveID, DeleteBastion and
+	// DeleteNodeSSHAccess fall back to tag lookups and tolerate NotFound.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
-		// A missing credentials Secret can never be recovered from — it commonly
-		// disappears first during namespace teardown. Blocking here would strand
-		// the cluster in Terminating forever, so finalize and make the possible
-		// leak loud instead. Any other credentials problem is fixable, so keep
-		// retrying for those.
+		// A missing credentials Secret cannot be recovered from and commonly
+		// disappears first during namespace teardown, so finalize and make the
+		// possible leak loud rather than stranding the cluster in Terminating.
+		// Every other credentials problem is fixable and keeps retrying.
 		if apierrors.IsNotFound(err) {
 			if r.Recorder != nil {
 				r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",

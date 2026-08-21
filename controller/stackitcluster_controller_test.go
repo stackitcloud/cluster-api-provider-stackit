@@ -203,11 +203,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("cleans up bastion resources during deletion even when bastion status was never persisted", func() {
-		// The cloud-cleanup block used to be gated on persisted status for the
-		// bastion, while the load balancer was gated on its spec flag. A bastion
-		// created without its status patch landing (process restart, conflict)
-		// therefore skipped cleanup entirely and leaked server, public IP and
-		// security group.
+		// A bastion whose status patch never landed must still be cleaned up, so
+		// cleanup follows the spec flag rather than persisted status.
 		createOwnerCluster(ctx, clusterName+"-nolb")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
@@ -247,10 +244,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("finalizes deletion when the credentials Secret is already gone", func() {
-		// A missing credentials Secret cannot be recovered from, and it commonly
-		// disappears first during namespace teardown. Broadening the delete gate
-		// to spec.Bastion.Enabled made a working cloud client mandatory for every
-		// bastion cluster, which would strand such a cluster in Terminating.
+		// The Secret commonly disappears first during namespace teardown, and
+		// without it no cloud client can be built at all.
 		createOwnerCluster(ctx, clusterName+"-nocreds")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
@@ -284,10 +279,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("tears the bastion down when disabled even if its status was never persisted", func() {
-		// Counterpart to the deletion path: disabling the bastion used to be
-		// gated on hasBastionStatus alone. With the status lost, nothing was torn
-		// down while the condition reported "bastion disabled" — leaving port 22
-		// open for the rest of the cluster's life.
+		// With the status lost, a status-gated teardown would report the bastion
+		// as disabled while leaving port 22 open.
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Bastion = validBastionSpec()
@@ -316,8 +309,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 	It("tears the bastion down when disabled even if only its status was lost", func() {
 		// Narrower than the case above: the condition survives and still reports
-		// the bastion as available, only the bastion status fields are gone.
-		// Gating the cleanup on hasBastionStatus left the server running here.
+		// the bastion as available, only the status fields are gone.
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Bastion = validBastionSpec()
@@ -345,10 +337,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("cleans up the load balancer during deletion when it was disabled and its status was lost", func() {
-		// Counterpart to the bastion case: flipping apiServerLoadBalancer.enabled
-		// off neither deletes the load balancer nor clears its ID, so with the
-		// status patch lost the deletion gate matched nothing and the load
-		// balancer stayed behind.
+		// Flipping apiServerLoadBalancer.enabled off neither deletes the load
+		// balancer nor clears its ID, so deletion cannot rely on either.
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
@@ -595,12 +585,8 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue())
 	})
 
-	// AddFinalizer only mutated the object in memory, and the write to etcd
-	// happened in the deferred PatchObject at the end of Reconcile — after the
-	// load balancer and the bastion had been created. A process dying in between
-	// left those resources behind an object with no finalizer to clean them up.
-	// GetNetwork is the first cloud call of the reconcile, so a hook there
-	// proves the ordering rather than only the end result.
+	// GetNetwork is the first cloud call of the reconcile, so a hook there proves
+	// the ordering rather than only the end result.
 	It("persists the finalizer before the first cloud call", func() {
 		var finalizersAtFirstCall []string
 		fakeCloud.BeforeGetNetwork = func() {
@@ -617,13 +603,10 @@ var _ = Describe("StackitCluster Controller", func() {
 			"cloud resources were created while the API server had no finalizer to clean them up")
 	})
 
-	// The finalizer used to go away regardless of remaining Machines. Their
-	// controllers reach credentials and project context through this
-	// StackitCluster, so once it is gone they can neither delete their servers
-	// nor drop their own finalizers — the VMs are orphaned and the Machines
-	// hang. Cluster API orders this correctly when the deletion starts at the
-	// Cluster, but a namespace teardown or a direct delete of this object
-	// bypasses that ordering.
+	// Machine controllers reach credentials and project context through this
+	// StackitCluster, so it has to outlive them. Cluster API orders this
+	// correctly when deletion starts at the Cluster, but a namespace teardown or
+	// a direct delete of this object bypasses that ordering.
 	It("keeps the finalizer while Machines still exist for the cluster", func() {
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())

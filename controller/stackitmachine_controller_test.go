@@ -132,12 +132,9 @@ var _ = Describe("StackitMachine Controller", func() {
 	})
 
 	It("does not silently recreate the server of an already-provisioned machine", func() {
-		// When the backing server disappears out-of-band, ensureServer used to
-		// call CreateServer again, replaying the original bootstrap data — which
-		// is pinned to the previous identity. The replacement either never
-		// rejoins (different IP) or rejoins while Machine and Node keep pointing
-		// at the deleted server (same IP) — neither restores the cluster, and
-		// both consume another VM unnoticed.
+		// Recreating it would replay bootstrap data pinned to the previous
+		// identity: the replacement either never rejoins or rejoins while Machine
+		// and Node still point at the deleted server.
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
 
@@ -398,12 +395,8 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
-	// AddFinalizer only mutated the object in memory, and the write to etcd
-	// happened in the deferred PatchObject at the end of Reconcile — after
-	// CreateServer. A process dying in between left a running server behind an
-	// object with no finalizer to clean it up. The hook observes API server
-	// state from inside the cloud call, so it proves the ordering rather than
-	// only the end result.
+	// The hook observes API server state from inside the cloud call, so it proves
+	// the ordering rather than only the end result.
 	It("persists the finalizer before creating the server", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
@@ -423,10 +416,8 @@ var _ = Describe("StackitMachine Controller", func() {
 			"the server was created while the API server had no finalizer to clean it up")
 	})
 
-	// An empty status.instanceID used to be taken as proof that no VM had ever
-	// been created, so the finalizer went away without a single cloud call. If
-	// CreateServer had succeeded and the status patch had not, that server kept
-	// running, tagged and unreferenced by any object.
+	// A lost status patch leaves a running, tagged server that no field on the
+	// object names, so an empty status.instanceID is not proof that none exists.
 	It("deletes a tagged server whose instance ID was lost from the status", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
@@ -476,11 +467,9 @@ var _ = Describe("StackitMachine Controller", func() {
 		Expect(requests).To(ConsistOf(request))
 	})
 
-	// The mapper used to match Machine.spec.clusterName against the
-	// StackitCluster name, so it enqueued nothing as soon as the two differed.
-	// Every other spec here hides the bug because createOwnerCluster gives the
-	// Cluster and its infrastructureRef the same name; a ClusterClass-generated
-	// infrastructureRef never does.
+	// Machine.spec.clusterName names the Cluster, not the StackitCluster, and a
+	// ClusterClass-generated infrastructureRef never shares its Cluster's name.
+	// Every other spec here uses matching names and would miss that.
 	It("maps StackitCluster events when the StackitCluster name differs from the Cluster name", func() {
 		suffix := time.Now().UnixNano()
 		ownerClusterName := fmt.Sprintf("owner-%d", suffix)

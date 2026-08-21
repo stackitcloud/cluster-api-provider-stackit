@@ -40,9 +40,7 @@ func (r *StackitMachineReconciler) stackitMachineRequestsForStackitCluster(ctx c
 	}
 
 	// Machine.spec.clusterName names the owning Cluster, not the StackitCluster,
-	// and nothing forces the two to share a name — a ClusterClass-generated
-	// infrastructureRef carries a random suffix. Resolve the owning Cluster
-	// first, then match against its name.
+	// and a ClusterClass-generated infrastructureRef never shares its name.
 	cluster, err := clusterutil.GetOwnerCluster(ctx, r.Client, stackitCluster.ObjectMeta)
 	switch {
 	case apierrors.IsNotFound(err) || cluster == nil:
