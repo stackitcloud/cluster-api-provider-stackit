@@ -203,11 +203,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("cleans up bastion resources during deletion even when bastion status was never persisted", func() {
-		// Regression test for debug/deletion-bug.md: the cloud-cleanup block used
-		// to be gated on persisted status for the bastion, while the load
-		// balancer was gated on its spec flag. A bastion created without its
-		// status patch landing (process restart, conflict) therefore skipped
-		// cleanup entirely and leaked server, public IP and security group.
+		// A bastion whose status patch never landed must still be cleaned up, so
+		// cleanup follows the spec flag rather than persisted status.
 		createOwnerCluster(ctx, clusterName+"-nolb")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nolb", Namespace: namespace},
@@ -247,10 +244,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("finalizes deletion when the credentials Secret is already gone", func() {
-		// A missing credentials Secret cannot be recovered from, and it commonly
-		// disappears first during namespace teardown. Broadening the delete gate
-		// to spec.Bastion.Enabled made a working cloud client mandatory for every
-		// bastion cluster, which would strand such a cluster in Terminating.
+		// The Secret commonly disappears first during namespace teardown, and
+		// without it no cloud client can be built at all.
 		createOwnerCluster(ctx, clusterName+"-nocreds")
 		defer deleteIfExists(ctx, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
@@ -284,10 +279,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("tears the bastion down when disabled even if its status was never persisted", func() {
-		// Counterpart to the deletion path: disabling the bastion used to be
-		// gated on hasBastionStatus alone. With the status lost, nothing was torn
-		// down while the condition reported "bastion disabled" — leaving port 22
-		// open for the rest of the cluster's life.
+		// With the status lost, a status-gated teardown would report the bastion
+		// as disabled while leaving port 22 open.
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Bastion = validBastionSpec()
@@ -316,8 +309,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 	It("tears the bastion down when disabled even if only its status was lost", func() {
 		// Narrower than the case above: the condition survives and still reports
-		// the bastion as available, only the bastion status fields are gone.
-		// Gating the cleanup on hasBastionStatus left the server running here.
+		// the bastion as available, only the status fields are gone.
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Bastion = validBastionSpec()
@@ -345,10 +337,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("cleans up the load balancer during deletion when it was disabled and its status was lost", func() {
-		// Counterpart to the bastion case: flipping apiServerLoadBalancer.enabled
-		// off neither deletes the load balancer nor clears its ID, so with the
-		// status patch lost the deletion gate matched nothing and the load
-		// balancer stayed behind.
+		// Flipping apiServerLoadBalancer.enabled off neither deletes the load
+		// balancer nor clears its ID, so deletion cannot rely on either.
 		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
@@ -499,19 +489,34 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "NetworkNotFound")
 	})
 
-	It("marks credentials invalid without requeueing on unauthorized credentials", func() {
+	// The requeue is what lets a corrected Secret take effect: nothing else
+	// enqueues the cluster once the credentials are rejected.
+	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
 			return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
 		}
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
+		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
 
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
 		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		By("correcting the credentials")
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return fakeCloud, nil
+		}
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeTrue())
+		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
 	It("does not call the cloud API when the owning Cluster is paused", func() {
@@ -569,6 +574,83 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
 
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{})
+			return apierrors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
+
+	// GetNetwork is the first cloud call of the reconcile, so a hook there proves
+	// the ordering rather than only the end result.
+	It("persists the finalizer before the first cloud call", func() {
+		var finalizersAtFirstCall []string
+		fakeCloud.BeforeGetNetwork = func() {
+			got := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			finalizersAtFirstCall = got.Finalizers
+		}
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		Expect(finalizersAtFirstCall).To(ContainElement(infrav1.ClusterFinalizer),
+			"cloud resources were created while the API server had no finalizer to clean them up")
+	})
+
+	// Machine controllers reach credentials and project context through this
+	// StackitCluster, so it has to outlive them. Cluster API orders this
+	// correctly when deletion starts at the Cluster, but a namespace teardown or
+	// a direct delete of this object bypasses that ordering.
+	It("keeps the finalizer while Machines still exist for the cluster", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		machineName := "machine-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+		})
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		By("requeueing instead of tearing down shared infrastructure")
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(deleteRequeueAfter))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer),
+			"the finalizer must survive while a Machine still needs the StackitCluster")
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1),
+			"the load balancer must not be deleted while Machines still exist")
+	})
+
+	It("removes the finalizer once the last Machine is gone", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		machineName := "machine-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(deleteRequeueAfter))
+
+		By("deleting the last Machine")
+		deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
 
 		_, err = reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())

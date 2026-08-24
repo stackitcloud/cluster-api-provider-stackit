@@ -39,25 +39,22 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	cloudClient cloud.Client,
 	clusterScope *scope.ClusterScope,
 ) (ctrl.Result, bool, error) {
-	cluster := clusterScope.StackitCluster
-	input := bastionservice.Input(cluster, nil)
+	stackitCluster := clusterScope.StackitCluster
+	input := bastionservice.Input(stackitCluster, nil)
 	status := cloud.Bastion{
-		ServerID:        cluster.Status.Bastion.ServerID,
-		PublicIPID:      cluster.Status.Bastion.PublicIPID,
-		PublicIP:        cluster.Status.Bastion.PublicIP,
-		SecurityGroupID: cluster.Status.Bastion.SecurityGroupID,
+		ServerID:        stackitCluster.Status.Bastion.ServerID,
+		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,
+		PublicIP:        stackitCluster.Status.Bastion.PublicIP,
+		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
 	}
 
-	if !cluster.Spec.Bastion.Enabled {
-		// The condition carries this reason only after a cleanup has succeeded,
-		// so anything else means we may still own bastion resources — including
-		// the case where EnsureBastion succeeded but its status patch was lost.
-		// Keying on it instead of on the status keeps the tag-based cleanup to
-		// once per cluster rather than once per reconcile, which matters because
-		// this path runs for every cluster without a bastion.
-		condition := meta.FindStatusCondition(cluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
+	if !stackitCluster.Spec.Bastion.Enabled {
+		// The reason is set only after a cleanup has succeeded, so anything else
+		// means bastion resources may still exist. Keying on it rather than on
+		// the status keeps the tag-based cleanup to once per cluster.
+		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(cluster)); err != nil {
+			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			if err := cloudClient.DeleteBastion(ctx, input, status); err != nil {
@@ -65,7 +62,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			}
 			clusterScope.ClearBastionStatus()
 			if r.Recorder != nil {
-				r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
+				r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeNormal, "BastionDeleted", "Delete", "Deleted bastion")
 			}
 		}
 		clusterScope.SetConditions(
@@ -77,7 +74,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		return ctrl.Result{}, true, nil
 	}
 
-	if err := validateBastionSpec(cluster.Spec.Bastion); err != nil {
+	if err := validateBastionSpec(stackitCluster.Spec.Bastion); err != nil {
 		clusterScope.SetNotReady(
 			"InvalidBastionSpec",
 			err.Error(),
@@ -87,7 +84,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		return ctrl.Result{}, false, nil
 	}
 
-	cloudInit, err := r.resolveBastionCloudInit(ctx, cluster)
+	cloudInit, err := r.resolveBastionCloudInit(ctx, stackitCluster)
 	if err != nil {
 		clusterScope.SetNotReady(
 			"CloudInitRefError",
@@ -99,25 +96,30 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 	input.CloudInit = cloudInit
 
-	if bastionNeedsRecreate(cluster, cloudInit) {
-		if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(cluster)); err != nil && !cloud.IsNotFound(err) {
+	if bastionNeedsRecreate(stackitCluster, cloudInit) {
+		if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil && !cloud.IsNotFound(err) {
 			return ctrl.Result{}, false, err
 		}
 		if err := cloudClient.DeleteBastion(ctx, input, status); err != nil && !cloud.IsNotFound(err) {
 			return ctrl.Result{}, false, err
 		}
 		clusterScope.ClearBastionStatus()
-		clusterScope.SetNotReady("Recreating", "recreating bastion because cloudInitRef content changed", infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		clusterScope.SetNotReady(
+			"Recreating",
+			"recreating bastion because cloudInitRef content changed",
+			infrav1.ClusterBastionReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(
-				cluster, nil, corev1.EventTypeNormal, "BastionRecreating", "Recreate",
+				stackitCluster, nil, corev1.EventTypeNormal, "BastionRecreating", "Recreate",
 				"Recreating bastion because cloudInitRef content changed",
 			)
 		}
 		return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, false, nil
 	}
 
-	hadBastionStatus := hasBastionStatus(cluster.Status.Bastion)
+	hadBastionStatus := hasBastionStatus(stackitCluster.Status.Bastion)
 	bastion, err := cloudClient.EnsureBastion(ctx, input)
 	if err != nil {
 		return ctrl.Result{}, false, err
@@ -125,7 +127,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	clusterScope.SetBastionStatus(bastion, bastionCloudInitHash(cloudInit))
 	if !hadBastionStatus && r.Recorder != nil {
 		r.Recorder.Eventf(
-			cluster, nil, corev1.EventTypeNormal, "BastionCreated", "Create", "Created bastion %s", bastion.ServerID,
+			stackitCluster, nil, corev1.EventTypeNormal, "BastionCreated", "Create", "Created bastion %s", bastion.ServerID,
 		)
 	}
 	if bastion.ServerState != "" && bastion.ServerState != "ACTIVE" {
@@ -180,11 +182,11 @@ func hasBastionStatus(status infrav1.StackitBastionStatus) bool {
 	return status.ServerID != "" || status.PublicIPID != "" || status.PublicIP != "" || status.SecurityGroupID != ""
 }
 
-func bastionNeedsRecreate(sc *infrav1.StackitCluster, cloudInit []byte) bool {
-	if !hasBastionStatus(sc.Status.Bastion) {
+func bastionNeedsRecreate(stackitCluster *infrav1.StackitCluster, cloudInit []byte) bool {
+	if !hasBastionStatus(stackitCluster.Status.Bastion) {
 		return false
 	}
-	return sc.Status.Bastion.CloudInitHash != bastionCloudInitHash(cloudInit)
+	return stackitCluster.Status.Bastion.CloudInitHash != bastionCloudInitHash(cloudInit)
 }
 
 func bastionCloudInitHash(cloudInit []byte) string {
@@ -194,12 +196,12 @@ func bastionCloudInitHash(cloudInit []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(cloudInit))
 }
 
-func (r *StackitClusterReconciler) resolveBastionCloudInit(ctx context.Context, sc *infrav1.StackitCluster) ([]byte, error) {
-	ref := sc.Spec.Bastion.CloudInitRef
+func (r *StackitClusterReconciler) resolveBastionCloudInit(ctx context.Context, stackitCluster *infrav1.StackitCluster) ([]byte, error) {
+	ref := stackitCluster.Spec.Bastion.CloudInitRef
 	if ref == nil {
 		return nil, nil
 	}
-	key := types.NamespacedName{Namespace: sc.Namespace, Name: ref.Name}
+	key := types.NamespacedName{Namespace: stackitCluster.Namespace, Name: ref.Name}
 	switch ref.Kind {
 	case "ConfigMap":
 		configMap := &corev1.ConfigMap{}

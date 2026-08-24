@@ -87,15 +87,11 @@ func createOwnerCluster(ctx context.Context, name string) {
 	Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 }
 
-func createOwnerMachine(ctx context.Context, name, namespace, clusterName, stackitMachineName string, bootstrapSecretName *string) {
-	if bootstrapSecretName == nil {
-		empty := ""
-		bootstrapSecretName = &empty
-	}
+func createOwnerMachine(ctx context.Context, name, clusterName, stackitMachineName string) {
 	machine := &clusterv1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "default",
 			Labels: map[string]string{
 				clusterv1.ClusterNameLabel: clusterName,
 			},
@@ -103,7 +99,8 @@ func createOwnerMachine(ctx context.Context, name, namespace, clusterName, stack
 		Spec: clusterv1.MachineSpec{
 			ClusterName: clusterName,
 			Bootstrap: clusterv1.Bootstrap{
-				DataSecretName: bootstrapSecretName,
+				// Specs that need bootstrap data attach it with updateMachineBootstrapSecret.
+				DataSecretName: new(""),
 			},
 			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
 				APIGroup: infrav1.GroupVersion.Group,

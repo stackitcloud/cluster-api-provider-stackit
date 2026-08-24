@@ -32,51 +32,67 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
-func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope.MachineScope) (ctrl.Result, error) {
+func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineScope *scope.MachineScope) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	sm := s.StackitMachine
+	stackitMachine := machineScope.StackitMachine
 
-	if !controllerutil.ContainsFinalizer(sm, infrav1.MachineFinalizer) {
-		controllerutil.AddFinalizer(sm, infrav1.MachineFinalizer)
+	if !controllerutil.ContainsFinalizer(stackitMachine, infrav1.MachineFinalizer) {
+		controllerutil.AddFinalizer(stackitMachine, infrav1.MachineFinalizer)
+		// Persisted immediately, before CreateServer can run, to ensure no servers
+		// are running behind an object that carries no finalizer to clean it up.
+		if err := machineScope.PatchObject(ctx); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
+		}
 	}
 
-	if !s.StackitCluster.Status.Ready {
-		s.SetNotReady("InfrastructureNotReady", "waiting for StackitCluster to be ready", infrav1.MachineReadyCondition)
+	if !machineScope.StackitCluster.Status.Ready {
+		machineScope.SetNotReady("InfrastructureNotReady", "waiting for StackitCluster to be ready", infrav1.MachineReadyCondition)
 		return ctrl.Result{}, nil
 	}
-	if err := validateMachineAvailabilityZone(s); err != nil {
-		s.SetNotReady("InvalidFailureDomain", err.Error(), infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+	if err := validateMachineAvailabilityZone(machineScope); err != nil {
+		machineScope.SetNotReady(
+			"InvalidFailureDomain",
+			err.Error(),
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
 		return ctrl.Result{}, nil
 	}
 
-	bootstrapData, condStatus, reason, msg := r.fetchBootstrapData(ctx, s.Machine)
-	s.SetConditions(condStatus, reason, msg, infrav1.MachineBootstrapReadyCondition)
-	if condStatus != metav1.ConditionTrue {
-		s.SetConditions(metav1.ConditionFalse, reason, msg, infrav1.MachineReadyCondition)
+	bootstrapData, conditionStatus, reason, message := r.fetchBootstrapData(ctx, machineScope.Machine)
+	machineScope.SetConditions(conditionStatus, reason, message, infrav1.MachineBootstrapReadyCondition)
+	if conditionStatus != metav1.ConditionTrue {
+		machineScope.SetConditions(metav1.ConditionFalse, reason, message, infrav1.MachineReadyCondition)
 		if reason == util.BootstrapReasonInvalid {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
 	}
 
-	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, s.StackitCluster)
+	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, machineScope.StackitCluster)
 	if err != nil {
 		return util.CredentialFailureResult(
-			&sm.Status.Conditions,
-			sm.Generation,
+			&stackitMachine.Status.Conditions,
+			stackitMachine.Generation,
 			err,
+			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
 			infrav1.MachineReadyCondition,
 		)
 	}
-	s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
+	machineScope.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
-	server, created, err := r.ensureServer(ctx, cloudClient, s, bootstrapData)
+	server, created, err := r.ensureServer(ctx, cloudClient, machineScope, bootstrapData)
 	if err != nil {
-		s.SetNotReady("InstanceError", err.Error(), infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+		machineScope.SetNotReady(
+			"InstanceError",
+			err.Error(),
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
 		return util.CloudFailureResult(
-			&sm.Status.Conditions,
-			sm.Generation,
+			&stackitMachine.Status.Conditions,
+			stackitMachine.Generation,
 			"InstanceError",
 			err,
 			retryableErrorRequeueAfter,
@@ -87,24 +103,29 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 	}
 	if created && r.Recorder != nil {
 		r.Recorder.Eventf(
-			sm, nil, corev1.EventTypeNormal, "InstanceCreated", "Create", "Created instance %s", server.ID,
+			stackitMachine, nil, corev1.EventTypeNormal, "InstanceCreated", "Create", "Created instance %s", server.ID,
 		)
 	}
 
-	sm.Status.InstanceState = server.State
-	sm.Status.Addresses = machineAddressesFromCloud(server.Addresses)
-	providerID := s.SetInstance(server)
+	stackitMachine.Status.InstanceState = server.State
+	stackitMachine.Status.Addresses = machineAddressesFromCloud(server.Addresses)
+	providerID := machineScope.SetInstance(server)
 
 	if server.State != "" && server.State != "ACTIVE" {
-		s.SetNotReady("Provisioning", fmt.Sprintf("server state is %s", server.State), infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+		machineScope.SetNotReady(
+			"Provisioning",
+			fmt.Sprintf("server state is %s", server.State),
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err := r.reconcileBastionNodeSSHAccess(ctx, cloudClient, s, server); err != nil {
-		s.SetNotReady("BastionSSHAccessError", err.Error(), infrav1.MachineReadyCondition)
+	if err := r.reconcileBastionNodeSSHAccess(ctx, cloudClient, machineScope, server); err != nil {
+		machineScope.SetNotReady("BastionSSHAccessError", err.Error(), infrav1.MachineReadyCondition)
 		return util.CloudFailureResult(
-			&sm.Status.Conditions,
-			sm.Generation,
+			&stackitMachine.Status.Conditions,
+			stackitMachine.Generation,
 			"BastionSSHAccessError",
 			err,
 			retryableErrorRequeueAfter,
@@ -113,11 +134,11 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 		)
 	}
 
-	if err := r.reconcileAPIServerLoadBalancerTarget(ctx, cloudClient, s, server); err != nil {
-		s.SetNotReady("LoadBalancerTargetError", err.Error(), infrav1.MachineReadyCondition)
+	if err := r.reconcileAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope, server); err != nil {
+		machineScope.SetNotReady("LoadBalancerTargetError", err.Error(), infrav1.MachineReadyCondition)
 		return util.CloudFailureResult(
-			&sm.Status.Conditions,
-			sm.Generation,
+			&stackitMachine.Status.Conditions,
+			stackitMachine.Generation,
 			"LoadBalancerTargetError",
 			err,
 			retryableErrorRequeueAfter,
@@ -126,17 +147,17 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 		)
 	}
 
-	s.SetReady()
+	machineScope.SetReady()
 	log.V(1).Info("StackitMachine ready", "providerID", providerID)
 	return ctrl.Result{}, nil
 }
 
-func validateMachineAvailabilityZone(s *scope.MachineScope) error {
-	availabilityZone := s.StackitMachine.Spec.AvailabilityZone
-	if availabilityZone == "" || len(s.StackitCluster.Status.FailureDomains) == 0 {
+func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
+	availabilityZone := machineScope.StackitMachine.Spec.AvailabilityZone
+	if availabilityZone == "" || len(machineScope.StackitCluster.Status.FailureDomains) == 0 {
 		return nil
 	}
-	for _, failureDomain := range s.StackitCluster.Status.FailureDomains {
+	for _, failureDomain := range machineScope.StackitCluster.Status.FailureDomains {
 		if failureDomain.Name == availabilityZone {
 			return nil
 		}
@@ -144,50 +165,78 @@ func validateMachineAvailabilityZone(s *scope.MachineScope) error {
 	return fmt.Errorf("availabilityZone %q is not published in StackitCluster status.failureDomains", availabilityZone)
 }
 
-func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, s *scope.MachineScope) error {
-	sm := s.StackitMachine
-	needsLoadBalancerCleanup := isControlPlaneMachine(s.Machine) &&
-		s.StackitCluster.Spec.APIServerLoadBalancer.Enabled &&
-		s.StackitCluster.Status.APIServerLoadBalancerID != ""
-	if sm.Status.InstanceID == "" && !needsLoadBalancerCleanup {
-		controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
-		}
-		return nil
-	}
-	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, s.StackitCluster)
+func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
+	stackitMachine := machineScope.StackitMachine
+
+	// An empty status.instanceID is not proof that no server exists, so every
+	// deletion asks the cloud before dropping the finalizer.
+	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, machineScope.StackitCluster)
 	if err != nil {
+		// A missing credentials Secret cannot be recovered from and commonly
+		// disappears first during namespace teardown, so finalize and make the
+		// possible leak loud rather than stranding the Machine in Terminating.
+		// Every other credentials problem is fixable and keeps retrying.
+		if apierrors.IsNotFound(err) {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
+					"Credentials Secret is gone; finalizing without cloud cleanup. "+
+						"Any remaining STACKIT server for this machine must be removed manually: %v", err)
+			}
+			controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
+			return nil
+		}
 		_, resultErr := util.CredentialFailureResult(
-			&sm.Status.Conditions,
-			sm.Generation,
+			&stackitMachine.Status.Conditions,
+			stackitMachine.Generation,
 			err,
+			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
 		)
 		return resultErr
 	}
-	if err := r.deleteAPIServerLoadBalancerTarget(ctx, cloudClient, s); err != nil {
+	if err := r.deleteAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope); err != nil {
 		return err
 	}
-	if sm.Status.InstanceID == "" {
-		controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance")
+
+	instanceID, err := r.resolveServerForDeletion(ctx, cloudClient, machineScope)
+	if err != nil {
+		return err
+	}
+	if instanceID != "" {
+		if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
+			return err
 		}
-		return nil
+		machineScope.ClearInstance()
+		if r.Recorder != nil {
+			r.Recorder.Eventf(
+				stackitMachine, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance %s", instanceID,
+			)
+		}
 	}
-	instanceID := sm.Status.InstanceID
-	if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
-		return err
-	}
-	s.ClearInstance()
-	controllerutil.RemoveFinalizer(sm, infrav1.MachineFinalizer)
-	if r.Recorder != nil {
-		r.Recorder.Eventf(
-			sm, nil, corev1.EventTypeNormal, "InstanceDeleted", "Delete", "Deleted instance %s", instanceID,
-		)
-	}
+	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
 	return nil
+}
+
+// resolveServerForDeletion reports the ID of the server backing this machine, or
+// an empty string once the cloud confirms none exists. It falls back to the tags,
+// which carry the Machine UID, because a lost status patch can leave a running
+// server that status.instanceID no longer names.
+func (r *StackitMachineReconciler) resolveServerForDeletion(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
+) (string, error) {
+	if instanceID := machineScope.StackitMachine.Status.InstanceID; instanceID != "" {
+		return instanceID, nil
+	}
+	server, err := cloudClient.FindServerByTags(ctx, machineScope.Tags())
+	if err != nil {
+		if cloud.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return server.ID, nil
 }
 
 func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machine *clusterv1.Machine) ([]byte, metav1.ConditionStatus, string, string) {
@@ -211,14 +260,14 @@ func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machi
 
 func (r *StackitMachineReconciler) ensureServer(
 	ctx context.Context,
-	c cloud.Client,
-	s *scope.MachineScope,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
 	userData []byte,
 ) (*cloud.Server, bool, error) {
-	sm := s.StackitMachine
-	tags := s.Tags()
-	if sm.Status.InstanceID != "" {
-		server, err := c.GetServer(ctx, sm.Status.InstanceID)
+	stackitMachine := machineScope.StackitMachine
+	tags := machineScope.Tags()
+	if stackitMachine.Status.InstanceID != "" {
+		server, err := cloudClient.GetServer(ctx, stackitMachine.Status.InstanceID)
 		if err == nil {
 			return server, false, nil
 		}
@@ -226,45 +275,40 @@ func (r *StackitMachineReconciler) ensureServer(
 			return nil, false, err
 		}
 	}
-	if server, err := c.FindServerByTags(ctx, tags); err == nil {
+	if server, err := cloudClient.FindServerByTags(ctx, tags); err == nil {
 		return server, false, nil
 	} else if !cloud.IsNotFound(err) {
 		return nil, false, err
 	}
 
-	// The machine had already been provisioned and its server has since
-	// disappeared. Recreating it here would replay the original bootstrap data,
-	// which is pinned to the previous identity: the replacement either never
-	// rejoins (different IP) or rejoins while Machine/Node keep pointing at the
-	// deleted server (same IP). Neither restores the cluster, and both consume
-	// another VM silently. Surface it instead and let Cluster API decide to
-	// replace the Machine.
-	if sm.Status.Initialization.Provisioned {
+	// Recreating the server would replay bootstrap data pinned to the previous
+	// identity, so surface the loss and let Cluster API replace the Machine.
+	if stackitMachine.Status.Initialization.Provisioned {
 		return nil, false, fmt.Errorf(
 			"%w: server %s for already-provisioned machine no longer exists; the Machine must be replaced",
-			cloud.ErrNotFound, sm.Status.InstanceID,
+			cloud.ErrNotFound, stackitMachine.Status.InstanceID,
 		)
 	}
 
 	deleteOnTermination := true
-	if sm.Spec.RootVolume.DeleteOnTermination != nil {
-		deleteOnTermination = *sm.Spec.RootVolume.DeleteOnTermination
+	if stackitMachine.Spec.RootVolume.DeleteOnTermination != nil {
+		deleteOnTermination = *stackitMachine.Spec.RootVolume.DeleteOnTermination
 	}
-	server, err := c.CreateServer(ctx, cloud.CreateServerInput{
-		Name:             sm.Name,
-		ProjectID:        s.StackitCluster.Spec.ProjectID,
-		Region:           s.StackitCluster.Spec.Region,
-		ImageID:          sm.Spec.ImageID,
-		MachineType:      sm.Spec.MachineType,
-		AvailabilityZone: sm.Spec.AvailabilityZone,
-		SSHKeyName:       sm.Spec.SSHKeyName,
-		NetworkID:        sm.Spec.Network.ID,
-		SecurityGroups:   sm.Spec.SecurityGroups,
+	server, err := cloudClient.CreateServer(ctx, cloud.CreateServerInput{
+		Name:             stackitMachine.Name,
+		ProjectID:        machineScope.StackitCluster.Spec.ProjectID,
+		Region:           machineScope.StackitCluster.Spec.Region,
+		ImageID:          stackitMachine.Spec.ImageID,
+		MachineType:      stackitMachine.Spec.MachineType,
+		AvailabilityZone: stackitMachine.Spec.AvailabilityZone,
+		SSHKeyName:       stackitMachine.Spec.SSHKeyName,
+		NetworkID:        stackitMachine.Spec.Network.ID,
+		SecurityGroups:   stackitMachine.Spec.SecurityGroups,
 		UserData:         userData,
 		Tags:             tags,
 		RootVolume: cloud.RootVolumeInput{
-			SizeGiB:             sm.Spec.RootVolume.SizeGiB,
-			PerformanceClass:    sm.Spec.RootVolume.PerformanceClass,
+			SizeGiB:             stackitMachine.Spec.RootVolume.SizeGiB,
+			PerformanceClass:    stackitMachine.Spec.RootVolume.PerformanceClass,
 			DeleteOnTermination: deleteOnTermination,
 		},
 	})
@@ -273,70 +317,74 @@ func (r *StackitMachineReconciler) ensureServer(
 
 func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	ctx context.Context,
-	c cloud.Client,
-	s *scope.MachineScope,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
 	server *cloud.Server,
 ) error {
-	if !s.StackitCluster.Spec.Bastion.Enabled {
+	if !machineScope.StackitCluster.Spec.Bastion.Enabled {
 		return nil
 	}
-	if s.StackitCluster.Status.Bastion.SecurityGroupID == "" {
+	if machineScope.StackitCluster.Status.Bastion.SecurityGroupID == "" {
 		return fmt.Errorf("%w: bastion security group ID is empty", cloud.ErrTransient)
 	}
 	if server == nil || server.ID == "" {
 		return fmt.Errorf("%w: server ID is empty", cloud.ErrTransient)
 	}
-	_, err := c.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-		Name:                   s.StackitCluster.Name + "-node-ssh",
+	_, err := cloudClient.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
+		Name:                   machineScope.StackitCluster.Name + "-node-ssh",
 		ServerID:               server.ID,
-		BastionSecurityGroupID: s.StackitCluster.Status.Bastion.SecurityGroupID,
-		Tags:                   bastionservice.NodeSSHAccessTags(s.StackitCluster),
+		BastionSecurityGroupID: machineScope.StackitCluster.Status.Bastion.SecurityGroupID,
+		Tags:                   bastionservice.NodeSSHAccessTags(machineScope.StackitCluster),
 	})
 	return err
 }
 
 func (r *StackitMachineReconciler) reconcileAPIServerLoadBalancerTarget(
 	ctx context.Context,
-	c cloud.Client,
-	s *scope.MachineScope,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
 	server *cloud.Server,
 ) error {
-	if !isControlPlaneMachine(s.Machine) || !s.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
+	if !isControlPlaneMachine(machineScope.Machine) || !machineScope.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
 		return nil
 	}
 	loadBalancerID, err := loadbalancerservice.EnsureForMachine(
 		ctx,
-		c,
-		s.StackitCluster,
-		s.Machine.Name,
+		cloudClient,
+		machineScope.StackitCluster,
+		machineScope.Machine.Name,
 		server.Addresses,
 	)
 	if err != nil {
 		return err
 	}
 
-	target, err := loadbalancerservice.TargetForMachine(s.Machine.Name, server.Addresses)
+	target, err := loadbalancerservice.TargetForMachine(machineScope.Machine.Name, server.Addresses)
 	if err != nil {
 		return err
 	}
 	target.LoadBalancerID = loadBalancerID
-	return c.EnsureAPIServerLoadBalancerTarget(ctx, target)
+	return cloudClient.EnsureAPIServerLoadBalancerTarget(ctx, target)
 }
 
-func (r *StackitMachineReconciler) deleteAPIServerLoadBalancerTarget(ctx context.Context, c cloud.Client, s *scope.MachineScope) error {
-	if !isControlPlaneMachine(s.Machine) || !s.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
+func (r *StackitMachineReconciler) deleteAPIServerLoadBalancerTarget(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	machineScope *scope.MachineScope,
+) error {
+	if !isControlPlaneMachine(machineScope.Machine) || !machineScope.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
 		return nil
 	}
-	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, c, s.StackitCluster)
+	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, machineScope.StackitCluster)
 	if err != nil {
 		return err
 	}
 	if loadBalancerID == "" {
 		return nil
 	}
-	err = c.DeleteAPIServerLoadBalancerTarget(ctx, cloud.LoadBalancerTargetInput{
+	err = cloudClient.DeleteAPIServerLoadBalancerTarget(ctx, cloud.LoadBalancerTargetInput{
 		LoadBalancerID: loadBalancerID,
-		Name:           s.Machine.Name,
+		Name:           machineScope.Machine.Name,
 		Port:           defaultAPIServerPort,
 	})
 	if cloud.IsNotFound(err) {

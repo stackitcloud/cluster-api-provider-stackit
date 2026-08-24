@@ -69,7 +69,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
 		createOwnerCluster(ctx, clusterName)
 		createReadyStackitCluster(ctx, clusterName, namespace, credentials)
-		createOwnerMachine(ctx, machineName, namespace, clusterName, stackitName, nil)
+		createOwnerMachine(ctx, machineName, clusterName, stackitName)
 		stackitMach = newStackitMachine(stackitName, namespace, machineName)
 		Expect(k8sClient.Create(ctx, stackitMach)).To(Succeed())
 	})
@@ -132,12 +132,9 @@ var _ = Describe("StackitMachine Controller", func() {
 	})
 
 	It("does not silently recreate the server of an already-provisioned machine", func() {
-		// Regression test for debug/machine-recreate-bug.md: when the backing
-		// server disappears out-of-band, ensureServer used to call CreateServer
-		// again, replaying the original bootstrap data. The replacement either
-		// never rejoins (different IP) or rejoins while Machine and Node keep
-		// pointing at the deleted server (same IP) — neither restores the
-		// cluster, and both consume another VM unnoticed.
+		// Recreating it would replay bootstrap data pinned to the previous
+		// identity: the replacement either never rejoins or rejoins while Machine
+		// and Node still point at the deleted server.
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
 
@@ -220,7 +217,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
 	})
 
-	It("marks credentials invalid without requeueing on unauthorized credentials", func() {
+	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
 		createBootstrapSecret(ctx, bootstrapName)
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
@@ -229,13 +226,25 @@ var _ = Describe("StackitMachine Controller", func() {
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
+		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
 		Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 		got := &infrav1.StackitMachine{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		By("correcting the credentials")
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return fakeCloud, nil
+		}
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
 	It("does not call the cloud API when the owning Cluster is paused", func() {
@@ -386,6 +395,62 @@ var _ = Describe("StackitMachine Controller", func() {
 		}).Should(BeTrue())
 	})
 
+	// The hook observes API server state from inside the cloud call, so it proves
+	// the ordering rather than only the end result.
+	It("persists the finalizer before creating the server", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+
+		var finalizersAtCreate []string
+		fakeCloud.BeforeCreateServer = func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			finalizersAtCreate = got.Finalizers
+		}
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		Expect(finalizersAtCreate).To(ContainElement(infrav1.MachineFinalizer),
+			"the server was created while the API server had no finalizer to clean it up")
+	})
+
+	// A lost status patch leaves a running, tagged server that no field on the
+	// object names, so an empty status.instanceID is not proof that none exists.
+	It("deletes a tagged server whose instance ID was lost from the status", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		By("losing the persisted instance ID, as if the status patch never landed")
+		got := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Status.InstanceID = ""
+		got.Status.ProviderID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.ProviderID = nil
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		By("deleting the StackitMachine")
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.ServerCount()).To(Equal(0),
+			"the tagged server leaked because deletion trusted the empty status")
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+			return apierrors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
+
 	It("maps owning Machine events to StackitMachine reconcile requests", func() {
 		machine := &clusterv1.Machine{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
@@ -400,6 +465,48 @@ var _ = Describe("StackitMachine Controller", func() {
 
 		requests := reconciler.stackitMachineRequestsForStackitCluster(ctx, stackitCluster)
 		Expect(requests).To(ConsistOf(request))
+	})
+
+	// Machine.spec.clusterName names the Cluster, not the StackitCluster, and a
+	// ClusterClass-generated infrastructureRef never shares its Cluster's name.
+	// Every other spec here uses matching names and would miss that.
+	It("maps StackitCluster events when the StackitCluster name differs from the Cluster name", func() {
+		suffix := time.Now().UnixNano()
+		ownerClusterName := fmt.Sprintf("owner-%d", suffix)
+		infraClusterName := ownerClusterName + "-infra"
+		otherMachineName := fmt.Sprintf("other-machine-%d", suffix)
+		otherStackitName := fmt.Sprintf("other-stackit-machine-%d", suffix)
+
+		By("creating a Cluster whose infrastructureRef points at a differently named StackitCluster")
+		ownerCluster := &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: ownerClusterName, Namespace: namespace},
+			Spec: clusterv1.ClusterSpec{
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: infrav1.GroupVersion.Group,
+					Kind:     "StackitCluster",
+					Name:     infraClusterName,
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, ownerCluster)).To(Succeed())
+
+		infraCluster := newStackitCluster(infraClusterName, namespace, false)
+		infraCluster.OwnerReferences[0].Name = ownerClusterName
+		Expect(k8sClient.Create(ctx, infraCluster)).To(Succeed())
+
+		createOwnerMachine(ctx, otherMachineName, ownerClusterName, otherStackitName)
+
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: otherMachineName, Namespace: namespace}})
+			deleteIfExists(ctx, infraCluster)
+			deleteIfExists(ctx, ownerCluster)
+		})
+
+		By("mapping the StackitCluster event onto the Machine owned by its Cluster")
+		requests := reconciler.stackitMachineRequestsForStackitCluster(ctx, infraCluster)
+		Expect(requests).To(ConsistOf(reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: namespace, Name: otherStackitName},
+		}), "the StackitCluster watch must resolve its owning Cluster instead of matching on its own name")
 	})
 
 	It("maps bootstrap Secret events to StackitMachine reconcile requests", func() {
