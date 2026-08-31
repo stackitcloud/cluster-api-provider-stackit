@@ -920,3 +920,176 @@ func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
 		t.Fatalf("deletedSGIDs = %v, want [%s %s] (reverse order: node-ssh then bastion-ssh)", deletedSGIDs, testSecurityGroupID, testRemoteSGID)
 	}
 }
+
+// TestServiceReconcileToleratesNonCanonicalCIDR guards against CIDRs
+// given or returned in a non-canonical form (e.g. host bits set or
+// uncompressed IPv6) failing to match, deduplicate, or normalize on create.
+func TestServiceReconcileToleratesNonCanonicalCIDR(t *testing.T) {
+	const (
+		existingRuleID = "88888888-8888-4888-8888-888888888888"
+		canonicalCIDR  = "203.0.113.0/24"
+	)
+
+	newHandler := func(
+		t *testing.T,
+		existingRules []any,
+		createdRules *[]map[string]any,
+		deletedRuleIDs *[]string,
+	) http.Handler {
+		t.Helper()
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+				writeJSON(t, w, map[string]any{"items": []any{
+					map[string]any{
+						"id":     testSecurityGroupID,
+						"name":   "bastion-ssh",
+						"labels": map[string]any{"cluster": "test"},
+					},
+				}})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/rules"):
+				writeJSON(t, w, map[string]any{"items": existingRules})
+			case r.Method == http.MethodPost && strings.HasSuffix(path, "/rules"):
+				*createdRules = append(*createdRules, readJSON(t, r))
+				writeJSON(t, w, map[string]any{"id": testRuleID2, "direction": "ingress"})
+			case r.Method == http.MethodDelete && strings.Contains(path, "/rules/"):
+				parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
+				*deletedRuleIDs = append(*deletedRuleIDs, parts[len(parts)-1])
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		})
+	}
+
+	t.Run("matches canonical rule from API when desired CIDR has host bits set", func(t *testing.T) {
+		var (
+			createdRules   []map[string]any
+			deletedRuleIDs []string
+		)
+		specs := []securitygroup.SecurityGroupSpec{{
+			Name: "bastion-ssh",
+			Tags: map[string]string{"cluster": "test"},
+			Rules: []securitygroup.Rule{{
+				Direction: securitygroup.DirectionIngress,
+				Protocol:  securitygroup.ProtocolTCP,
+				PortMin:   22,
+				PortMax:   22,
+				IPRange:   "203.0.113.5/24",
+			}},
+		}}
+		existing := []any{
+			map[string]any{
+				"id":        existingRuleID,
+				"direction": "ingress",
+				"ipRange":   canonicalCIDR,
+				"portRange": map[string]any{"min": 22, "max": 22},
+				"protocol":  map[string]any{"name": "tcp"},
+			},
+		}
+
+		svc := newTestService(t, specs, newHandler(t, existing, &createdRules, &deletedRuleIDs))
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if len(createdRules) != 0 {
+			t.Fatalf("created rules = %v, want none", createdRules)
+		}
+		if len(deletedRuleIDs) != 0 {
+			t.Fatalf("deleted rules = %v, want none", deletedRuleIDs)
+		}
+	})
+
+	t.Run("matches non-canonical IPv4 and IPv6 rules returned by API", func(t *testing.T) {
+		var (
+			createdRules   []map[string]any
+			deletedRuleIDs []string
+		)
+		specs := []securitygroup.SecurityGroupSpec{{
+			Name: "bastion-ssh",
+			Tags: map[string]string{"cluster": "test"},
+			Rules: []securitygroup.Rule{
+				{
+					Direction: securitygroup.DirectionIngress,
+					Protocol:  securitygroup.ProtocolTCP,
+					PortMin:   22,
+					PortMax:   22,
+					IPRange:   canonicalCIDR,
+				},
+				{
+					Direction: securitygroup.DirectionIngress,
+					Protocol:  securitygroup.ProtocolTCP,
+					PortMin:   22,
+					PortMax:   22,
+					IPRange:   "2001:db8::/64",
+				},
+			},
+		}}
+		existing := []any{
+			map[string]any{
+				"id":        existingRuleID,
+				"direction": "ingress",
+				"ipRange":   "203.0.113.5/24",
+				"portRange": map[string]any{"min": 22, "max": 22},
+				"protocol":  map[string]any{"name": "tcp"},
+			},
+			map[string]any{
+				"id":        testRuleID1,
+				"direction": "ingress",
+				"ipRange":   "2001:0db8:0000:0000::1/64",
+				"portRange": map[string]any{"min": 22, "max": 22},
+				"protocol":  map[string]any{"name": "tcp"},
+			},
+		}
+
+		svc := newTestService(t, specs, newHandler(t, existing, &createdRules, &deletedRuleIDs))
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if len(createdRules) != 0 {
+			t.Fatalf("created rules = %v, want none", createdRules)
+		}
+		if len(deletedRuleIDs) != 0 {
+			t.Fatalf("deleted rules = %v, want none", deletedRuleIDs)
+		}
+	})
+
+	t.Run("creates canonical CIDR and deduplicates equivalent non-canonical CIDRs", func(t *testing.T) {
+		var (
+			createdRules   []map[string]any
+			deletedRuleIDs []string
+		)
+		specs := []securitygroup.SecurityGroupSpec{{
+			Name: "bastion-ssh",
+			Tags: map[string]string{"cluster": "test"},
+			Rules: []securitygroup.Rule{
+				{
+					Direction: securitygroup.DirectionIngress,
+					Protocol:  securitygroup.ProtocolTCP,
+					PortMin:   22,
+					PortMax:   22,
+					IPRange:   "203.0.113.5/24",
+				},
+				{
+					Direction: securitygroup.DirectionIngress,
+					Protocol:  securitygroup.ProtocolTCP,
+					PortMin:   22,
+					PortMax:   22,
+					IPRange:   "203.0.113.9/24",
+				},
+			},
+		}}
+
+		svc := newTestService(t, specs, newHandler(t, []any{}, &createdRules, &deletedRuleIDs))
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if len(createdRules) != 1 || createdRules[0]["ipRange"] != canonicalCIDR {
+			t.Fatalf("created rules = %#v, want single rule for %s", createdRules, canonicalCIDR)
+		}
+		if len(deletedRuleIDs) != 0 {
+			t.Fatalf("deleted rules = %v, want none", deletedRuleIDs)
+		}
+	})
+}
