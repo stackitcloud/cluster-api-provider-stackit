@@ -12,6 +12,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,6 +31,12 @@ import (
 	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
+)
+
+var (
+	// If the server was there and is gone, cloud.ErrNotFound shouldn't be used,
+	// as the state is final.
+	errInstanceGone = errors.New("instance gone")
 )
 
 func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope.MachineScope) (ctrl.Result, error) {
@@ -72,6 +79,16 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, s *scope
 	s.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
 	server, created, err := r.ensureServer(ctx, cloudClient, s, bootstrapData)
+	if errors.Is(err, errInstanceGone) {
+		s.SetNotReady("InstanceNotFound", err.Error(), infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(
+				sm, nil, corev1.EventTypeWarning, "InstanceNotFound", "Reconcile",
+				"Server %s no longer exists; the Machine must be replaced", sm.Status.InstanceID,
+			)
+		}
+		return ctrl.Result{}, nil
+	}
 	if err != nil {
 		s.SetNotReady("InstanceError", err.Error(), infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
 		return util.CloudFailureResult(
@@ -241,8 +258,8 @@ func (r *StackitMachineReconciler) ensureServer(
 	// replace the Machine.
 	if sm.Status.Initialization.Provisioned {
 		return nil, false, fmt.Errorf(
-			"%w: server %s for already-provisioned machine no longer exists; the Machine must be replaced",
-			cloud.ErrNotFound, sm.Status.InstanceID,
+			"%w: server %s; the Machine must be replaced",
+			errInstanceGone, sm.Status.InstanceID,
 		)
 	}
 

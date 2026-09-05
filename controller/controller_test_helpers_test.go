@@ -133,9 +133,9 @@ func updateMachineBootstrapSecret(ctx context.Context, name, bootstrapSecretName
 	Expect(k8sClient.Update(ctx, machine)).To(Succeed())
 }
 
-func updateMachineControlPlaneLabel(ctx context.Context, name, namespace string) {
+func updateMachineControlPlaneLabel(ctx context.Context, name string) {
 	machine := &clusterv1.Machine{}
-	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, machine)).To(Succeed())
+	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: "default"}, machine)).To(Succeed())
 	if machine.Labels == nil {
 		machine.Labels = map[string]string{}
 	}

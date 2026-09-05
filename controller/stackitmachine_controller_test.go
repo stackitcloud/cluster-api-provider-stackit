@@ -157,8 +157,9 @@ var _ = Describe("StackitMachine Controller", func() {
 		Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 		By("reconciling again")
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).To(HaveOccurred(), "reconcile must surface the missing server instead of papering over it")
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
 
 		Expect(fakeCloud.CreateServerCalls).To(Equal(1),
 			"a replacement server was created for an already-provisioned machine")
@@ -167,7 +168,8 @@ var _ = Describe("StackitMachine Controller", func() {
 		By("reporting a consistent readiness state")
 		degraded := &infrav1.StackitMachine{}
 		Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
-		expectCondition(degraded.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+		expectCondition(degraded.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
+		expectCondition(degraded.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
 		Expect(degraded.Status.Ready).To(BeFalse(),
 			"legacy status.ready must follow the Ready condition, not contradict it")
 	})
@@ -319,9 +321,25 @@ var _ = Describe("StackitMachine Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
 	})
 
+	It("returns an error when VM creation is rejected", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+		fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", cloud.ErrInvalidInput)
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).To(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		got := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
+		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+	})
+
 	It("registers control plane VMs as API server load balancer targets", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
+		updateMachineControlPlaneLabel(ctx, machineName)
 		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
 		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
 		createBootstrapSecret(ctx, bootstrapName)
@@ -341,7 +359,7 @@ var _ = Describe("StackitMachine Controller", func() {
 
 	It("requeues when load balancer target registration returns a transient error", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
+		updateMachineControlPlaneLabel(ctx, machineName)
 		createBootstrapSecret(ctx, bootstrapName)
 		loadBalancerID := createAPIServerLoadBalancer(ctx, fakeCloud)
 		updateStackitClusterLoadBalancer(ctx, clusterName, namespace, loadBalancerID)
@@ -358,7 +376,7 @@ var _ = Describe("StackitMachine Controller", func() {
 
 	It("deletes the VM and removes the finalizer", func() {
 		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
+		updateMachineControlPlaneLabel(ctx, machineName)
 		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
 		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
 		createBootstrapSecret(ctx, bootstrapName)
@@ -384,6 +402,85 @@ var _ = Describe("StackitMachine Controller", func() {
 			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
 			return apierrors.IsNotFound(err)
 		}).Should(BeTrue())
+	})
+
+	It("removes the finalizer when the server is already gone at deletion time", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		updateMachineControlPlaneLabel(ctx, machineName)
+		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
+		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
+		createBootstrapSecret(ctx, bootstrapName)
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		stackitCluster := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+		loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
+		Expect(loadBalancerID).NotTo(BeEmpty())
+		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
+
+		provisioned := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, provisioned)).To(Succeed())
+		instanceID := provisioned.Status.InstanceID
+		Expect(instanceID).NotTo(BeEmpty())
+
+		By("removing the server behind the provider's back")
+		Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		By("reconciling into the terminal state")
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		degraded := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
+		expectCondition(degraded.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
+		Expect(degraded.Status.InstanceID).To(Equal(instanceID))
+		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1),
+			"the deletion must still find the load balancer target to remove")
+
+		By("deleting the object while the cloud reports the server as gone")
+		// The fake deletes an unknown ID without an error, so the not-found answer
+		// of the cloud must be injected.
+		fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrNotFound)
+
+		Expect(k8sClient.Delete(ctx, degraded)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		// The reconcile clears FailNextDeleteServer when it calls DeleteServer,
+		// so a nil field proves the call happened.
+		Expect(fakeCloud.FailNextDeleteServer).ToNot(HaveOccurred(),
+			"the machine deletion did not ask the cloud to remove the server")
+		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(0))
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+			return apierrors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
+
+	It("keeps the finalizer when the server deletion fails", func() {
+		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+		createBootstrapSecret(ctx, bootstrapName)
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+		got := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrTransient)
+
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+
+		Expect(err).To(MatchError(cloud.ErrTransient))
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		stillThere := &infrav1.StackitMachine{}
+		Expect(k8sClient.Get(ctx, stackitKey, stillThere)).To(Succeed())
+		Expect(stillThere.Finalizers).To(ContainElement(infrav1.MachineFinalizer))
 	})
 
 	It("maps owning Machine events to StackitMachine reconcile requests", func() {
