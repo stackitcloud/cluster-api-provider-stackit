@@ -9,7 +9,6 @@ clusters.
   topology blueprint.
 - [Workload Addons](addons.md) explains the tested cloud-provider-stackit and
   CNI installation flow.
-- [clusterctl](clusterctl.md) explains local provider repository configuration.
 - [Workload CNI](cni.md) covers installing a CNI after the workload API is
   reachable.
 - [Upgrade](upgrade.md) and [Cleanup](cleanup.md) cover common lifecycle

@@ -5,6 +5,19 @@ CLUSTERCTL_PROVIDER ?= stackit
 CLUSTERCTL_RELEASE_VERSION ?= v0.1.0
 CLUSTERCTL_RELEASE_ROOT ?= dist/clusterctl
 CLUSTERCTL_RELEASE_DIR ?= $(CLUSTERCTL_RELEASE_ROOT)/infrastructure-$(CLUSTERCTL_PROVIDER)/$(CLUSTERCTL_RELEASE_VERSION)
+RELEASE_DIR ?= dist/release
+RELEASE_ASSETS := \
+	infrastructure-components.yaml \
+	metadata.yaml \
+	clusterclass.yaml \
+	cluster-template.yaml \
+	cluster-template-bastion.yaml \
+	cluster-template-development.yaml \
+	cluster-template-flatcar-workers.yaml \
+	cluster-template-topology.yaml \
+	cilium-values.yaml \
+	cloud-provider-stackit.yaml \
+	install.yaml
 WORKLOAD_KUBECONFIG ?=
 STACKIT_WORKLOAD_CNI ?= cilium
 CILIUM_VERSION ?= 1.19.4
@@ -207,8 +220,11 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	cp -R config "$$tmp_dir/config"; \
+	cd "$$tmp_dir/config/manager" && "$(KUSTOMIZE)" edit set image controller=${IMG}; \
+	"$(KUSTOMIZE)" build "$$tmp_dir/config/default" > "$(CURDIR)/dist/install.yaml"
 
 .PHONY: clusterctl-release
 clusterctl-release: manifests generate kustomize ## Generate clusterctl release assets.
@@ -224,6 +240,45 @@ clusterctl-release: manifests generate kustomize ## Generate clusterctl release 
 	cp templates/cluster-template*.yaml "$(CLUSTERCTL_RELEASE_DIR)/"
 	mkdir -p "$(CLUSTERCTL_RELEASE_DIR)/addons"
 	cp templates/addons/*.yaml "$(CLUSTERCTL_RELEASE_DIR)/addons/"
+
+.PHONY: release
+release: ## Generate GitHub Release assets in dist/release.
+	rm -rf "$(RELEASE_DIR)"
+	$(MAKE) release-manifests IMG="$(IMG)"
+	$(MAKE) release-templates
+	$(MAKE) release-installer IMG="$(IMG)"
+	$(MAKE) release-checksums
+
+.PHONY: release-manifests
+release-manifests: manifests generate kustomize ## Generate release manifests.
+	mkdir -p "$(RELEASE_DIR)"
+	tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	cp -R config "$$tmp_dir/config"; \
+	cd "$$tmp_dir/config/manager" && "$(KUSTOMIZE)" edit set image controller=${IMG}; \
+	"$(KUSTOMIZE)" build "$$tmp_dir/config/default" > "$(CURDIR)/$(RELEASE_DIR)/infrastructure-components.yaml"
+	cp metadata.yaml "$(RELEASE_DIR)/metadata.yaml"
+
+.PHONY: release-templates
+release-templates: ## Copy release templates.
+	mkdir -p "$(RELEASE_DIR)"
+	cp templates/clusterclass.yaml "$(RELEASE_DIR)/"
+	cp templates/cluster-template.yaml "$(RELEASE_DIR)/"
+	cp templates/cluster-template-bastion.yaml "$(RELEASE_DIR)/"
+	cp templates/cluster-template-development.yaml "$(RELEASE_DIR)/"
+	cp templates/cluster-template-flatcar-workers.yaml "$(RELEASE_DIR)/"
+	cp templates/cluster-template-topology.yaml "$(RELEASE_DIR)/"
+	cp templates/addons/cilium-values.yaml "$(RELEASE_DIR)/"
+	cp templates/addons/cloud-provider-stackit.yaml "$(RELEASE_DIR)/"
+
+.PHONY: release-installer
+release-installer: build-installer ## Add the standalone installer to the release assets.
+	mkdir -p "$(RELEASE_DIR)"
+	cp dist/install.yaml "$(RELEASE_DIR)/install.yaml"
+
+.PHONY: release-checksums
+release-checksums: ## Generate checksums for release assets.
+	cd "$(RELEASE_DIR)" && sha256sum $(RELEASE_ASSETS) > checksums.txt
 
 ##@ Deployment
 

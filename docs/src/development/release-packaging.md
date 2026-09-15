@@ -1,12 +1,12 @@
-# Release Packaging
+# Release packaging
 
-The provider currently supports local clusterctl release asset generation:
+Build the GitHub Release assets locally:
 
 ```sh
-make clusterctl-release IMG=<registry>/cluster-api-provider-stackit:<tag>
+make release IMG=<registry>/cluster-api-provider-stackit:<tag>
 ```
 
-Generated files:
+This creates a flat `dist/release/` directory containing:
 
 - `infrastructure-components.yaml`
 - `metadata.yaml`
@@ -14,22 +14,21 @@ Generated files:
 - `cluster-template.yaml`
 - `cluster-template-bastion.yaml`
 - `cluster-template-development.yaml`
+- `cluster-template-flatcar-workers.yaml`
 - `cluster-template-topology.yaml`
-- `addons/*.yaml`
+- `cilium-values.yaml`
+- `cloud-provider-stackit.yaml`
+- `install.yaml`
+- `checksums.txt`
 
-The release directory is:
+`infrastructure-components.yaml` is the Cluster API provider manifest used by
+`clusterctl`. `install.yaml` is the standalone installer for `kubectl apply`.
 
-```text
-dist/clusterctl/infrastructure-stackit/v0.1.0/
-```
-
-Installer YAML can also be generated:
+For local clusterctl repository development, use:
 
 ```sh
-make build-installer IMG=<registry>/cluster-api-provider-stackit:<tag>
+make clusterctl-release IMG=<registry>/cluster-api-provider-stackit:<tag>
 ```
-
-The final release path is still open: installer YAML, Helm chart, or both.
 
 ---
 
@@ -106,7 +105,7 @@ Keep Helm out of scope unless maintainers explicitly choose it later.
 Update:
 
 - `docs/src/development/release-packaging.md`
-- `docs/src/usage/clusterctl.md`
+- `docs/src/quick-start.md`
 - `README.md`
 
 ### 2. Harden Clusterctl Packaging

@@ -7,7 +7,6 @@
   - [Classic Cluster Template](usage/cluster-template.md)
   - [ClusterClass](usage/clusterclass.md)
   - [Workload Addons](usage/addons.md)
-  - [clusterctl](usage/clusterctl.md)
   - [Workload CNI](usage/cni.md)
   - [Upgrade](usage/upgrade.md)
   - [Cleanup](usage/cleanup.md)
