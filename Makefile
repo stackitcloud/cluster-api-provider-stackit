@@ -207,8 +207,11 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	cp -R config "$$tmp_dir/config"; \
+	cd "$$tmp_dir/config/manager" && "$(KUSTOMIZE)" edit set image controller=${IMG}; \
+	"$(KUSTOMIZE)" build "$$tmp_dir/config/default" > "$(CURDIR)/dist/install.yaml"
 
 .PHONY: clusterctl-release
 clusterctl-release: manifests generate kustomize ## Generate clusterctl release assets.
