@@ -1,24 +1,17 @@
+<p align="center">
+<img src="https://raw.githubusercontent.com/kubernetes-sigs/cluster-api/refs/heads/main/docs/logos/kubernetes-cluster-logos_final-02.svg" height="150px"><a href="https://stackit.com/"><img height="150px" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
+</p>
+
+<p align="center">
+<a href="https://godoc.org/github.com/stackitcloud/cluster-api-provider-stackit"><img src="https://godoc.org/github.com/stackitcloud/cluster-api-provider-stackit?status.svg"></a>
+<img alt="GitHub release" src="https://img.shields.io/github/v/release/stackitcloud/cluster-api-provider-stackit">
+</p>
+
+----
+
 # Kubernetes Cluster API Provider STACKIT (CAPSTK)
 
-<p align="center">
-<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png" height="100px"><a href="https://stackit.com/"><img height="100px" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
-</p>
-
-<p align="center">
-    <a href="https://pkg.go.dev/github.com/stackitcloud/cluster-api-provider-stackit"><img src="https://pkg.go.dev/badge/github.com/stackitcloud/cluster-api-provider-stackit.svg" alt="Go Reference"></a>
-</p>
-
-------
-
 Kubernetes-native declarative infrastructure for STACKIT.
-
-## What is the Cluster API Provider STACKIT
-
-The [Cluster API](https://cluster-api.sigs.k8s.io/introduction) brings declarative, Kubernetes-style APIs to cluster creation, configuration and management.
-
-The API itself is shared across multiple cloud providers allowing for true STACKIT hybrid deployments of Kubernetes.
-
-Cluster API Provider STACKIT is abbreviated as CAPSTK.
 
 > ### ⚠️ WARNING ⚠️ 
 > 
@@ -27,6 +20,15 @@ Cluster API Provider STACKIT is abbreviated as CAPSTK.
 > The implementation is validated through end-to-end tests, but it has not yet received the same level of quality reviews, production hardening, or long-term operational validation as a mature provider or officially supported STACKIT projects.
 > 
 > Use at your own risk. Please review the code carefully before using it in production environments.
+
+
+## What is the Cluster API Provider STACKIT
+
+The [Cluster API](https://cluster-api.sigs.k8s.io/introduction) brings declarative, Kubernetes-style APIs to cluster creation, configuration and management.
+
+The API itself is shared across multiple cloud providers allowing for true STACKIT hybrid deployments of Kubernetes.
+
+Cluster API Provider STACKIT is abbreviated as CAPSTK.
 
 ## Documentation
 
