@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterutil "sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -50,16 +51,13 @@ func (r *StackitMachineReconciler) stackitMachineRequestsForStackitCluster(ctx c
 		return nil
 	}
 
-	machines := &clusterv1.MachineList{}
-	if err := r.List(ctx, machines,
-		client.InNamespace(stackitCluster.Namespace),
-		client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name},
-	); err != nil {
+	machines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, cluster)
+	if err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to list Machines for StackitCluster watch", "stackitCluster", client.ObjectKeyFromObject(stackitCluster))
 		return nil
 	}
 
-	return stackitMachineRequestsForMachines(machines.Items, func(machine clusterv1.Machine) bool {
+	return stackitMachineRequestsForMachines(machines.UnsortedList(), func(machine *clusterv1.Machine) bool {
 		return machine.Spec.ClusterName == cluster.Name
 	})
 }
@@ -76,20 +74,20 @@ func (r *StackitMachineReconciler) stackitMachineRequestsForBootstrapSecret(ctx 
 		return nil
 	}
 
-	return stackitMachineRequestsForMachines(machines.Items, func(machine clusterv1.Machine) bool {
+	return stackitMachineRequestsForMachines(collections.FromMachineList(machines).UnsortedList(), func(machine *clusterv1.Machine) bool {
 		return machine.Spec.Bootstrap.DataSecretName != nil &&
 			*machine.Spec.Bootstrap.DataSecretName == secret.Name
 	})
 }
 
-func stackitMachineRequestsForMachines(machines []clusterv1.Machine, matches func(clusterv1.Machine) bool) []reconcile.Request {
+func stackitMachineRequestsForMachines(machines []*clusterv1.Machine, matches func(*clusterv1.Machine) bool) []reconcile.Request {
 	requests := make([]reconcile.Request, 0, len(machines))
 	seen := map[types.NamespacedName]struct{}{}
 	for _, machine := range machines {
 		if !matches(machine) {
 			continue
 		}
-		for _, request := range stackitMachineRequestForMachine(&machine) {
+		for _, request := range stackitMachineRequestForMachine(machine) {
 			if _, ok := seen[request.NamespacedName]; ok {
 				continue
 			}

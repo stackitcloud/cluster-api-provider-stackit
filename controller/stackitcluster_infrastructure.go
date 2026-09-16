@@ -20,8 +20,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/collections"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -236,19 +236,14 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 
 	// Machines resolve their credentials and project context through this
 	// StackitCluster, so the finalizer has to stay while any of them remain.
-	// Selects the same way util/collections.GetFilteredMachinesForCluster does,
-	// inlined because that package pulls in the kubeadm bootstrap API.
-	machines := &clusterv1.MachineList{}
-	if err := r.List(ctx, machines,
-		client.InNamespace(clusterScope.Cluster.Namespace),
-		client.MatchingLabels{clusterv1.ClusterNameLabel: clusterScope.Cluster.Name},
-	); err != nil {
+	machines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, clusterScope.Cluster)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("list Machines for cluster %s: %w", clusterScope.Cluster.Name, err)
 	}
-	if len(machines.Items) > 0 {
+	if machines.Len() > 0 {
 		logf.FromContext(ctx).Info(
 			"Waiting for Machines to be deleted before removing the StackitCluster finalizer",
-			"remainingMachines", len(machines.Items),
+			"remainingMachines", machines.Len(),
 		)
 		return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
 	}
