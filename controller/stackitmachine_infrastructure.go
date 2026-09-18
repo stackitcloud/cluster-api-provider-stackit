@@ -12,6 +12,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,6 +32,8 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
+
+var errInstanceGone = errors.New("instance gone")
 
 func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineScope *scope.MachineScope) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -83,6 +86,21 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	machineScope.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
 	server, created, err := r.ensureServer(ctx, cloudClient, machineScope, bootstrapData)
+	if errors.Is(err, errInstanceGone) {
+		machineScope.SetNotReady(
+			"InstanceNotFound",
+			err.Error(),
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(
+				stackitMachine, nil, corev1.EventTypeWarning, "InstanceNotFound", "Reconcile",
+				"Server %s no longer exists; the Machine must be replaced", stackitMachine.Status.InstanceID,
+			)
+		}
+		return ctrl.Result{}, nil
+	}
 	if err != nil {
 		machineScope.SetNotReady(
 			"InstanceError",
@@ -285,8 +303,8 @@ func (r *StackitMachineReconciler) ensureServer(
 	// identity, so surface the loss and let Cluster API replace the Machine.
 	if stackitMachine.Status.Initialization.Provisioned {
 		return nil, false, fmt.Errorf(
-			"%w: server %s for already-provisioned machine no longer exists; the Machine must be replaced",
-			cloud.ErrNotFound, stackitMachine.Status.InstanceID,
+			"%w: server %s; the Machine must be replaced",
+			errInstanceGone, stackitMachine.Status.InstanceID,
 		)
 	}
 

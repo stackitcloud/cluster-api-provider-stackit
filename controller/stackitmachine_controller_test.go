@@ -34,17 +34,18 @@ var _ = Describe("StackitMachine Controller", func() {
 	const namespace = "default"
 
 	var (
-		ctx           context.Context
-		clusterName   string
-		machineName   string
-		stackitName   string
-		credentials   string
-		fakeCloud     *cloudfake.Client
-		reconciler    *StackitMachineReconciler
-		request       reconcile.Request
-		stackitKey    types.NamespacedName
-		stackitMach   *infrav1.StackitMachine
-		bootstrapName string
+		ctx                           context.Context
+		clusterName                   string
+		machineName                   string
+		stackitName                   string
+		credentials                   string
+		fakeCloud                     *cloudfake.Client
+		reconciler                    *StackitMachineReconciler
+		request                       reconcile.Request
+		stackitKey                    types.NamespacedName
+		stackitMach                   *infrav1.StackitMachine
+		bootstrapName                 string
+		setupControlPlaneLoadBalancer func()
 	)
 
 	BeforeEach(func() {
@@ -72,6 +73,11 @@ var _ = Describe("StackitMachine Controller", func() {
 		createOwnerMachine(ctx, machineName, clusterName, stackitName)
 		stackitMach = newStackitMachine(stackitName, namespace, machineName)
 		Expect(k8sClient.Create(ctx, stackitMach)).To(Succeed())
+		setupControlPlaneLoadBalancer = func() {
+			updateMachineControlPlaneLabel(ctx, machineName)
+			enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
+			reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
+		}
 	})
 
 	AfterEach(func() {
@@ -108,347 +114,407 @@ var _ = Describe("StackitMachine Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.MachineBootstrapReadyCondition, metav1.ConditionFalse, "BootstrapDataSecretNotFound")
 	})
 
-	It("creates a VM and sets provider status when bootstrap data is available", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Status.Ready).To(BeTrue())
-		Expect(got.Status.InstanceID).NotTo(BeEmpty())
-		Expect(got.Status.InstanceState).To(Equal("ACTIVE"))
-		Expect(got.Status.ProviderID).To(Equal("stackit://" + got.Status.InstanceID))
-		Expect(got.Spec.ProviderID).NotTo(BeNil())
-		Expect(*got.Spec.ProviderID).To(Equal(got.Status.ProviderID))
-		Expect(got.Status.Addresses).To(HaveLen(1))
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionTrue, "Available")
-		expectCondition(got.Status.Conditions, infrav1.MachineBootstrapReadyCondition, metav1.ConditionTrue, "Available")
-		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
-	})
-
-	It("does not silently recreate the server of an already-provisioned machine", func() {
-		// Recreating it would replay bootstrap data pinned to the previous
-		// identity: the replacement either never rejoins or rejoins while Machine
-		// and Node still point at the deleted server.
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
-		Expect(fakeCloud.CreateServerCalls).To(Equal(1))
-
-		provisioned := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, provisioned)).To(Succeed())
-		Expect(provisioned.Status.Initialization.Provisioned).To(BeTrue())
-		instanceID := provisioned.Status.InstanceID
-		Expect(instanceID).NotTo(BeEmpty())
-
-		By("removing the server behind the provider's back")
-		Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		By("reconciling again")
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).To(HaveOccurred(), "reconcile must surface the missing server instead of papering over it")
-
-		Expect(fakeCloud.CreateServerCalls).To(Equal(1),
-			"a replacement server was created for an already-provisioned machine")
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		By("reporting a consistent readiness state")
-		degraded := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
-		expectCondition(degraded.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
-		Expect(degraded.Status.Ready).To(BeFalse(),
-			"legacy status.ready must follow the Ready condition, not contradict it")
-	})
-
-	It("attaches provider-managed node SSH access when bastion is enabled", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		stackitCluster := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
-		stackitCluster.Spec.Bastion = validBastionSpec()
-		Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
-		stackitCluster.Status.Ready = true
-		stackitCluster.Status.Bastion.SecurityGroupID = "bastion-sg"
-		Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Status.Ready).To(BeTrue())
-		Expect(fakeCloud.EnsureNodeSSHCalls).To(Equal(1))
-		securityGroups, err := fakeCloud.ListSecurityGroupsByTags(ctx, map[string]string{
-			util.LabelClusterName:  clusterName,
-			util.LabelResourceRole: util.ResourceRoleNodeSSH,
+	Context("with bootstrap data", func() {
+		BeforeEach(func() {
+			updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
+			createBootstrapSecret(ctx, bootstrapName)
 		})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(securityGroups).To(HaveLen(1))
-		Expect(fakeCloud.SecurityGroupRemoteSources(securityGroups[0].ID)).To(ConsistOf("bastion-sg"))
-		Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
-	})
 
-	It("does not create a VM when availabilityZone is outside published failure domains", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		got.Spec.AvailabilityZone = "eu01-9"
-		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		It("creates a VM and sets provider status when bootstrap data is available", func() {
 
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
 
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(got.Status.Ready).To(BeFalse())
-		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
-	})
-
-	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
-		}
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
-
-		By("correcting the credentials")
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			return fakeCloud, nil
-		}
-
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
-
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionTrue, "Available")
-	})
-
-	It("does not call the cloud API when the owning Cluster is paused", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		cluster := &clusterv1.Cluster{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())
-		cluster.Spec.Paused = new(true)
-		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
-
-		cloudClientFactoryCalls := 0
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			cloudClientFactoryCalls++
-			return fakeCloud, nil
-		}
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-		Expect(cloudClientFactoryCalls).To(Equal(0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason)
-	})
-
-	It("does not call the cloud API when the StackitMachine has the paused annotation", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		got.Annotations = map[string]string{clusterv1.PausedAnnotation: ""}
-		Expect(k8sClient.Update(ctx, got)).To(Succeed())
-
-		cloudClientFactoryCalls := 0
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			cloudClientFactoryCalls++
-			return fakeCloud, nil
-		}
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-		Expect(cloudClientFactoryCalls).To(Equal(0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason)
-	})
-
-	It("requeues when server lookup returns a conflict", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		fakeCloud.FailNextFindServer = fmt.Errorf("multiple matching servers: %w", cloud.ErrConflict)
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
-	})
-
-	It("requeues when VM creation returns a transient error", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		fakeCloud.FailNextCreateServer = fmt.Errorf("create server timeout: %w", cloud.ErrTransient)
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
-	})
-
-	It("registers control plane VMs as API server load balancer targets", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
-		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
-		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
-		createBootstrapSecret(ctx, bootstrapName)
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(reconcile.Result{}))
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
-		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
-
-		stackitCluster := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
-		loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
-		Expect(loadBalancerID).NotTo(BeEmpty())
-		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
-	})
-
-	It("requeues when load balancer target registration returns a transient error", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
-		createBootstrapSecret(ctx, bootstrapName)
-		loadBalancerID := createAPIServerLoadBalancer(ctx, fakeCloud)
-		updateStackitClusterLoadBalancer(ctx, clusterName, namespace, loadBalancerID)
-		fakeCloud.FailNextEnsureTarget = fmt.Errorf("update target pool timeout: %w", cloud.ErrTransient)
-
-		result, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "LoadBalancerTargetError")
-	})
-
-	It("deletes the VM and removes the finalizer", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		updateMachineControlPlaneLabel(ctx, machineName, namespace)
-		enableStackitClusterLoadBalancer(ctx, clusterName, namespace)
-		reconcileStackitClusterOnce(ctx, clusterName, namespace, fakeCloud)
-		createBootstrapSecret(ctx, bootstrapName)
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
-
-		stackitCluster := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
-		loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
-		Expect(loadBalancerID).NotTo(BeEmpty())
-		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
-
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
-
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(0))
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
-			return apierrors.IsNotFound(err)
-		}).Should(BeTrue())
-	})
-
-	// The hook observes API server state from inside the cloud call, so it proves
-	// the ordering rather than only the end result.
-	It("persists the finalizer before creating the server", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-
-		var finalizersAtCreate []string
-		fakeCloud.BeforeCreateServer = func() {
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-			finalizersAtCreate = got.Finalizers
-		}
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(got.Status.InstanceID).NotTo(BeEmpty())
+			Expect(got.Status.InstanceState).To(Equal("ACTIVE"))
+			Expect(got.Status.ProviderID).To(Equal("stackit://" + got.Status.InstanceID))
+			Expect(got.Spec.ProviderID).NotTo(BeNil())
+			Expect(*got.Spec.ProviderID).To(Equal(got.Status.ProviderID))
+			Expect(got.Status.Addresses).To(HaveLen(1))
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionTrue, "Available")
+			expectCondition(got.Status.Conditions, infrav1.MachineBootstrapReadyCondition, metav1.ConditionTrue, "Available")
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
+		})
 
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		It("does not silently recreate the server of an already-provisioned machine", func() {
+			// Recreating it would replay bootstrap data pinned to the previous
+			// identity: the replacement either never rejoins or rejoins while Machine
+			// and Node still point at the deleted server.
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+			Expect(fakeCloud.CreateServerCalls).To(Equal(1))
 
-		Expect(finalizersAtCreate).To(ContainElement(infrav1.MachineFinalizer),
-			"the server was created while the API server had no finalizer to clean it up")
-	})
+			provisioned := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, provisioned)).To(Succeed())
+			Expect(provisioned.Status.Initialization.Provisioned).To(BeTrue())
+			instanceID := provisioned.Status.InstanceID
+			Expect(instanceID).NotTo(BeEmpty())
 
-	// A lost status patch leaves a running, tagged server that no field on the
-	// object names, so an empty status.instanceID is not proof that none exists.
-	It("deletes a tagged server whose instance ID was lost from the status", func() {
-		updateMachineBootstrapSecret(ctx, machineName, bootstrapName)
-		createBootstrapSecret(ctx, bootstrapName)
-		_, err := reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerCount()).To(Equal(1))
+			By("removing the server behind the provider's back")
+			Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
-		By("losing the persisted instance ID, as if the status patch never landed")
-		got := &infrav1.StackitMachine{}
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		got.Status.InstanceID = ""
-		got.Status.ProviderID = ""
-		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+			By("reconciling again")
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
 
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		got.Spec.ProviderID = nil
-		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+			Expect(fakeCloud.CreateServerCalls).To(Equal(1),
+				"a replacement server was created for an already-provisioned machine")
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
-		By("deleting the StackitMachine")
-		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+			By("reporting a consistent readiness state")
+			degraded := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
+			expectCondition(degraded.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
+			expectCondition(degraded.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
+			Expect(degraded.Status.Ready).To(BeFalse(),
+				"legacy status.ready must follow the Ready condition, not contradict it")
+		})
 
-		_, err = reconciler.Reconcile(ctx, request)
-		Expect(err).NotTo(HaveOccurred())
+		It("attaches provider-managed node SSH access when bastion is enabled", func() {
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			stackitCluster.Spec.Bastion = validBastionSpec()
+			Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
+			stackitCluster.Status.Ready = true
+			stackitCluster.Status.Bastion.SecurityGroupID = "bastion-sg"
+			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
 
-		Expect(fakeCloud.ServerCount()).To(Equal(0),
-			"the tagged server leaked because deletion trusted the empty status")
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
-			return apierrors.IsNotFound(err)
-		}).Should(BeTrue())
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(fakeCloud.EnsureNodeSSHCalls).To(Equal(1))
+			securityGroups, err := fakeCloud.ListSecurityGroupsByTags(ctx, map[string]string{
+				util.LabelClusterName:  clusterName,
+				util.LabelResourceRole: util.ResourceRoleNodeSSH,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(securityGroups).To(HaveLen(1))
+			Expect(fakeCloud.SecurityGroupRemoteSources(securityGroups[0].ID)).To(ConsistOf("bastion-sg"))
+			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
+		})
+
+		It("does not create a VM when availabilityZone is outside published failure domains", func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Spec.AvailabilityZone = "eu01-9"
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
+		})
+
+		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
+			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+				return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
+			}
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+			By("correcting the credentials")
+			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+				return fakeCloud, nil
+			}
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionTrue, "Available")
+		})
+
+		It("does not call the cloud API when the owning Cluster is paused", func() {
+			cluster := &clusterv1.Cluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())
+			cluster.Spec.Paused = new(true)
+			Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+
+			cloudClientFactoryCalls := 0
+			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+				cloudClientFactoryCalls++
+				return fakeCloud, nil
+			}
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(cloudClientFactoryCalls).To(Equal(0))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason)
+		})
+
+		It("does not call the cloud API when the StackitMachine has the paused annotation", func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Annotations = map[string]string{clusterv1.PausedAnnotation: ""}
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+			cloudClientFactoryCalls := 0
+			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+				cloudClientFactoryCalls++
+				return fakeCloud, nil
+			}
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(cloudClientFactoryCalls).To(Equal(0))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason)
+		})
+
+		It("requeues when server lookup returns a conflict", func() {
+			fakeCloud.FailNextFindServer = fmt.Errorf("multiple matching servers: %w", cloud.ErrConflict)
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+		})
+
+		It("requeues when VM creation returns a transient error", func() {
+			fakeCloud.FailNextCreateServer = fmt.Errorf("create server timeout: %w", cloud.ErrTransient)
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+		})
+
+		It("returns an error when VM creation is rejected", func() {
+			fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", cloud.ErrInvalidInput)
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+		})
+
+		It("registers control plane VMs as API server load balancer targets", func() {
+			setupControlPlaneLoadBalancer()
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+			Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
+			Expect(loadBalancerID).NotTo(BeEmpty())
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
+		})
+
+		It("requeues when load balancer target registration returns a transient error", func() {
+			updateMachineControlPlaneLabel(ctx, machineName)
+			loadBalancerID := createAPIServerLoadBalancer(ctx, fakeCloud)
+			updateStackitClusterLoadBalancer(ctx, clusterName, namespace, loadBalancerID)
+			fakeCloud.FailNextEnsureTarget = fmt.Errorf("update target pool timeout: %w", cloud.ErrTransient)
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "LoadBalancerTargetError")
+		})
+
+		It("deletes the VM and removes the finalizer", func() {
+			setupControlPlaneLoadBalancer()
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
+			Expect(loadBalancerID).NotTo(BeEmpty())
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(0))
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+				return apierrors.IsNotFound(err)
+			}).Should(BeTrue())
+		})
+
+		// The hook observes API server state from inside the cloud call, so it proves
+		// the ordering rather than only the end result.
+		It("persists the finalizer before creating the server", func() {
+			var finalizersAtCreate []string
+			fakeCloud.BeforeCreateServer = func() {
+				got := &infrav1.StackitMachine{}
+				Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+				finalizersAtCreate = got.Finalizers
+			}
+
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			Expect(finalizersAtCreate).To(ContainElement(infrav1.MachineFinalizer),
+				"the server was created while the API server had no finalizer to clean it up")
+		})
+
+		It("removes the finalizer when the server is already gone at deletion time", func() {
+			setupControlPlaneLoadBalancer()
+
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
+			Expect(loadBalancerID).NotTo(BeEmpty())
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1))
+
+			provisioned := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, provisioned)).To(Succeed())
+			instanceID := provisioned.Status.InstanceID
+			Expect(instanceID).NotTo(BeEmpty())
+
+			By("removing the server behind the provider's back")
+			Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			By("reconciling into the terminal state")
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			degraded := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, degraded)).To(Succeed())
+			expectCondition(degraded.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
+			Expect(degraded.Status.InstanceID).To(Equal(instanceID))
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(1),
+				"the deletion must still find the load balancer target to remove")
+
+			By("deleting the object while the cloud reports the server as gone")
+			// The fake deletes an unknown ID without an error, so the not-found answer
+			// of the cloud must be injected.
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrNotFound)
+
+			Expect(k8sClient.Delete(ctx, degraded)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			// The reconcile clears FailNextDeleteServer when it calls DeleteServer,
+			// so a nil field proves the call happened.
+			Expect(fakeCloud.FailNextDeleteServer).ToNot(HaveOccurred(),
+				"the machine deletion did not ask the cloud to remove the server")
+			Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(0))
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+				return apierrors.IsNotFound(err)
+			}).Should(BeTrue())
+		})
+
+		// A lost status patch leaves a running, tagged server that no field on the
+		// object names, so an empty status.instanceID is not proof that none exists.
+		It("deletes a tagged server whose instance ID was lost from the status", func() {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			By("losing the persisted instance ID, as if the status patch never landed")
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Status.InstanceID = ""
+			got.Status.ProviderID = ""
+			Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Spec.ProviderID = nil
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+			By("deleting the StackitMachine")
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(0),
+				"the tagged server leaked because deletion trusted the empty status")
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
+				return apierrors.IsNotFound(err)
+			}).Should(BeTrue())
+		})
+
+		It("keeps the finalizer when the server deletion fails", func() {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrTransient)
+
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, request)
+
+			Expect(err).To(MatchError(cloud.ErrTransient))
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+			stillThere := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, stillThere)).To(Succeed())
+			Expect(stillThere.Finalizers).To(ContainElement(infrav1.MachineFinalizer))
+		})
 	})
 
 	It("maps owning Machine events to StackitMachine reconcile requests", func() {
