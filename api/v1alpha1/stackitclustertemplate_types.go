@@ -44,6 +44,12 @@ type StackitClusterTemplateResource struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=stackitclustertemplates,shortName=stict,scope=Namespaced,categories=cluster-api
+// +kubebuilder:printcolumn:name="Region",type=string,JSONPath=".spec.template.spec.region"
+// +kubebuilder:printcolumn:name="LB Enabled",type=boolean,JSONPath=".spec.template.spec.apiServerLoadBalancer.enabled"
+// +kubebuilder:printcolumn:name="Bastion Enabled",type=boolean,JSONPath=".spec.template.spec.bastion.enabled"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".spec.template.spec.network.id",priority=1
+// +kubebuilder:printcolumn:name="Project ID",type=string,JSONPath=".spec.template.spec.projectID",priority=1
 // +kubebuilder:storageversion
 
 // StackitClusterTemplate is the Schema for the stackitclustertemplates API.

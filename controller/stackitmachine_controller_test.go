@@ -132,6 +132,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(got.Status.Ready).To(BeTrue())
 			Expect(got.Status.InstanceID).NotTo(BeEmpty())
 			Expect(got.Status.InstanceState).To(Equal("ACTIVE"))
+			Expect(got.Status.AvailabilityZone).To(Equal("eu01-1"))
 			Expect(got.Status.ProviderID).To(Equal("stackit://" + got.Status.InstanceID))
 			Expect(got.Spec.ProviderID).NotTo(BeNil())
 			Expect(*got.Spec.ProviderID).To(Equal(got.Status.ProviderID))

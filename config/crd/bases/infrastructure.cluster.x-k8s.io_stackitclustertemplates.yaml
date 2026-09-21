@@ -18,7 +18,28 @@ spec:
     singular: stackitclustertemplate
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.template.spec.region
+      name: Region
+      type: string
+    - jsonPath: .spec.template.spec.apiServerLoadBalancer.enabled
+      name: LB Enabled
+      type: boolean
+    - jsonPath: .spec.template.spec.bastion.enabled
+      name: Bastion Enabled
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.template.spec.network.id
+      name: Network ID
+      priority: 1
+      type: string
+    - jsonPath: .spec.template.spec.projectID
+      name: Project ID
+      priority: 1
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StackitClusterTemplate is the Schema for the stackitclustertemplates
@@ -274,3 +295,4 @@ spec:
         type: object
     served: true
     storage: true
+    subresources: {}

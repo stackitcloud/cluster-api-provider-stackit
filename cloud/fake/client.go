@@ -190,10 +190,15 @@ func (c *Client) CreateServer(_ context.Context, input cloud.CreateServerInput) 
 	}
 
 	id := c.genID()
+	zone := input.AvailabilityZone
+	if zone == "" {
+		zone = "eu01-1"
+	}
 	server := &cloud.Server{
-		ID:    id,
-		Name:  input.Name,
-		State: "ACTIVE",
+		ID:               id,
+		Name:             input.Name,
+		State:            "ACTIVE",
+		AvailabilityZone: zone,
 		Addresses: []cloud.Address{
 			{Type: "InternalIP", Address: "10.0.0.10"},
 		},

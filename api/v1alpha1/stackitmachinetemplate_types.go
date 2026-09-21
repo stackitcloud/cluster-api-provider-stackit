@@ -44,6 +44,12 @@ type StackitMachineTemplateResource struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=stackitmachinetemplates,shortName=stimt,scope=Namespaced,categories=cluster-api
+// +kubebuilder:printcolumn:name="Machine Type",type=string,JSONPath=".spec.template.spec.machineType"
+// +kubebuilder:printcolumn:name="Image ID",type=string,JSONPath=".spec.template.spec.imageID"
+// +kubebuilder:printcolumn:name="Disk GiB",type=integer,JSONPath=".spec.template.spec.rootVolume.sizeGiB"
+// +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=".spec.template.spec.availabilityZone"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".spec.template.spec.network.id",priority=1
 // +kubebuilder:storageversion
 
 // StackitMachineTemplate is the Schema for the stackitmachinetemplates API.
