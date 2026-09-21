@@ -97,6 +97,7 @@ func (s *MachineScope) SetInstance(server *cloud.Server) string {
 	providerID := cloud.NewProviderID(s.StackitCluster.Spec.ProjectID, s.StackitCluster.Spec.Region, server.ID)
 	s.StackitMachine.Status.InstanceID = server.ID
 	s.StackitMachine.Status.InstanceState = server.State
+	s.StackitMachine.Status.AvailabilityZone = server.AvailabilityZone
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
@@ -106,4 +107,5 @@ func (s *MachineScope) SetInstance(server *cloud.Server) string {
 func (s *MachineScope) ClearInstance() {
 	s.StackitMachine.Status.InstanceID = ""
 	s.StackitMachine.Status.InstanceState = ""
+	s.StackitMachine.Status.AvailabilityZone = ""
 }

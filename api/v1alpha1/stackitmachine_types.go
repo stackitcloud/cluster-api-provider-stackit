@@ -130,6 +130,10 @@ type StackitMachineStatus struct {
 	// +optional
 	InstanceState string `json:"instanceState,omitempty"`
 
+	// availabilityZone is the STACKIT availability zone where the VM was placed.
+	// +optional
+	AvailabilityZone string `json:"availabilityZone,omitempty"`
+
 	// addresses contains the IP addresses associated with the VM.
 	// +optional
 	Addresses []clusterv1.MachineAddress `json:"addresses,omitempty"`
@@ -159,6 +163,13 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=stackitmachines,shortName=stim,scope=Namespaced,categories=cluster-api
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']",description="Cluster to which this resource belongs"
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready"
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=".status.instanceState",description="STACKIT server state"
+// +kubebuilder:printcolumn:name="Machine Type",type=string,JSONPath=".spec.machineType"
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=".status.addresses[?(@.type=='InternalIP')].address"
+// +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=".status.availabilityZone"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:storageversion
 
 // StackitMachine is the Schema for the stackitmachines API.

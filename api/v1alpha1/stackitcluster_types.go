@@ -230,8 +230,12 @@ const (
 // +kubebuilder:resource:path=stackitclusters,shortName=stic,scope=Namespaced,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready"
+// +kubebuilder:printcolumn:name="Region",type=string,JSONPath=".spec.region"
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=".status.apiServerEndpoint.host"
 // +kubebuilder:printcolumn:name="Bastion IP",type=string,JSONPath=".status.bastion.publicIP"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".spec.network.id",priority=1
+// +kubebuilder:printcolumn:name="Project ID",type=string,JSONPath=".spec.projectID",priority=1
 // +kubebuilder:storageversion
 
 // StackitCluster is the Schema for the stackitclusters API.

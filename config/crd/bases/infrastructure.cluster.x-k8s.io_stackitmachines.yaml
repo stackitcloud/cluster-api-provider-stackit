@@ -18,7 +18,31 @@ spec:
     singular: stackitmachine
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Cluster to which this resource belongs
+      jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - description: STACKIT server state
+      jsonPath: .status.instanceState
+      name: State
+      type: string
+    - jsonPath: .spec.machineType
+      name: Machine Type
+      type: string
+    - jsonPath: .status.addresses[?(@.type=='InternalIP')].address
+      name: IP
+      type: string
+    - jsonPath: .status.availabilityZone
+      name: Zone
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StackitMachine is the Schema for the stackitmachines API.
@@ -150,6 +174,10 @@ spec:
                   - type
                   type: object
                 type: array
+              availabilityZone:
+                description: availabilityZone is the STACKIT availability zone where
+                  the VM was placed.
+                type: string
               conditions:
                 description: conditions represent the current state of the StackitMachine
                   resource.
