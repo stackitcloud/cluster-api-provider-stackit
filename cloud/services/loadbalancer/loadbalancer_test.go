@@ -74,9 +74,10 @@ func TestAPIServerTargets(t *testing.T) {
 			want: []cloud.LoadBalancerTargetInput{{Name: "cp-0", IP: "10.0.0.10"}},
 		},
 		{
-			name:     "falls back to the bootstrap placeholder without machines",
+			// The placeholder belongs to the creation path, not here.
+			name:     "stays empty without machines",
 			machines: nil,
-			want:     []cloud.LoadBalancerTargetInput{{Name: "capi-bootstrap-placeholder", IP: "10.0.0.10"}},
+			want:     nil,
 		},
 		{
 			name:     "tolerates nil entries",
@@ -87,7 +88,7 @@ func TestAPIServerTargets(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := APIServerTargets(test.machines, "10.0.0.10")
+			got := APIServerTargets(test.machines)
 			if len(got) != len(test.want) {
 				t.Fatalf("APIServerTargets() = %#v, want %#v", got, test.want)
 			}
