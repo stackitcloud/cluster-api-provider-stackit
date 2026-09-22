@@ -67,7 +67,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			},
 		}
 
-		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
+		createCredentialsSecret(ctx, credentials)
 		createOwnerCluster(ctx, clusterName)
 		createReadyStackitCluster(ctx, clusterName, namespace, credentials)
 		createOwnerMachine(ctx, machineName, clusterName, stackitName)
@@ -139,6 +139,22 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionTrue, "Available")
 			expectCondition(got.Status.Conditions, infrav1.MachineBootstrapReadyCondition, metav1.ConditionTrue, "Available")
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
+		})
+
+		It("passes Ignition bootstrap data to the server without modification", func() {
+			ignition := []byte("{\n  \"ignition\": {\"version\": \"3.2.0\", \"config\": {\"merge\": [{\"source\": \"https://ignition.example.com/worker\"}]}}\n}\n")
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: bootstrapName}, secret)).To(Succeed())
+			secret.Data = map[string][]byte{"value": ignition, "format": []byte("ignition")}
+			Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(fakeCloud.ServerUserData(got.Status.InstanceID)).To(Equal(ignition))
 		})
 
 		It("does not silently recreate the server of an already-provisioned machine", func() {
@@ -497,6 +513,49 @@ var _ = Describe("StackitMachine Controller", func() {
 				return apierrors.IsNotFound(err)
 			}).Should(BeTrue())
 		})
+
+		DescribeTable("retains the server until credentials are restored", func(missing bool) {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: credentials}, secret)).To(Succeed())
+			if missing {
+				Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+			} else {
+				secret.Data = nil
+				Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+			}
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			if missing {
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
+			}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Finalizers).To(ContainElement(infrav1.MachineFinalizer))
+			expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			By("restoring credentials and completing server cleanup")
+			deleteIfExists(ctx, secret)
+			createCredentialsSecret(ctx, credentials)
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+			_, err = fakeCloud.GetNetwork(ctx, testNetworkID)
+			Expect(err).NotTo(HaveOccurred(), "machine cleanup must preserve the user-owned network")
+			Eventually(func() bool {
+				return apierrors.IsNotFound(k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{}))
+			}).Should(BeTrue())
+		},
+			Entry("when the Secret is missing", true),
+			Entry("when the Secret is invalid", false),
+		)
 
 		It("keeps the finalizer when the server deletion fails", func() {
 			_, err := reconciler.Reconcile(ctx, request)
