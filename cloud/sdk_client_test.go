@@ -211,7 +211,7 @@ func TestSDKClientEnsureAPIServerLoadBalancerUsesBootstrapTargetWhenInitialTarge
 	assertNestedStringField(t, createPayload, []string{"listeners", "0", "targetPool"}, apiserverTargetPoolName)
 }
 
-func TestSDKClientLoadBalancerTargetUpdates(t *testing.T) {
+func TestSDKClientSetsAPIServerTargetPool(t *testing.T) {
 	var mu sync.Mutex
 	targets := []any{
 		map[string]any{"displayName": "cp-0", "ip": "10.0.0.10"},
@@ -247,28 +247,55 @@ func TestSDKClientLoadBalancerTargetUpdates(t *testing.T) {
 	}))
 
 	client := newTestSDKClient(t, server.URL)
-	input := LoadBalancerTargetInput{
-		LoadBalancerID: "apiserver-test",
-		Name:           "cp-1",
-		IP:             "10.0.0.11",
-		Port:           6443,
+	desired := []LoadBalancerTargetInput{
+		{Name: "cp-0", IP: "10.0.0.10"},
+		{Name: "cp-1", IP: "10.0.0.11"},
 	}
-	if err := client.EnsureAPIServerLoadBalancerTarget(context.Background(), input); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancerTarget() error = %v", err)
+	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), "apiserver-test", 6443, desired); err != nil {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() error = %v", err)
 	}
-	if err := client.DeleteAPIServerLoadBalancerTarget(context.Background(), input); err != nil {
-		t.Fatalf("DeleteAPIServerLoadBalancerTarget() error = %v", err)
+	if len(updatePayloads) != 1 {
+		t.Fatalf("got %d update payloads, want 1", len(updatePayloads))
+	}
+	assertNestedStringField(t, updatePayloads[0], []string{"targets", "0", "displayName"}, "cp-0")
+	assertNestedStringField(t, updatePayloads[0], []string{"targets", "1", "displayName"}, "cp-1")
+	assertNestedStringField(t, updatePayloads[0], []string{"targets", "1", "ip"}, "10.0.0.11")
+
+	// An unchanged pool must not turn into a write.
+	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), "apiserver-test", 6443, desired); err != nil {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() repeat error = %v", err)
+	}
+	if len(updatePayloads) != 1 {
+		t.Fatalf("got %d update payloads after an unchanged set, want 1", len(updatePayloads))
 	}
 
+	if err := client.SetAPIServerLoadBalancerTargets(
+		context.Background(),
+		"apiserver-test",
+		6443,
+		desired[:1],
+	); err != nil {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() shrink error = %v", err)
+	}
 	if len(updatePayloads) != 2 {
 		t.Fatalf("got %d update payloads, want 2", len(updatePayloads))
 	}
-	assertNestedStringField(t, updatePayloads[0], []string{"targets", "1", "displayName"}, "cp-1")
-	assertNestedStringField(t, updatePayloads[0], []string{"targets", "1", "ip"}, "10.0.0.11")
 	if got := nestedValue(t, updatePayloads[1], []string{"targets"}).([]any); len(got) != 1 {
-		t.Fatalf("delete target payload targets = %#v, want one remaining target", got)
+		t.Fatalf("shrunk target payload targets = %#v, want one remaining target", got)
 	}
 	assertNestedStringField(t, updatePayloads[1], []string{"targets", "0", "displayName"}, "cp-0")
+}
+
+func TestSDKClientRejectsEmptyAPIServerTargetPool(t *testing.T) {
+	server := newSDKTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	err := client.SetAPIServerLoadBalancerTargets(context.Background(), "apiserver-test", 6443, nil)
+	if !IsInvalidInput(err) {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() error = %v, want ErrInvalidInput", err)
+	}
 }
 
 func TestSDKClientClassifiesHTTPStatusCodes(t *testing.T) {
