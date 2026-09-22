@@ -13,17 +13,16 @@ package controller
 import (
 	"context"
 
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 )
 
 const (
@@ -140,52 +139,40 @@ func updateMachineControlPlaneLabel(ctx context.Context, name string) {
 	Expect(k8sClient.Update(ctx, machine)).To(Succeed())
 }
 
-type loadBalancerEnsurer interface {
-	EnsureAPIServerLoadBalancer(context.Context, cloud.LoadBalancerInput) (*cloud.LoadBalancer, error)
-}
-
-func createAPIServerLoadBalancer(ctx context.Context, cloudClient loadBalancerEnsurer) string {
-	lb, err := cloudClient.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-		Name:      "apiserver",
-		ProjectID: testProjectID,
-		Region:    "eu01",
-		NetworkID: testNetworkID,
-		Port:      6443,
-		Tags:      map[string]string{"test": "apiserver"},
+// createControlPlaneMachine creates a control plane Machine and registers its
+// cleanup. An empty ip leaves it without addresses, as while provisioning.
+func createControlPlaneMachine(ctx context.Context, name, clusterName, ip string) {
+	createOwnerMachine(ctx, name, clusterName, "stackit-"+name)
+	DeferCleanup(func() {
+		deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}})
 	})
-	Expect(err).NotTo(HaveOccurred())
-	return lb.ID
-}
-
-func updateStackitClusterLoadBalancer(ctx context.Context, name, namespace, loadBalancerID string) {
-	stackitCluster := &infrav1.StackitCluster{}
-	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, stackitCluster)).To(Succeed())
-	stackitCluster.Spec.APIServerLoadBalancer.Enabled = true
-	Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
-	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, stackitCluster)).To(Succeed())
-	stackitCluster.Status.APIServerLoadBalancerID = loadBalancerID
-	Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
-}
-
-func enableStackitClusterLoadBalancer(ctx context.Context, name, namespace string) {
-	stackitCluster := &infrav1.StackitCluster{}
-	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, stackitCluster)).To(Succeed())
-	stackitCluster.Spec.APIServerLoadBalancer.Enabled = true
-	Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
-}
-
-func reconcileStackitClusterOnce(ctx context.Context, name, namespace string, cloudClient cloud.Client) {
-	reconciler := &StackitClusterReconciler{
-		Client: k8sClient,
-		Scheme: k8sClient.Scheme(),
-		CloudClientFactory: func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			return cloudClient, nil
-		},
+	updateMachineControlPlaneLabel(ctx, name)
+	if ip != "" {
+		setMachineInternalIP(ctx, name, ip)
 	}
-	_, err := reconciler.Reconcile(ctx, reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: name, Namespace: namespace},
-	})
-	Expect(err).NotTo(HaveOccurred())
+}
+
+// markMachineDeleting leaves a Machine with a deletion timestamp and a
+// finalizer, the state a control plane node is in while it drains.
+func markMachineDeleting(ctx context.Context, name string) {
+	machine := &clusterv1.Machine{}
+	key := client.ObjectKey{Name: name, Namespace: "default"}
+	Expect(k8sClient.Get(ctx, key, machine)).To(Succeed())
+	machine.Finalizers = append(machine.Finalizers, "test.stackit.cloud/block-deletion")
+	Expect(k8sClient.Update(ctx, machine)).To(Succeed())
+	Expect(k8sClient.Delete(ctx, machine)).To(Succeed())
+}
+
+// setMachineInternalIP stands in for the Cluster API machine controller, which
+// copies status.addresses from the StackitMachine but does not run in envtest.
+func setMachineInternalIP(ctx context.Context, name, ip string) {
+	machine := &clusterv1.Machine{}
+	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: "default"}, machine)).To(Succeed())
+	machine.Status.Addresses = []clusterv1.MachineAddress{{
+		Type:    clusterv1.MachineInternalIP,
+		Address: ip,
+	}}
+	Expect(k8sClient.Status().Update(ctx, machine)).To(Succeed())
 }
 
 func expectCondition(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason string) {

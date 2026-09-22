@@ -681,6 +681,171 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
 	})
 
+	It("fills the target pool with the control plane machine addresses", func() {
+		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "10.0.0.11")
+		createControlPlaneMachine(ctx, "cp-1-"+clusterName, clusterName, "10.0.0.12")
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(fakeCloud.LoadBalancerTargetIPs(got.Status.APIServerLoadBalancerID)).To(Equal(map[string]string{
+			"cp-0-" + clusterName: "10.0.0.11",
+			"cp-1-" + clusterName: "10.0.0.12",
+		}))
+		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionTrue, "Available")
+	})
+
+	It("keeps the bootstrap placeholder while no control plane machine has an address", func() {
+		// STACKIT rejects an empty target pool.
+		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "")
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(fakeCloud.LoadBalancerTargetIPs(got.Status.APIServerLoadBalancerID)).To(Equal(map[string]string{
+			"capi-bootstrap-placeholder": "10.0.0.1",
+		}))
+	})
+
+	It("keeps worker machines out of the target pool", func() {
+		machineName := "worker-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+		})
+		setMachineInternalIP(ctx, machineName, "10.0.0.11")
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(fakeCloud.LoadBalancerTargetIPs(got.Status.APIServerLoadBalancerID)).To(Equal(map[string]string{
+			"capi-bootstrap-placeholder": "10.0.0.1",
+		}))
+	})
+
+	It("drops a control plane machine that is being deleted from the target pool", func() {
+		deleting := "cp-0-" + clusterName
+		createControlPlaneMachine(ctx, deleting, clusterName, "10.0.0.11")
+		createControlPlaneMachine(ctx, "cp-1-"+clusterName, clusterName, "10.0.0.12")
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		loadBalancerID := got.Status.APIServerLoadBalancerID
+		Expect(fakeCloud.LoadBalancerTargetCount(loadBalancerID)).To(Equal(2))
+
+		markMachineDeleting(ctx, deleting)
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		// The target goes before the node is drained, not after.
+		Expect(fakeCloud.LoadBalancerTargetIPs(loadBalancerID)).To(Equal(map[string]string{
+			"cp-1-" + clusterName: "10.0.0.12",
+		}))
+	})
+
+	It("keeps the target pool when every control plane machine is being deleted", func() {
+		// Cluster deletion removes the control plane before the infrastructure.
+		first := "cp-0-" + clusterName
+		second := "cp-1-" + clusterName
+		createControlPlaneMachine(ctx, first, clusterName, "10.0.0.11")
+		createControlPlaneMachine(ctx, second, clusterName, "10.0.0.12")
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		loadBalancerID := got.Status.APIServerLoadBalancerID
+
+		markMachineDeleting(ctx, first)
+		markMachineDeleting(ctx, second)
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(fakeCloud.LoadBalancerTargetIPs(loadBalancerID)).To(Equal(map[string]string{
+			first:  "10.0.0.11",
+			second: "10.0.0.12",
+		}), "the pool must not collapse onto the bootstrap placeholder")
+	})
+
+	It("requeues without failing the cluster when the target pool update fails", func() {
+		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "10.0.0.11")
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeTrue())
+
+		fakeCloud.FailNextSetTargets = fmt.Errorf("update target pool timeout: %w", cloud.ErrTransient)
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionFalse, "LoadBalancerTargetError")
+		// The machine reconciler stops while the cluster is not ready, so a
+		// broken target pool must not take the cluster down with it.
+		Expect(got.Status.Ready).To(BeTrue())
+		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionTrue, "Available")
+	})
+
+	It("requeues when the first target pool update fails permanently", func() {
+		// Without the requeue nothing would drive another reconcile.
+		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "10.0.0.11")
+		fakeCloud.FailNextSetTargets = fmt.Errorf("target pool rejected: %w", cloud.ErrInvalidInput)
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionFalse, "LoadBalancerTargetError")
+
+		By("recovering on the next attempt")
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeTrue())
+		Expect(fakeCloud.LoadBalancerTargetIPs(got.Status.APIServerLoadBalancerID)).To(Equal(map[string]string{
+			"cp-0-" + clusterName: "10.0.0.11",
+		}))
+	})
+
+	It("maps control plane Machine events to StackitCluster reconcile requests", func() {
+		machineName := "cp-0-" + clusterName
+		createControlPlaneMachine(ctx, machineName, clusterName, "10.0.0.11")
+
+		machine := &clusterv1.Machine{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
+		Expect(reconciler.stackitClusterRequestsForMachine(ctx, machine)).To(Equal([]reconcile.Request{request}))
+	})
+
+	It("ignores worker Machine events", func() {
+		machineName := "worker-" + clusterName
+		createOwnerMachine(ctx, machineName, clusterName, "stackit-"+machineName)
+		DeferCleanup(func() {
+			deleteIfExists(ctx, &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: machineName, Namespace: namespace}})
+		})
+
+		machine := &clusterv1.Machine{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
+		Expect(reconciler.stackitClusterRequestsForMachine(ctx, machine)).To(BeEmpty())
+	})
+
 	It("maps owning Cluster events to StackitCluster reconcile requests", func() {
 		cluster := &clusterv1.Cluster{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())

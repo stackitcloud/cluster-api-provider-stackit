@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,9 +31,12 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterutil "sigs.k8s.io/cluster-api/util"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
@@ -118,6 +124,38 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCluster(_ context.Co
 	}}
 }
 
+// stackitClusterRequestsForMachine keeps the API server load balancer target
+// pool in step with the control plane. Worker machines never appear in it.
+func (r *StackitClusterReconciler) stackitClusterRequestsForMachine(ctx context.Context, obj client.Object) []reconcile.Request {
+	machine, ok := obj.(*clusterv1.Machine)
+	if !ok || !clusterutil.IsControlPlaneMachine(machine) {
+		return nil
+	}
+	cluster, err := clusterutil.GetClusterFromMetadata(ctx, r.Client, machine.ObjectMeta)
+	switch {
+	// A missing label or an already deleted Cluster is routine during teardown.
+	case errors.Is(err, clusterutil.ErrNoCluster) || apierrors.IsNotFound(err):
+		return nil
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "Failed to get Cluster for Machine watch", "machine", client.ObjectKeyFromObject(machine))
+		return nil
+	}
+	return r.stackitClusterRequestsForCluster(ctx, cluster)
+}
+
+// machineTargetPoolChanged drops the frequent control plane status updates that
+// cannot change the target pool but would each cost a reconcile.
+func machineTargetPoolChanged(e event.UpdateEvent) bool {
+	oldMachine, okOld := e.ObjectOld.(*clusterv1.Machine)
+	newMachine, okNew := e.ObjectNew.(*clusterv1.Machine)
+	if !okOld || !okNew {
+		return true
+	}
+	return !slices.Equal(oldMachine.Status.Addresses, newMachine.Status.Addresses) ||
+		oldMachine.DeletionTimestamp.IsZero() != newMachine.DeletionTimestamp.IsZero() ||
+		!maps.Equal(oldMachine.Labels, newMachine.Labels)
+}
+
 func (r *StackitClusterReconciler) stackitClusterRequestsForCloudInitRef(ctx context.Context, obj client.Object) []reconcile.Request {
 	kind := ""
 	switch obj.(type) {
@@ -156,6 +194,11 @@ func (r *StackitClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.StackitCluster{}).
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCluster)).
+		Watches(
+			&clusterv1.Machine{},
+			handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForMachine),
+			builder.WithPredicates(predicate.Funcs{UpdateFunc: machineTargetPoolChanged}),
+		).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
 		Named("stackitcluster").
