@@ -59,7 +59,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			},
 		}
 
-		createCredentialsSecret(ctx, credentials, namespace, testProjectID)
+		createCredentialsSecret(ctx, credentials)
 		createOwnerCluster(ctx, clusterName)
 		stackitClust = newStackitCluster(clusterName, namespace, true)
 		stackitClust.Spec.CredentialsSecretRef.Name = credentials
@@ -277,40 +277,59 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
 	})
 
-	It("finalizes deletion when the credentials Secret is already gone", func() {
-		// The Secret commonly disappears first during namespace teardown, and
-		// without it no cloud client can be built at all.
-		createOwnerCluster(ctx, clusterName+"-nocreds")
-		defer deleteIfExists(ctx, &clusterv1.Cluster{
-			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-nocreds", Namespace: namespace},
-		})
-		orphaned := newStackitCluster(clusterName+"-nocreds", namespace, false)
-		orphaned.Spec.CredentialsSecretRef.Name = credentials
-		orphaned.Spec.Bastion = validBastionSpec()
-		Expect(k8sClient.Create(ctx, orphaned)).To(Succeed())
-		defer deleteIfExists(ctx, orphaned)
-
-		key := types.NamespacedName{Namespace: namespace, Name: orphaned.Name}
-		req := reconcile.Request{NamespacedName: key}
-		_, err := reconciler.Reconcile(ctx, req)
+	DescribeTable("retains cluster resources until credentials are restored", func(missing bool) {
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 
-		By("removing the credentials Secret, as namespace teardown would")
-		Expect(k8sClient.Delete(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: credentials, Namespace: namespace},
-		})).To(Succeed())
-
-		got := &infrav1.StackitCluster{}
-		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: credentials}, secret)).To(Succeed())
+		if missing {
+			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+		} else {
+			secret.Data = nil
+			Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
-		_, err = reconciler.Reconcile(ctx, req)
-		Expect(err).NotTo(HaveOccurred(), "deletion must not block on a Secret that can never come back")
+		result, err := reconciler.Reconcile(ctx, request)
+		if missing {
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
+		}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
+		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(1))
+
+		By("restoring credentials and completing cleanup")
+		deleteIfExists(ctx, secret)
+		createCredentialsSecret(ctx, credentials)
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
+		_, err = fakeCloud.GetNetwork(ctx, testNetworkID)
+		Expect(err).NotTo(HaveOccurred(), "cluster cleanup must preserve the user-owned network")
 
 		Eventually(func() bool {
-			return apierrors.IsNotFound(k8sClient.Get(ctx, key, &infrav1.StackitCluster{}))
-		}).Should(BeTrue(), "cluster stayed in Terminating because the finalizer was never removed")
-	})
+			return apierrors.IsNotFound(k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{}))
+		}).Should(BeTrue())
+	},
+		Entry("when the Secret is missing", true),
+		Entry("when the Secret is invalid", false),
+	)
 
 	It("tears the bastion down when disabled even if its status was never persisted", func() {
 		// With the status lost, a status-gated teardown would report the bastion
