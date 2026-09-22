@@ -19,7 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -27,9 +29,11 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -62,6 +66,7 @@ func main() {
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
 	var enableLeaderElection bool
+	var namespace, leaderElectionNamespace string
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
@@ -72,6 +77,9 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&namespace, "namespace", "", "Namespace to watch. Leave empty to watch all namespaces.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
+		"Namespace for leader election leases. Defaults to --namespace when set, otherwise the pod namespace.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
@@ -158,7 +166,7 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	managerOptions := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -176,7 +184,12 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
-	})
+	}
+	if err := configureNamespaces(&managerOptions, namespace, leaderElectionNamespace); err != nil {
+		setupLog.Error(err, "Invalid namespace configuration")
+		os.Exit(1)
+	}
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), managerOptions)
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
 		os.Exit(1)
@@ -234,4 +247,28 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// configureNamespaces keeps the cached reads and watches in the requested
+// namespace. The default lease namespace follows the watch namespace so that
+// multiple namespaced managers can each elect a leader using namespaced RBAC.
+func configureNamespaces(options *ctrl.Options, namespace, leaderElectionNamespace string) error {
+	for name, value := range map[string]string{
+		"namespace": namespace, "leader-election-namespace": leaderElectionNamespace,
+	} {
+		if value == "" {
+			continue
+		}
+		if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+			return fmt.Errorf("--%s must be a valid namespace: %s", name, strings.Join(problems, "; "))
+		}
+	}
+	if namespace != "" {
+		options.Cache.DefaultNamespaces = map[string]cache.Config{namespace: {}}
+		if leaderElectionNamespace == "" {
+			leaderElectionNamespace = namespace
+		}
+	}
+	options.LeaderElectionNamespace = leaderElectionNamespace
+	return nil
 }

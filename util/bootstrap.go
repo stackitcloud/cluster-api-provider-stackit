@@ -26,10 +26,10 @@ const (
 // does not contain one of the expected keys.
 var ErrBootstrapDataInvalid = errors.New("bootstrap data invalid: secret has no \"value\" or \"userData\" key")
 
-// ExtractBootstrapData returns the bootstrap payload from a Secret produced
-// by CABPK/KubeadmConfig. Per spec section 13.2 it checks "value" first, then
-// "userData". It returns ErrBootstrapDataInvalid when neither key is present
-// or both are empty.
+// ExtractBootstrapData returns an opaque bootstrap payload from a Secret.
+// Both cloud-init and Ignition documents are passed through unchanged. It
+// checks "value" first, then "userData", and returns ErrBootstrapDataInvalid
+// when neither key is present or both are empty.
 func ExtractBootstrapData(secret *corev1.Secret) ([]byte, error) {
 	if data, ok := secret.Data["value"]; ok && len(data) > 0 {
 		return data, nil

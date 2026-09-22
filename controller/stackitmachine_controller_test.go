@@ -141,6 +141,22 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
 		})
 
+		It("passes Ignition bootstrap data to the server without modification", func() {
+			ignition := []byte("{\n  \"ignition\": {\"version\": \"3.2.0\", \"config\": {\"merge\": [{\"source\": \"https://ignition.example.com/worker\"}]}}\n}\n")
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: bootstrapName}, secret)).To(Succeed())
+			secret.Data = map[string][]byte{"value": ignition, "format": []byte("ignition")}
+			Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(fakeCloud.ServerUserData(got.Status.InstanceID)).To(Equal(ignition))
+		})
+
 		It("does not silently recreate the server of an already-provisioned machine", func() {
 			// Recreating it would replay bootstrap data pinned to the previous
 			// identity: the replacement either never rejoins or rejoins while Machine

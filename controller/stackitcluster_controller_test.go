@@ -116,6 +116,40 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionTrue, "Skipped")
 	})
 
+	DescribeTable("leaves externally managed infrastructure untouched", func(managedBy string, deleting bool) {
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Annotations = map[string]string{clusterv1.ManagedByAnnotation: managedBy}
+		if deleting {
+			// Keep the object observable while deletion is in progress. The
+			// external controller is responsible for its own finalizers.
+			got.Finalizers = []string{"external.example.com/cleanup"}
+		}
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		got.Status.Ready = true
+		got.Status.Initialization.Provisioned = true
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+		if deleting {
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		before := got.DeepCopy()
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			Fail("externally managed clusters must not access cloud resources")
+			return nil, nil
+		}
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got).To(Equal(before))
+	},
+		Entry("during normal reconciliation", "external.example.com/controller", false),
+		Entry("when the annotation value is empty", "", false),
+		Entry("during deletion", "external.example.com/controller", true),
+	)
+
 	It("creates the bastion and publishes its public IP when enabled", func() {
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
