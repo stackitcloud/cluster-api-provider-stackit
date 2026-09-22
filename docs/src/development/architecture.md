@@ -56,6 +56,7 @@ balancer endpoint.
 - Reading credentials
 - Looking up the configured network
 - Managing the optional API server load balancer
+- Maintaining its target pool from the control-plane machines of the cluster
 - Publishing failure domains
 - Updating readiness and contract status
 - Cleaning up provider-managed load balancers on deletion
@@ -65,8 +66,7 @@ balancer endpoint.
 - Waiting for bootstrap data
 - Creating STACKIT servers
 - Setting provider IDs and addresses
-- Registering control-plane machines as API server load balancer targets
-- Deleting servers and load balancer targets on teardown
+- Deleting servers on teardown
 
 Reconciliation must be idempotent. Re-running the same reconcile loop should be
 safe and should not create duplicate cloud resources.
