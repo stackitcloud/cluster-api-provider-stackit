@@ -28,7 +28,6 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
-	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -152,19 +151,6 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		)
 	}
 
-	if err := r.reconcileAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope, server); err != nil {
-		machineScope.SetNotReady("LoadBalancerTargetError", err.Error(), infrav1.MachineReadyCondition)
-		return util.CloudFailureResult(
-			&stackitMachine.Status.Conditions,
-			stackitMachine.Generation,
-			"LoadBalancerTargetError",
-			err,
-			retryableErrorRequeueAfter,
-			true,
-			infrav1.MachineReadyCondition,
-		)
-	}
-
 	machineScope.SetReady()
 	log.V(1).Info("StackitMachine ready", "providerID", providerID)
 	return ctrl.Result{}, nil
@@ -212,10 +198,6 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 		)
 		return resultErr
 	}
-	if err := r.deleteAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope); err != nil {
-		return err
-	}
-
 	instanceID, err := r.resolveServerForDeletion(ctx, cloudClient, machineScope)
 	if err != nil {
 		return err
@@ -357,60 +339,6 @@ func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	return err
 }
 
-func (r *StackitMachineReconciler) reconcileAPIServerLoadBalancerTarget(
-	ctx context.Context,
-	cloudClient cloud.Client,
-	machineScope *scope.MachineScope,
-	server *cloud.Server,
-) error {
-	if !isControlPlaneMachine(machineScope.Machine) || !machineScope.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
-		return nil
-	}
-	loadBalancerID, err := loadbalancerservice.EnsureForMachine(
-		ctx,
-		cloudClient,
-		machineScope.StackitCluster,
-		machineScope.Machine.Name,
-		server.Addresses,
-	)
-	if err != nil {
-		return err
-	}
-
-	target, err := loadbalancerservice.TargetForMachine(machineScope.Machine.Name, server.Addresses)
-	if err != nil {
-		return err
-	}
-	target.LoadBalancerID = loadBalancerID
-	return cloudClient.EnsureAPIServerLoadBalancerTarget(ctx, target)
-}
-
-func (r *StackitMachineReconciler) deleteAPIServerLoadBalancerTarget(
-	ctx context.Context,
-	cloudClient cloud.Client,
-	machineScope *scope.MachineScope,
-) error {
-	if !isControlPlaneMachine(machineScope.Machine) || !machineScope.StackitCluster.Spec.APIServerLoadBalancer.Enabled {
-		return nil
-	}
-	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, machineScope.StackitCluster)
-	if err != nil {
-		return err
-	}
-	if loadBalancerID == "" {
-		return nil
-	}
-	err = cloudClient.DeleteAPIServerLoadBalancerTarget(ctx, cloud.LoadBalancerTargetInput{
-		LoadBalancerID: loadBalancerID,
-		Name:           machineScope.Machine.Name,
-		Port:           defaultAPIServerPort,
-	})
-	if cloud.IsNotFound(err) {
-		return nil
-	}
-	return err
-}
-
 func (r *StackitMachineReconciler) getStackitCluster(ctx context.Context, cluster *clusterv1.Cluster) (*infrav1.StackitCluster, error) {
 	if cluster.Spec.InfrastructureRef.Name == "" {
 		return nil, nil
@@ -439,12 +367,4 @@ func machineAddressesFromCloud(in []cloud.Address) []clusterv1.MachineAddress {
 		}
 	}
 	return out
-}
-
-func isControlPlaneMachine(machine *clusterv1.Machine) bool {
-	if machine == nil {
-		return false
-	}
-	_, ok := machine.Labels[clusterv1.MachineControlPlaneLabel]
-	return ok
 }

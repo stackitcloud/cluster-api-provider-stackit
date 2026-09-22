@@ -568,11 +568,20 @@ func (c *SDKClient) ListAPIServerLoadBalancersByTags(
 	return matched, nil
 }
 
-func (c *SDKClient) EnsureAPIServerLoadBalancerTarget(ctx context.Context, input LoadBalancerTargetInput) error {
-	if input.LoadBalancerID == "" || input.Name == "" || input.IP == "" {
-		return fmt.Errorf("%w: load balancer ID, target name, and target IP are required", ErrInvalidInput)
+func (c *SDKClient) SetAPIServerLoadBalancerTargets(
+	ctx context.Context,
+	loadBalancerID string,
+	port int32,
+	targets []LoadBalancerTargetInput,
+) error {
+	if loadBalancerID == "" || port <= 0 {
+		return fmt.Errorf("%w: load balancer ID and target port are required", ErrInvalidInput)
 	}
-	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, input.LoadBalancerID).Execute()
+	// STACKIT NLB target pools must contain at least one target.
+	if len(targets) == 0 {
+		return fmt.Errorf("%w: at least one target is required", ErrInvalidInput)
+	}
+	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, loadBalancerID).Execute()
 	if err != nil {
 		return classifySDKError("get load balancer", err)
 	}
@@ -581,68 +590,43 @@ func (c *SDKClient) EnsureAPIServerLoadBalancerTarget(ctx context.Context, input
 		return fmt.Errorf(
 			"%w: load balancer %q has no %q target pool",
 			ErrNotFound,
-			input.LoadBalancerID,
+			loadBalancerID,
 			apiserverTargetPoolName,
 		)
 	}
 
-	targets := withoutBootstrapTarget(targetPool.GetTargets())
-	for i := range targets {
-		if targets[i].GetDisplayName() == input.Name || targets[i].GetIp() == input.IP {
-			targets[i].SetDisplayName(input.Name)
-			targets[i].SetIp(input.IP)
-			return c.updateAPIServerTargetPool(ctx, input.LoadBalancerID, targetPool, targets, input.Port)
+	desired := make([]lb.Target, 0, len(targets))
+	for _, targetInput := range targets {
+		if targetInput.Name == "" || targetInput.IP == "" {
+			return fmt.Errorf("%w: target name and target IP are required", ErrInvalidInput)
 		}
+		target := lb.NewTarget()
+		target.SetDisplayName(targetInput.Name)
+		target.SetIp(targetInput.IP)
+		desired = append(desired, *target)
 	}
-
-	target := lb.NewTarget()
-	target.SetDisplayName(input.Name)
-	target.SetIp(input.IP)
-	targets = append(targets, *target)
-	return c.updateAPIServerTargetPool(ctx, input.LoadBalancerID, targetPool, targets, input.Port)
+	// Control plane status updates are frequent, and each one reaches this path.
+	if targetPool.GetTargetPort() == port && sameTargets(targetPool.GetTargets(), desired) {
+		return nil
+	}
+	return c.updateAPIServerTargetPool(ctx, loadBalancerID, targetPool, desired, port)
 }
 
-func withoutBootstrapTarget(targets []lb.Target) []lb.Target {
-	out := targets[:0]
-	for _, target := range targets {
-		if target.GetDisplayName() == bootstrapTargetName {
-			continue
+func sameTargets(current, desired []lb.Target) bool {
+	if len(current) != len(desired) {
+		return false
+	}
+	byName := make(map[string]string, len(current))
+	for _, target := range current {
+		byName[target.GetDisplayName()] = target.GetIp()
+	}
+	for _, target := range desired {
+		ip, ok := byName[target.GetDisplayName()]
+		if !ok || ip != target.GetIp() {
+			return false
 		}
-		out = append(out, target)
 	}
-	return out
-}
-
-func (c *SDKClient) DeleteAPIServerLoadBalancerTarget(ctx context.Context, input LoadBalancerTargetInput) error {
-	if input.LoadBalancerID == "" || input.Name == "" {
-		return fmt.Errorf("%w: load balancer ID and target name are required", ErrInvalidInput)
-	}
-	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, input.LoadBalancerID).Execute()
-	if err != nil {
-		return classifySDKError("get load balancer", err)
-	}
-	targetPool := apiServerTargetPool(loadBalancer)
-	if targetPool == nil {
-		return nil
-	}
-
-	targets := targetPool.GetTargets()
-	out := make([]lb.Target, 0, len(targets))
-	for _, target := range targets {
-		if target.GetDisplayName() == input.Name {
-			continue
-		}
-		out = append(out, target)
-	}
-	if len(out) == len(targets) {
-		return nil
-	}
-	if len(out) == 0 {
-		// STACKIT NLB target pools must contain at least one target. Leave the
-		// last target in place; deleting the load balancer removes it.
-		return nil
-	}
-	return c.updateAPIServerTargetPool(ctx, input.LoadBalancerID, targetPool, out, input.Port)
+	return true
 }
 
 func (c *SDKClient) findLoadBalancerByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {

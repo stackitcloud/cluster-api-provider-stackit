@@ -118,6 +118,24 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCluster(_ context.Co
 	}}
 }
 
+// stackitClusterRequestsForMachine keeps the API server load balancer target
+// pool in step with the control plane. Worker machines never appear in it.
+func (r *StackitClusterReconciler) stackitClusterRequestsForMachine(ctx context.Context, obj client.Object) []reconcile.Request {
+	machine, ok := obj.(*clusterv1.Machine)
+	if !ok || !clusterutil.IsControlPlaneMachine(machine) {
+		return nil
+	}
+	cluster, err := clusterutil.GetClusterFromMetadata(ctx, r.Client, machine.ObjectMeta)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to resolve Cluster for machine watch", "object", client.ObjectKeyFromObject(obj))
+		return nil
+	}
+	if cluster == nil {
+		return nil
+	}
+	return r.stackitClusterRequestsForCluster(ctx, cluster)
+}
+
 func (r *StackitClusterReconciler) stackitClusterRequestsForCloudInitRef(ctx context.Context, obj client.Object) []reconcile.Request {
 	kind := ""
 	switch obj.(type) {
@@ -156,6 +174,7 @@ func (r *StackitClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.StackitCluster{}).
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCluster)).
+		Watches(&clusterv1.Machine{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForMachine)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
 		Named("stackitcluster").

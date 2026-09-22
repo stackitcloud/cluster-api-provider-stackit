@@ -89,12 +89,26 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	)
 
 	if stackitCluster.Spec.APIServerLoadBalancer.Enabled {
+		// STACKIT takes an explicit target list rather than label-based
+		// membership, so exactly one reconciler owns the pool. Machines being
+		// deleted drop out here, before the node is drained.
+		machines, err := collections.GetFilteredMachinesForCluster(
+			ctx,
+			r.Client,
+			clusterScope.Cluster,
+			collections.ControlPlaneMachines(clusterScope.Cluster.Name),
+			collections.ActiveMachines,
+		)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("list control plane machines: %w", err)
+		}
+		// The same targets seed the creation, so a load balancer deleted out of
+		// band comes back with the real control plane behind it.
+		targets := loadbalancerservice.APIServerTargets(machines.UnsortedList(), bootstrapTargetIP(network))
+
 		loadBalancer, err := cloudClient.EnsureAPIServerLoadBalancer(
 			ctx,
-			loadbalancerservice.APIServerInput(
-				stackitCluster,
-				[]cloud.LoadBalancerTargetInput{loadbalancerservice.BootstrapTarget(bootstrapTargetIP(network))},
-			),
+			loadbalancerservice.APIServerInput(stackitCluster, targets),
 		)
 		if err != nil {
 			stackitCluster.Status.Ready = false
@@ -133,6 +147,31 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			Port: defaultAPIServerPort,
 		}
 		clusterScope.SetAPIServerEndpoint(endpoint)
+
+		if err := cloudClient.SetAPIServerLoadBalancerTargets(ctx, loadBalancer.ID, defaultAPIServerPort, targets); err != nil {
+			// A permanent failure neither requeues nor returns an error, so
+			// without an event it would pass unnoticed.
+			if !cloud.IsRetryable(err) && r.Recorder != nil {
+				r.Recorder.Eventf(
+					stackitCluster, nil, corev1.EventTypeWarning, "LoadBalancerTargetError", "Update",
+					"Cannot update API server load balancer target pool: %v", err,
+				)
+			}
+			// Scoped to the load balancer condition on purpose: the machine
+			// reconciler stops while the cluster is not ready, so failing the
+			// cluster would block replacing the machine whose target is broken.
+			return util.CloudFailureResult(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				"LoadBalancerTargetError",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterLoadBalancerReadyCondition,
+			)
+		}
+		log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(targets))
+
 		clusterScope.SetConditions(
 			metav1.ConditionTrue,
 			"Available",
