@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
@@ -581,6 +582,17 @@ func (c *SDKClient) SetAPIServerLoadBalancerTargets(
 	if len(targets) == 0 {
 		return fmt.Errorf("%w: at least one target is required", ErrInvalidInput)
 	}
+	desired := make([]lb.Target, 0, len(targets))
+	for _, targetInput := range targets {
+		if targetInput.Name == "" || targetInput.IP == "" {
+			return fmt.Errorf("%w: target name and target IP are required", ErrInvalidInput)
+		}
+		target := lb.NewTarget()
+		target.SetDisplayName(targetInput.Name)
+		target.SetIp(targetInput.IP)
+		desired = append(desired, *target)
+	}
+
 	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, loadBalancerID).Execute()
 	if err != nil {
 		return classifySDKError("get load balancer", err)
@@ -595,16 +607,6 @@ func (c *SDKClient) SetAPIServerLoadBalancerTargets(
 		)
 	}
 
-	desired := make([]lb.Target, 0, len(targets))
-	for _, targetInput := range targets {
-		if targetInput.Name == "" || targetInput.IP == "" {
-			return fmt.Errorf("%w: target name and target IP are required", ErrInvalidInput)
-		}
-		target := lb.NewTarget()
-		target.SetDisplayName(targetInput.Name)
-		target.SetIp(targetInput.IP)
-		desired = append(desired, *target)
-	}
 	// Control plane status updates are frequent, and each one reaches this path.
 	if targetPool.GetTargetPort() == port && sameTargets(targetPool.GetTargets(), desired) {
 		return nil
@@ -616,17 +618,16 @@ func sameTargets(current, desired []lb.Target) bool {
 	if len(current) != len(desired) {
 		return false
 	}
-	byName := make(map[string]string, len(current))
-	for _, target := range current {
-		byName[target.GetDisplayName()] = target.GetIp()
+	return slices.Equal(sortedTargetKeys(current), sortedTargetKeys(desired))
+}
+
+func sortedTargetKeys(targets []lb.Target) []string {
+	keys := make([]string, 0, len(targets))
+	for _, target := range targets {
+		keys = append(keys, target.GetDisplayName()+"\x00"+target.GetIp())
 	}
-	for _, target := range desired {
-		ip, ok := byName[target.GetDisplayName()]
-		if !ok || ip != target.GetIp() {
-			return false
-		}
-	}
-	return true
+	slices.Sort(keys)
+	return keys
 }
 
 func (c *SDKClient) findLoadBalancerByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {

@@ -506,10 +506,13 @@ func (c *Client) SetAPIServerLoadBalancerTargets(
 	}
 	replaced := make(map[string]string, len(targets))
 	for _, target := range targets {
+		// The real API rejects these; accepting them would hide a regression.
+		if target.Name == "" || target.IP == "" {
+			return fmt.Errorf("target name and target IP are required: %w", cloud.ErrInvalidInput)
+		}
 		replaced[target.Name] = target.IP
 	}
 	entry.targets = replaced
-	entry.lb.Port = port
 	return nil
 }
 

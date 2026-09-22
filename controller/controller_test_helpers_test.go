@@ -152,6 +152,17 @@ func createControlPlaneMachine(ctx context.Context, name, clusterName, ip string
 	}
 }
 
+// markMachineDeleting leaves a Machine with a deletion timestamp and a
+// finalizer, the state a control plane node is in while it drains.
+func markMachineDeleting(ctx context.Context, name string) {
+	machine := &clusterv1.Machine{}
+	key := client.ObjectKey{Name: name, Namespace: "default"}
+	Expect(k8sClient.Get(ctx, key, machine)).To(Succeed())
+	machine.Finalizers = append(machine.Finalizers, "test.stackit.cloud/block-deletion")
+	Expect(k8sClient.Update(ctx, machine)).To(Succeed())
+	Expect(k8sClient.Delete(ctx, machine)).To(Succeed())
+}
+
 // setMachineInternalIP stands in for the Cluster API machine controller, which
 // copies status.addresses from the StackitMachine but does not run in envtest.
 func setMachineInternalIP(ctx context.Context, name, ip string) {

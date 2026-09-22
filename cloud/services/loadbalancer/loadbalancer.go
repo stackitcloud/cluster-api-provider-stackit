@@ -53,7 +53,8 @@ func APIServerInput(
 	}
 }
 
-func bootstrapTarget(ip string) cloud.LoadBalancerTargetInput {
+// BootstrapTarget seeds a new load balancer; STACKIT rejects an empty pool.
+func BootstrapTarget(ip string) cloud.LoadBalancerTargetInput {
 	return cloud.LoadBalancerTargetInput{
 		Name: "capi-bootstrap-placeholder",
 		IP:   ip,
@@ -61,10 +62,9 @@ func bootstrapTarget(ip string) cloud.LoadBalancerTargetInput {
 }
 
 // APIServerTargets builds the desired API server target pool, sorted by machine
-// name so the pool can be compared without spurious updates. Machines without an
-// internal IP are still provisioning; while none has one, the bootstrap
-// placeholder keeps the pool non-empty as STACKIT requires.
-func APIServerTargets(machines []*clusterv1.Machine, bootstrapIP string) []cloud.LoadBalancerTargetInput {
+// name so the pool can be compared without spurious updates. The result is empty
+// while no control plane machine has an internal IP yet.
+func APIServerTargets(machines []*clusterv1.Machine) []cloud.LoadBalancerTargetInput {
 	sorted := make([]*clusterv1.Machine, 0, len(machines))
 	for _, machine := range machines {
 		if machine != nil {
@@ -89,9 +89,6 @@ func APIServerTargets(machines []*clusterv1.Machine, bootstrapIP string) []cloud
 		}
 		seen[ip] = struct{}{}
 		targets = append(targets, cloud.LoadBalancerTargetInput{Name: targetName(machine.Name), IP: ip})
-	}
-	if len(targets) == 0 {
-		return []cloud.LoadBalancerTargetInput{bootstrapTarget(bootstrapIP)}
 	}
 	return targets
 }
