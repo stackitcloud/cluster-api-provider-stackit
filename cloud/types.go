@@ -130,8 +130,6 @@ type LoadBalancerInput struct {
 // LoadBalancerTargetInput describes a VM target in the API-server load
 // balancer target pool.
 type LoadBalancerTargetInput struct {
-	LoadBalancerID string
-	Name           string
-	IP             string
-	Port           int32
+	Name string
+	IP   string
 }

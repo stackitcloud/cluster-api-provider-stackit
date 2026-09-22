@@ -51,9 +51,9 @@ type Client interface {
 
 	ListAPIServerLoadBalancersByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error)
 
-	EnsureAPIServerLoadBalancerTarget(ctx context.Context, input LoadBalancerTargetInput) error
-
-	DeleteAPIServerLoadBalancerTarget(ctx context.Context, input LoadBalancerTargetInput) error
+	// SetAPIServerLoadBalancerTargets replaces the contents of the API-server
+	// target pool. STACKIT rejects an empty pool.
+	SetAPIServerLoadBalancerTargets(ctx context.Context, loadBalancerID string, port int32, targets []LoadBalancerTargetInput) error
 
 	DeleteAPIServerLoadBalancer(ctx context.Context, id string) error
 }
