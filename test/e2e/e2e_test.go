@@ -57,10 +57,10 @@ const defaultKubernetesVersion = "v1.33.12"
 const cloudProviderStackitImageRepository = "ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager"
 
 var defaultCloudProviderStackitImages = map[string]string{
-	"1.33": cloudProviderStackitImageRepository + ":v1.33.12",
-	"1.34": cloudProviderStackitImageRepository + ":v1.34.8",
-	"1.35": cloudProviderStackitImageRepository + ":v1.35.3",
-	"1.36": cloudProviderStackitImageRepository + ":v1.36.0",
+	"1.33": cloudProviderStackitImageRepository + ":v1.33.18",
+	"1.34": cloudProviderStackitImageRepository + ":v1.34.12",
+	"1.35": cloudProviderStackitImageRepository + ":v1.35.7",
+	"1.36": cloudProviderStackitImageRepository + ":v1.36.4",
 }
 
 var _ = Describe("Manager", Ordered, func() {

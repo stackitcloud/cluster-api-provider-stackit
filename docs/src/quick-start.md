@@ -14,7 +14,7 @@ required service-account permissions.
 Set the release version to install:
 
 ```sh
-export CAPSTK_VERSION=v0.1.0-alpha.1
+export CAPSTK_VERSION=v0.1.0-alpha.2
 ```
 
 Create `clusterctl.yaml` for that release:
@@ -112,12 +112,12 @@ Set the cluster values and render the template (use
 ```sh
 export CLUSTER_NAME=stackit-workload
 export NAMESPACE=default
-export KUBERNETES_VERSION=v1.35.3
+export KUBERNETES_VERSION=v1.35.8
 export KUBERNETES_APT_REPOSITORY_MINOR=v1.35
 export CONTROL_PLANE_MACHINE_COUNT=1
 export WORKER_MACHINE_COUNT=1
 export STACKIT_CREDENTIALS_SECRET_NAME=stackit-credentials
-export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.3
+export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7
 
 clusterctl generate cluster "${CLUSTER_NAME}" \
   --from cluster-template.yaml \

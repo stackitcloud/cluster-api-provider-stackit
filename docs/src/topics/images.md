@@ -36,7 +36,7 @@ Render the default template like any other clusterctl template:
 
 ```sh
 export STACKIT_IMAGE_ID=<ubuntu-image-id>
-export KUBERNETES_VERSION=v1.35.3
+export KUBERNETES_VERSION=v1.35.8
 export KUBERNETES_APT_REPOSITORY_MINOR=v1.35
 
 clusterctl generate cluster "${CLUSTER_NAME}" \
