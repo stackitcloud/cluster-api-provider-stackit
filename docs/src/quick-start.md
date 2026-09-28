@@ -95,6 +95,12 @@ kubectl create secret generic stackit-credentials \
   --from-file=serviceaccount.json="${STACKIT_SERVICE_ACCOUNT_JSON_FILE}"
 ```
 
+You can retrieve a valid image ID using the STACKIT CLI:
+
+```sh
+stackit image list --project-id "${STACKIT_PROJECT_ID}" --output-format json --label-selector linux,prod | jq -r '.[] | select(.name == "Ubuntu 24.04") | .id'
+```
+
 ## Create a workload cluster
 
 You can use the cluster template directly from the repository's `templates`
@@ -169,6 +175,49 @@ make install-workload-cni \
 
 See [Workload CNI](usage/cni.md) and [Workload Addons](usage/addons.md) for more
 details on CNI options and verification.
+
+## Cleanup
+
+To fully delete the workload cluster and its cloud infrastructure:
+
+```sh
+kubectl delete -f cluster.yaml
+```
+
+Deletion should take at most 5 minutes. Verify that all resources are gone:
+
+```sh
+kubectl get cluster,machine,stackitcluster,stackitmachine --namespace "${NAMESPACE}"
+```
+
+### Troubleshooting stuck deletion
+
+If resources persist after several minutes:
+
+1. Check the status and conditions of persisting resources:
+
+   ```sh
+   kubectl describe cluster,machine,stackitcluster,stackitmachine --namespace "${NAMESPACE}"
+   ```
+
+2. Inspect the controller logs for errors:
+
+   ```sh
+   # Core Cluster API controller
+   kubectl logs -n capi-system deployment/capi-controller-manager -c manager --tail=100
+
+   # STACKIT provider controller
+   kubectl logs -n cluster-api-provider-stackit-system deployment/cluster-api-provider-stackit-controller-manager --tail=100
+   ```
+
+3. If a `StackitMachine` cannot finish deletion and blocks its parent resources, you can remove its finalizer:
+
+   ```sh
+   kubectl patch stackitmachine <stackitmachine-name> -n "${NAMESPACE}" \
+     --type=merge -p '{"metadata":{"finalizers":null}}'
+   ```
+
+   Removing the finalizer unblocks Kubernetes deletion for that resource and its parents. You may then have to manually delete the actual VM in the STACKIT portal or through the STACKIT API.
 
 Use the [development guide](development/index.md) when you want to build and
 run the provider from a local checkout.
