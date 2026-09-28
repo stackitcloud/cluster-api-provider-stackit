@@ -31,6 +31,43 @@ control-plane and worker VMs.
   `spec.template.spec.sshKeyName`. The bastion does not inject SSH keys into
   existing node VMs.
 
+## Configure SSH keys for the service account
+
+The CAPSTK controller authenticates to STACKIT through a service account key. Because SSH key pairs are scoped to the authenticated identity in this case a service account, the SSH keys you want to use on the bastion or on cluster machines must be attached under that exact service account and not your personal user.
+
+1. Generate an SSH key pair locally if you do not already have one:
+
+   ```sh
+   ssh-keygen -t ed25519 -f ~/.ssh/id_stackit -C "capstk-access"
+   ```
+
+2. Authenticate the STACKIT CLI using your service account credentials:
+
+   ```sh
+   stackit auth activate-service-account \
+     --service-account-key-path /path/to/service-account.json
+   ```
+
+3. Import the public key as a key pair under that service account:
+
+   ```sh
+   export STACKIT_SSH_KEY_NAME="capstk-key"
+
+   stackit key-pair create \
+     --project-id "${STACKIT_PROJECT_ID}" \
+     --region "${STACKIT_REGION}" \
+     --name "${STACKIT_SSH_KEY_NAME}" \
+     --public-key "@${HOME}/.ssh/id_stackit.pub"
+   ```
+
+4. Reference the key in your cluster definition:
+
+   When using `templates/cluster-template-bastion.yaml`, pass the key name to the template variables:
+   - `STACKIT_BASTION_SSH_KEY_NAME`: sets `spec.bastion.sshKeyName` on `StackitCluster`
+   - `STACKIT_SSH_KEY_NAME`: sets `spec.template.spec.sshKeyName` on `StackitMachineTemplate` for control-plane and worker nodes
+
+   You can use separate keys for the bastion and the nodes, or point both variables to the same key.
+
 ## Enable the bastion
 
 Patch or edit the generated `StackitCluster`:

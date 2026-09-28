@@ -129,6 +129,15 @@ by CABPK, stored in a Kubernetes Secret, and sent to STACKIT as cloud-init user
 data when each server is created. Leave `sshKeyName` and
 `STACKIT_SSH_KEY_NAME` empty when SSH access is not required.
 
+Because the CAPSTK controller accesses STACKIT through a service account, the SSH key pairs must be attached to that service account. Key pairs are scoped per identity and cannot be shared across service accounts or users.
+
+Authenticate the STACKIT CLI using your service account credentials:
+
+```sh
+stackit auth activate-service-account \
+  --service-account-key-path "${STACKIT_SERVICE_ACCOUNT_JSON_FILE}"
+```
+
 Import an existing SSH public key:
 
 ```sh
