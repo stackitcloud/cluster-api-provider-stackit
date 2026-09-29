@@ -85,7 +85,7 @@ template:
 ```sh
 export CLUSTER_NAME=stackit-workload
 export NAMESPACE=default
-export KUBERNETES_VERSION=v1.35.3
+export KUBERNETES_VERSION=v1.35.8
 export KUBERNETES_APT_REPOSITORY_MINOR=v1.35
 export CONTROL_PLANE_MACHINE_COUNT=1
 export WORKER_MACHINE_COUNT=1
@@ -99,7 +99,7 @@ export STACKIT_CREDENTIALS_SECRET_NAME=stackit-credentials
 
 export STACKIT_SERVICE_ACCOUNT_JSON_FILE=./.stackit/cluster-api-provider-stackit-serviceaccount.json
 export STACKIT_SERVICE_ACCOUNT_JSON_B64="$(base64 < "${STACKIT_SERVICE_ACCOUNT_JSON_FILE}" | tr -d '\n')"
-export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.3
+export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7
 ```
 
 `STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE` must use a minor version matching
@@ -189,7 +189,7 @@ validation is intended:
 
 ```sh
 env STACKIT_E2E_TOPOLOGY_WORKLOAD=true \
-  KUBERNETES_VERSION=v1.35.3 \
+  KUBERNETES_VERSION=v1.35.8 \
   STACKIT_E2E_CNI=cilium \
   go test -timeout=90m -tags=e2e ./test/e2e -v -ginkgo.v \
   --ginkgo.focus='topology.*workload' --ginkgo.timeout=90m

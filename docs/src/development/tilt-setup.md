@@ -70,7 +70,7 @@ kustomize_substitutions:
   CLUSTER_RESOURCE_SET: "true"
   EXP_CLUSTER_RESOURCE_SET: "true"
   NAMESPACE: default
-  KUBERNETES_VERSION: v1.35.3
+  KUBERNETES_VERSION: v1.35.8
   CONTROL_PLANE_MACHINE_COUNT: "1"
   WORKER_MACHINE_COUNT: "1"
   STACKIT_PROJECT_ID: "<project-uuid>"
@@ -83,7 +83,7 @@ kustomize_substitutions:
   STACKIT_SSH_KEY_NAME: ""
   STACKIT_CREDENTIALS_SECRET_NAME: stackit-credentials
   STACKIT_SERVICE_ACCOUNT_JSON_B64: "<base64-service-account-json>"
-  STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE: "ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.3"
+  STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE: "ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7"
 ```
 
 Notes:
@@ -147,7 +147,7 @@ cd /path/to/cluster-api-provider-stackit
 
 export CLUSTER_NAME=stackit-dev
 export NAMESPACE=default
-export KUBERNETES_VERSION=v1.35.3
+export KUBERNETES_VERSION=v1.35.8
 export CONTROL_PLANE_MACHINE_COUNT=1
 export WORKER_MACHINE_COUNT=1
 export STACKIT_PROJECT_ID=<project-uuid>
@@ -160,7 +160,7 @@ export STACKIT_SECURITY_GROUP_ID=<security-group-uuid>
 export STACKIT_SSH_KEY_NAME=""
 export STACKIT_CREDENTIALS_SECRET_NAME=stackit-credentials
 export STACKIT_SERVICE_ACCOUNT_JSON_B64=<base64-service-account-json>
-export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.3
+export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7
 
 clusterctl generate cluster "${CLUSTER_NAME:-stackit-dev}" \
   --from templates/cluster-template.yaml \

@@ -14,7 +14,7 @@ required service-account permissions.
 Set the release version to install:
 
 ```sh
-export CAPSTK_VERSION=v0.1.0-alpha.1
+export CAPSTK_VERSION=v0.1.0-alpha.2
 ```
 
 Create `clusterctl.yaml` for that release:
@@ -95,6 +95,12 @@ kubectl create secret generic stackit-credentials \
   --from-file=serviceaccount.json="${STACKIT_SERVICE_ACCOUNT_JSON_FILE}"
 ```
 
+You can retrieve a valid image ID using the STACKIT CLI:
+
+```sh
+stackit image list --project-id "${STACKIT_PROJECT_ID}" --output-format json --label-selector linux,prod | jq -r '.[] | select(.name == "Ubuntu 24.04") | .id'
+```
+
 ## Create a workload cluster
 
 You can use the cluster template directly from the repository's `templates`
@@ -112,12 +118,12 @@ Set the cluster values and render the template (use
 ```sh
 export CLUSTER_NAME=stackit-workload
 export NAMESPACE=default
-export KUBERNETES_VERSION=v1.35.3
+export KUBERNETES_VERSION=v1.35.8
 export KUBERNETES_APT_REPOSITORY_MINOR=v1.35
 export CONTROL_PLANE_MACHINE_COUNT=1
 export WORKER_MACHINE_COUNT=1
 export STACKIT_CREDENTIALS_SECRET_NAME=stackit-credentials
-export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.3
+export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE=ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7
 
 clusterctl generate cluster "${CLUSTER_NAME}" \
   --from cluster-template.yaml \
@@ -169,6 +175,49 @@ make install-workload-cni \
 
 See [Workload CNI](usage/cni.md) and [Workload Addons](usage/addons.md) for more
 details on CNI options and verification.
+
+## Cleanup
+
+To fully delete the workload cluster and its cloud infrastructure:
+
+```sh
+kubectl delete -f cluster.yaml
+```
+
+Deletion should take at most 5 minutes. Verify that all resources are gone:
+
+```sh
+kubectl get cluster,machine,stackitcluster,stackitmachine --namespace "${NAMESPACE}"
+```
+
+### Troubleshooting stuck deletion
+
+If resources persist after several minutes:
+
+1. Check the status and conditions of persisting resources:
+
+   ```sh
+   kubectl describe cluster,machine,stackitcluster,stackitmachine --namespace "${NAMESPACE}"
+   ```
+
+2. Inspect the controller logs for errors:
+
+   ```sh
+   # Core Cluster API controller
+   kubectl logs -n capi-system deployment/capi-controller-manager -c manager --tail=100
+
+   # STACKIT provider controller
+   kubectl logs -n cluster-api-provider-stackit-system deployment/cluster-api-provider-stackit-controller-manager --tail=100
+   ```
+
+3. If a `StackitMachine` cannot finish deletion and blocks its parent resources, you can remove its finalizer:
+
+   ```sh
+   kubectl patch stackitmachine <stackitmachine-name> -n "${NAMESPACE}" \
+     --type=merge -p '{"metadata":{"finalizers":null}}'
+   ```
+
+   Removing the finalizer unblocks Kubernetes deletion for that resource and its parents. You may then have to manually delete the actual VM in the STACKIT portal or through the STACKIT API.
 
 Use the [development guide](development/index.md) when you want to build and
 run the provider from a local checkout.
