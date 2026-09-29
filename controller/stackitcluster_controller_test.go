@@ -857,7 +857,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		machine := &clusterv1.Machine{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
-		Expect(reconciler.stackitClusterRequestsForMachine(ctx, machine)).To(Equal([]reconcile.Request{request}))
+		Expect(reconciler.loadBalancerTargetsForControlPlanes(ctx, machine)).To(Equal([]reconcile.Request{request}))
 	})
 
 	It("ignores worker Machine events", func() {
@@ -869,14 +869,14 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		machine := &clusterv1.Machine{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, machine)).To(Succeed())
-		Expect(reconciler.stackitClusterRequestsForMachine(ctx, machine)).To(BeEmpty())
+		Expect(reconciler.loadBalancerTargetsForControlPlanes(ctx, machine)).To(BeEmpty())
 	})
 
 	It("maps owning Cluster events to StackitCluster reconcile requests", func() {
 		cluster := &clusterv1.Cluster{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)).To(Succeed())
 
-		requests := reconciler.stackitClusterRequestsForCluster(ctx, cluster)
+		requests := reconciler.filterForStackitClusterResources(ctx, cluster)
 		Expect(requests).To(Equal([]reconcile.Request{request}))
 	})
 
@@ -924,7 +924,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			},
 		}
 
-		requests := reconciler.stackitClusterRequestsForCluster(ctx, cluster)
+		requests := reconciler.filterForStackitClusterResources(ctx, cluster)
 		Expect(requests).To(BeEmpty())
 	})
 })

@@ -28,7 +28,8 @@ import (
 const (
 	defaultAPIServerPort int32 = 6443
 
-	// maxTargetNameLength is the STACKIT limit on a target display name.
+	// maxTargetNameLength is the RFC 1123 label length, which STACKIT enforces on
+	// a target display name.
 	maxTargetNameLength = 63
 
 	targetNameDigestLength = 7
@@ -93,34 +94,18 @@ func APIServerTargets(machines []*clusterv1.Machine) []cloud.LoadBalancerTargetI
 	return targets
 }
 
-// targetName turns a machine name into a valid STACKIT target display name:
-// letters, digits and inner hyphens, at most 63 characters. A qualifying name is
-// returned unchanged; any other carries a digest so that two machines cannot
-// collapse onto one target.
+// targetName maps a machine name, an RFC 1123 subdomain, onto a STACKIT target
+// display name, an RFC 1123 label. A name that already is a label is returned
+// unchanged; any other carries a digest so that two machines cannot collapse
+// onto one target.
 func targetName(machineName string) string {
-	var sanitized strings.Builder
-	previousHyphen := false
-	for _, r := range machineName {
-		switch {
-		case (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
-			sanitized.WriteRune(r)
-			previousHyphen = false
-		case !previousHyphen:
-			sanitized.WriteByte('-')
-			previousHyphen = true
-		}
-	}
-	name := strings.Trim(sanitized.String(), "-")
-	if name == machineName && len(name) <= maxTargetNameLength {
-		return name
+	if len(machineName) <= maxTargetNameLength && !strings.Contains(machineName, ".") {
+		return machineName
 	}
 
 	sum := sha256.Sum256([]byte(machineName))
-	digest := hex.EncodeToString(sum[:])[:targetNameDigestLength]
-	if name == "" {
-		return digest
-	}
-	suffix := "-" + digest
+	suffix := "-" + hex.EncodeToString(sum[:])[:targetNameDigestLength]
+	name := strings.ReplaceAll(machineName, ".", "-")
 	if len(name) > maxTargetNameLength-len(suffix) {
 		name = strings.TrimRight(name[:maxTargetNameLength-len(suffix)], "-")
 	}

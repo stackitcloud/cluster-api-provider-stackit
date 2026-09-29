@@ -107,7 +107,7 @@ func (r *StackitClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return r.reconcileNormal(ctx, clusterScope)
 }
 
-func (r *StackitClusterReconciler) stackitClusterRequestsForCluster(_ context.Context, obj client.Object) []reconcile.Request {
+func (r *StackitClusterReconciler) filterForStackitClusterResources(_ context.Context, obj client.Object) []reconcile.Request {
 	cluster, ok := obj.(*clusterv1.Cluster)
 	if !ok {
 		return nil
@@ -124,9 +124,9 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCluster(_ context.Co
 	}}
 }
 
-// stackitClusterRequestsForMachine keeps the API server load balancer target
+// loadBalancerTargetsForControlPlanes keeps the API server load balancer target
 // pool in step with the control plane. Worker machines never appear in it.
-func (r *StackitClusterReconciler) stackitClusterRequestsForMachine(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *StackitClusterReconciler) loadBalancerTargetsForControlPlanes(ctx context.Context, obj client.Object) []reconcile.Request {
 	machine, ok := obj.(*clusterv1.Machine)
 	if !ok || !clusterutil.IsControlPlaneMachine(machine) {
 		return nil
@@ -140,7 +140,7 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForMachine(ctx context.
 		logf.FromContext(ctx).Error(err, "Failed to get Cluster for Machine watch", "machine", client.ObjectKeyFromObject(machine))
 		return nil
 	}
-	return r.stackitClusterRequestsForCluster(ctx, cluster)
+	return r.filterForStackitClusterResources(ctx, cluster)
 }
 
 // machineTargetPoolChanged drops the frequent control plane status updates that
@@ -193,10 +193,10 @@ func (r *StackitClusterReconciler) stackitClusterRequestsForCloudInitRef(ctx con
 func (r *StackitClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.StackitCluster{}).
-		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCluster)).
+		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.filterForStackitClusterResources)).
 		Watches(
 			&clusterv1.Machine{},
-			handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForMachine),
+			handler.EnqueueRequestsFromMapFunc(r.loadBalancerTargetsForControlPlanes),
 			builder.WithPredicates(predicate.Funcs{UpdateFunc: machineTargetPoolChanged}),
 		).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.stackitClusterRequestsForCloudInitRef)).
