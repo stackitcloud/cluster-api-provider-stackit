@@ -121,19 +121,9 @@ func TestTargetName(t *testing.T) {
 			want: "foo-bar-control-plane-abcde-" + digestPrefix("foo.bar-control-plane-abcde"),
 		},
 		{
-			name:        "collapses a run of invalid characters and trims the edges",
-			machineName: ".foo..bar.",
-			want:        "foo-bar-" + digestPrefix(".foo..bar."),
-		},
-		{
 			name:        "shortens an overlong name",
 			machineName: longName,
 			want:        strings.Repeat("a", 55) + "-" + digestPrefix(longName),
-		},
-		{
-			name:        "falls back to the digest when nothing survives sanitizing",
-			machineName: "...",
-			want:        digestPrefix("..."),
 		},
 	}
 

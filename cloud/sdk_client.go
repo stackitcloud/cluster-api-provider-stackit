@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package cloud
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -607,7 +608,8 @@ func (c *SDKClient) SetAPIServerLoadBalancerTargets(
 		)
 	}
 
-	// Control plane status updates are frequent, and each one reaches this path.
+	// Every cluster reconcile ends up here; skip the update call when the pool
+	// already matches.
 	if targetPool.GetTargetPort() == port && sameTargets(targetPool.GetTargets(), desired) {
 		return nil
 	}
@@ -621,12 +623,16 @@ func sameTargets(current, desired []lb.Target) bool {
 	return slices.Equal(sortedTargetKeys(current), sortedTargetKeys(desired))
 }
 
-func sortedTargetKeys(targets []lb.Target) []string {
-	keys := make([]string, 0, len(targets))
+type targetKey struct{ name, ip string }
+
+func sortedTargetKeys(targets []lb.Target) []targetKey {
+	keys := make([]targetKey, 0, len(targets))
 	for _, target := range targets {
-		keys = append(keys, target.GetDisplayName()+"\x00"+target.GetIp())
+		keys = append(keys, targetKey{name: target.GetDisplayName(), ip: target.GetIp()})
 	}
-	slices.Sort(keys)
+	slices.SortFunc(keys, func(a, b targetKey) int {
+		return cmp.Or(strings.Compare(a.name, b.name), strings.Compare(a.ip, b.ip))
+	})
 	return keys
 }
 
