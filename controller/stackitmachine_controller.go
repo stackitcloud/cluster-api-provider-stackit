@@ -111,7 +111,7 @@ func (r *StackitMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	util.SetPausedCondition(&stackitMachine.Status.Conditions, stackitMachine.Generation, false, "")
 
 	if !stackitMachine.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, machineScope)
+		return r.reconcileDelete(ctx, machineScope)
 	}
 	return r.reconcileNormal(ctx, machineScope)
 }

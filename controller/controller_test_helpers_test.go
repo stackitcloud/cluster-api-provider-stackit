@@ -32,11 +32,11 @@ const (
 	testImageID   = "33333333-3333-3333-3333-333333333333"
 )
 
-func createCredentialsSecret(ctx context.Context, name, namespace, projectID string) {
+func createCredentialsSecret(ctx context.Context, name string) {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Data: map[string][]byte{
-			"project-id":          []byte(projectID),
+			"project-id":          []byte(testProjectID),
 			"serviceaccount.json": []byte("{}"),
 		},
 	}

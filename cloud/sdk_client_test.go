@@ -12,6 +12,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,18 @@ const (
 )
 
 func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
+	for name, userData := range map[string][]byte{
+		"cloud-init": []byte("#cloud-config\n"),
+		"ignition":   []byte("{\n  \"ignition\": {\"version\": \"3.2.0\"}\n}\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			testSDKClientCreateServerPayload(t, userData)
+		})
+	}
+}
+
+func testSDKClientCreateServerPayload(t *testing.T, userData []byte) {
+	t.Helper()
 	var createPayload map[string]any
 	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -71,7 +84,7 @@ func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
 		SSHKeyName:       "default",
 		NetworkID:        testSDKNetworkID,
 		SecurityGroups:   []string{testSDKSecurityGroup},
-		UserData:         []byte("#cloud-config\n"),
+		UserData:         userData,
 		RootVolume: RootVolumeInput{
 			SizeGiB:             50,
 			PerformanceClass:    "storage_premium_perf6",
@@ -94,7 +107,7 @@ func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
 	assertFieldAbsent(t, createPayload, "imageId")
 	assertStringField(t, createPayload, "availabilityZone", "eu01-1")
 	assertStringField(t, createPayload, "keypairName", "default")
-	assertStringField(t, createPayload, "userData", "I2Nsb3VkLWNvbmZpZwo=")
+	assertStringField(t, createPayload, "userData", base64.StdEncoding.EncodeToString(userData))
 	assertBoolField(t, createPayload, "configDrive", true)
 	assertNestedStringField(t, createPayload, []string{"labels", "cluster"}, "test")
 	assertNestedStringField(t, createPayload, []string{"networking", "networkId"}, testSDKNetworkID)
