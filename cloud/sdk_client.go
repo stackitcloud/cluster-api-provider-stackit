@@ -290,11 +290,12 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	}
 
 	return &Bastion{
-		ServerID:        server.ID,
-		ServerState:     server.State,
-		PublicIPID:      publicIP.ID,
-		PublicIP:        publicIP.IP,
-		SecurityGroupID: securityGroup.ID,
+		ServerID:          server.ID,
+		ServerState:       server.State,
+		ServerPowerStatus: server.PowerStatus,
+		PublicIPID:        publicIP.ID,
+		PublicIP:          publicIP.IP,
+		SecurityGroupID:   securityGroup.ID,
 	}, nil
 }
 
@@ -962,9 +963,10 @@ func (c *SDKClient) serverFromSDK(ctx context.Context, server *iaas.Server) *Ser
 		return nil
 	}
 	out := &Server{
-		ID:    server.GetId(),
-		Name:  server.GetName(),
-		State: server.GetStatus(),
+		ID:          server.GetId(),
+		Name:        server.GetName(),
+		State:       server.GetStatus(),
+		PowerStatus: server.GetPowerStatus(),
 	}
 	nics, err := c.iaasClient.DefaultAPI.ListServerNICs(ctx, c.projectID, c.region, out.ID).Execute()
 	if err == nil {

@@ -15,11 +15,12 @@ package cloud
 
 // Server describes a STACKIT compute instance in provider-neutral terms.
 type Server struct {
-	ID         string
-	Name       string
-	State      string
-	ProviderID string
-	Addresses  []Address
+	ID          string
+	Name        string
+	State       string
+	PowerStatus string
+	ProviderID  string
+	Addresses   []Address
 }
 
 // Address is an IP or DNS endpoint of a Server.
@@ -59,11 +60,12 @@ type SecurityGroup struct {
 
 // Bastion describes the provider-managed SSH bastion resources.
 type Bastion struct {
-	ServerID        string
-	ServerState     string
-	PublicIPID      string
-	PublicIP        string
-	SecurityGroupID string
+	ServerID          string
+	ServerState       string
+	ServerPowerStatus string
+	PublicIPID        string
+	PublicIP          string
+	SecurityGroupID   string
 }
 
 // CreateServerInput holds all parameters required to create a new VM.

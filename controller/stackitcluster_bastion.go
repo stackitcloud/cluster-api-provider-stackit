@@ -130,13 +130,16 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			stackitCluster, nil, corev1.EventTypeNormal, "BastionCreated", "Create", "Created bastion %s", bastion.ServerID,
 		)
 	}
-	if bastion.ServerState != "" && bastion.ServerState != "ACTIVE" {
-		clusterScope.SetNotReady(
-			"Provisioning",
-			fmt.Sprintf("bastion server state is %s", bastion.ServerState),
-			infrav1.ClusterBastionReadyCondition,
-			infrav1.ClusterReadyCondition,
-		)
+	if ready, reason, message, warn := serverStateCondition(bastion.ServerState, bastion.ServerPowerStatus); !ready {
+		previousReason := ""
+		if previous := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition); previous != nil {
+			previousReason = previous.Reason
+		}
+		clusterScope.SetNotReady(reason, "bastion "+message, infrav1.ClusterBastionReadyCondition, infrav1.ClusterReadyCondition)
+		// Only warn on entering the state, not on every requeue.
+		if warn && r.Recorder != nil && previousReason != reason {
+			r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeWarning, reason, "Reconcile", "Bastion server %s: %s", bastion.ServerID, message)
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
 	if bastion.PublicIP == "" {
