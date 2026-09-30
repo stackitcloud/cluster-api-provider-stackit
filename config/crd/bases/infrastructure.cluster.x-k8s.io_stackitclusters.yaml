@@ -22,11 +22,25 @@ spec:
     - jsonPath: .status.ready
       name: Ready
       type: boolean
+    - jsonPath: .spec.region
+      name: Region
+      type: string
     - jsonPath: .status.apiServerEndpoint.host
       name: Endpoint
       type: string
     - jsonPath: .status.bastion.publicIP
       name: Bastion IP
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.network.id
+      name: Network ID
+      priority: 1
+      type: string
+    - jsonPath: .spec.projectID
+      name: Project ID
+      priority: 1
       type: string
     name: v1alpha1
     schema:

@@ -962,9 +962,10 @@ func (c *SDKClient) serverFromSDK(ctx context.Context, server *iaas.Server) *Ser
 		return nil
 	}
 	out := &Server{
-		ID:    server.GetId(),
-		Name:  server.GetName(),
-		State: server.GetStatus(),
+		ID:               server.GetId(),
+		Name:             server.GetName(),
+		State:            server.GetStatus(),
+		AvailabilityZone: server.GetAvailabilityZone(),
 	}
 	nics, err := c.iaasClient.DefaultAPI.ListServerNICs(ctx, c.projectID, c.region, out.ID).Execute()
 	if err == nil {

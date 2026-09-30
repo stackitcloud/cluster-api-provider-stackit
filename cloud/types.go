@@ -15,11 +15,12 @@ package cloud
 
 // Server describes a STACKIT compute instance in provider-neutral terms.
 type Server struct {
-	ID         string
-	Name       string
-	State      string
-	ProviderID string
-	Addresses  []Address
+	ID               string
+	Name             string
+	State            string
+	ProviderID       string
+	AvailabilityZone string
+	Addresses        []Address
 }
 
 // Address is an IP or DNS endpoint of a Server.

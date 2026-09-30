@@ -18,7 +18,27 @@ spec:
     singular: stackitmachinetemplate
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.template.spec.machineType
+      name: Machine Type
+      type: string
+    - jsonPath: .spec.template.spec.imageID
+      name: Image ID
+      type: string
+    - jsonPath: .spec.template.spec.rootVolume.sizeGiB
+      name: Disk GiB
+      type: integer
+    - jsonPath: .spec.template.spec.availabilityZone
+      name: Zone
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.template.spec.network.id
+      name: Network ID
+      priority: 1
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StackitMachineTemplate is the Schema for the stackitmachinetemplates
@@ -168,3 +188,4 @@ spec:
         type: object
     served: true
     storage: true
+    subresources: {}
