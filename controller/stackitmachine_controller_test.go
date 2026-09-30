@@ -19,8 +19,10 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -176,6 +178,59 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(degraded.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceNotFound")
 			Expect(degraded.Status.Ready).To(BeFalse(),
 				"legacy status.ready must follow the Ready condition, not contradict it")
+		})
+
+		It("reports a stopped server with its own reason and warns once", func() {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Normal InstanceCreated")))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+
+			By("passing through the transitional STOPPING state without a warning")
+			fakeCloud.SetServerState(got.Status.InstanceID, "STOPPING", "RUNNING")
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drainEvents(recorder)).NotTo(ContainElement(HavePrefix("Warning")))
+
+			By("warning once the server is stopped")
+			fakeCloud.SetServerState(got.Status.InstanceID, "INACTIVE", "STOPPED")
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(15 * time.Second))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			Expect(got.Status.InstanceState).To(Equal("INACTIVE"))
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceStopped")
+			condition := meta.FindStatusCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition)
+			Expect(condition.Message).To(Equal("server is stopped (state INACTIVE, power status STOPPED)"))
+			Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Warning InstanceStopped")))
+
+			By("not warning again while the server stays stopped")
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drainEvents(recorder)).NotTo(ContainElement(HavePrefix("Warning")))
+		})
+
+		It("reports an active but crashed server as not ready", func() {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			fakeCloud.SetServerState(got.Status.InstanceID, "ACTIVE", "CRASHED")
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceCrashed")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceCrashed")
 		})
 
 		It("attaches provider-managed node SSH access when bastion is enabled", func() {

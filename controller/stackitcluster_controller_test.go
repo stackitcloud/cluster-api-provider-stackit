@@ -19,8 +19,10 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -136,6 +138,30 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(1))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Available")
+	})
+
+	It("reports a failed bastion server with its own reason and warns", func() {
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		fakeCloud.SetServerState(got.Status.Bastion.ServerID, "ERROR", "")
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(15 * time.Second))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionFalse, "InstanceFailed")
+		condition := meta.FindStatusCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition)
+		Expect(condition.Message).To(Equal("bastion server failed (state ERROR)"))
+		Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Warning InstanceFailed")))
 	})
 
 	It("deletes existing bastion resources when bastion is disabled", func() {

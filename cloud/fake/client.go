@@ -250,11 +250,12 @@ func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cl
 			publicIP := c.publicIPByTags(input.Tags)
 			securityGroup := c.securityGroupByTags(input.Tags)
 			return &cloud.Bastion{
-				ServerID:        serverEntry.server.ID,
-				ServerState:     serverEntry.server.State,
-				PublicIPID:      idOfPublicIP(publicIP),
-				PublicIP:        ipOfPublicIP(publicIP),
-				SecurityGroupID: idOfSecurityGroup(securityGroup),
+				ServerID:          serverEntry.server.ID,
+				ServerState:       serverEntry.server.State,
+				ServerPowerStatus: serverEntry.server.PowerStatus,
+				PublicIPID:        idOfPublicIP(publicIP),
+				PublicIP:          ipOfPublicIP(publicIP),
+				SecurityGroupID:   idOfSecurityGroup(securityGroup),
 			}, nil
 		}
 	}
@@ -567,6 +568,16 @@ func (c *Client) ServerHasSecurityGroup(serverID, securityGroupID string) bool {
 	}
 	_, ok = entry.securityGroups[securityGroupID]
 	return ok
+}
+
+// SetServerState sets the state and power status of a fake server (test helper).
+func (c *Client) SetServerState(serverID, state, powerStatus string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.servers[serverID]; ok {
+		entry.server.State = state
+		entry.server.PowerStatus = powerStatus
+	}
 }
 
 // ServerUserData returns the user-data stored for a fake server.

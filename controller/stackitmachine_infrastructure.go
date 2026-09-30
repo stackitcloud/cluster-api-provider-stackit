@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -129,13 +130,16 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	stackitMachine.Status.Addresses = machineAddressesFromCloud(server.Addresses)
 	providerID := machineScope.SetInstance(server)
 
-	if server.State != "" && server.State != "ACTIVE" {
-		machineScope.SetNotReady(
-			"Provisioning",
-			fmt.Sprintf("server state is %s", server.State),
-			infrav1.MachineInstanceReadyCondition,
-			infrav1.MachineReadyCondition,
-		)
+	if ready, reason, message, warn := serverStateCondition(server.State, server.PowerStatus); !ready {
+		previousReason := ""
+		if previous := meta.FindStatusCondition(stackitMachine.Status.Conditions, infrav1.MachineInstanceReadyCondition); previous != nil {
+			previousReason = previous.Reason
+		}
+		machineScope.SetNotReady(reason, message, infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+		// Only warn on entering the state, not on every requeue.
+		if warn && r.Recorder != nil && previousReason != reason {
+			r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, reason, "Reconcile", "Server %s: %s", server.ID, message)
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
