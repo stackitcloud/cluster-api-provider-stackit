@@ -10,6 +10,7 @@ non-topology workload cluster. It renders:
 - `MachineDeployment`
 - worker `StackitMachineTemplate`
 - worker `KubeadmConfigTemplate`
+- `MachineHealthCheck` for control-plane and worker Machines
 - `ClusterResourceSet` and resource-set `Secret` for `cloud-provider-stackit`
 
 Render a cluster:
@@ -51,3 +52,20 @@ workload API is reachable, install a CNI that matches the configured pod/service
 CIDRs and network policy expectations before expecting Nodes to become Ready.
 For a reproducible development path, use the helper documented in
 [Workload CNI](cni.md).
+
+The MachineHealthChecks remediate Machines whose Node does not register within
+10 minutes or reports `Ready=False` or `Ready=Unknown` for 10 minutes. The
+`MachineDeployment` limits worker remediation to 2 Machines at a time via
+`spec.remediation.maxInFlight`.
+
+Worker remediation only runs while at most 40% of the workers are unhealthy
+(`triggerIf.unhealthyLessThanOrEqualTo`, rounded down). A MachineDeployment
+with fewer than 3 workers is therefore never remediated; use
+`WORKER_MACHINE_COUNT` ≥ 3 for automatic replacement. A network outage longer
+than 10 minutes can still replace healthy workers once the first of them
+recovers and the unhealthy share drops below the limit.
+
+Control-plane and worker Machines use `nodeDrainTimeoutSeconds: 900`, so a
+Node whose Pods cannot terminate does not block deletion forever. This applies
+to every Machine deletion, including upgrades and scale-down: Pods still
+protected by a PodDisruptionBudget after 15 minutes are not waited for.

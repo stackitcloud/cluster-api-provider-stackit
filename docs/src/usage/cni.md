@@ -5,9 +5,11 @@ The default cluster template provisions STACKIT infrastructure and installs
 keeps CNI choice with the cluster operator, where network policy, routing, MTU,
 IPAM, and upgrade strategy belong.
 
-Nodes will not become fully Ready until a CNI is installed. For local validation
-and simple development clusters, this repository provides a repeatable helper
-for Cilium or Calico.
+Nodes will not become fully Ready until a CNI is installed. The templates ship
+MachineHealthChecks that replace Machines whose Node stays `Ready=False` for 10
+minutes, so install the CNI within that window after the Nodes join. For local
+validation and simple development clusters, this repository provides a
+repeatable helper for Cilium or Calico.
 
 For the complete tested workload addon flow, including the embedded
 `cloud-provider-stackit` `ClusterResourceSet` and verification commands, see

@@ -18,6 +18,18 @@ spec:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
         kind: StackitMachineTemplate
         name: stackit-control-plane
+    deletion:
+      nodeDrainTimeoutSeconds: 900
+    healthCheck:
+      checks:
+        nodeStartupTimeoutSeconds: 600
+        unhealthyNodeConditions:
+          - type: Ready
+            status: "False"
+            timeoutSeconds: 600
+          - type: Ready
+            status: "Unknown"
+            timeoutSeconds: 600
   workers:
     machineDeployments:
       - class: default-worker
@@ -31,6 +43,22 @@ spec:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: StackitMachineTemplate
             name: stackit-default-worker
+        deletion:
+          nodeDrainTimeoutSeconds: 900
+        healthCheck:
+          checks:
+            nodeStartupTimeoutSeconds: 600
+            unhealthyNodeConditions:
+              - type: Ready
+                status: "False"
+                timeoutSeconds: 600
+              - type: Ready
+                status: "Unknown"
+                timeoutSeconds: 600
+          remediation:
+            maxInFlight: 2
+            triggerIf:
+              unhealthyLessThanOrEqualTo: 40%
   variables:
     - name: stackitProjectID
       required: true

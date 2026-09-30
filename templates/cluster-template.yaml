@@ -50,6 +50,8 @@ spec:
   version: ${KUBERNETES_VERSION}
   machineTemplate:
     spec:
+      deletion:
+        nodeDrainTimeoutSeconds: 900
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: StackitMachineTemplate
@@ -121,6 +123,8 @@ metadata:
 spec:
   clusterName: ${CLUSTER_NAME}
   replicas: ${WORKER_MACHINE_COUNT}
+  remediation:
+    maxInFlight: 2
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
@@ -133,6 +137,8 @@ spec:
     spec:
       clusterName: ${CLUSTER_NAME}
       version: ${KUBERNETES_VERSION}
+      deletion:
+        nodeDrainTimeoutSeconds: 900
       bootstrap:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io
@@ -142,6 +148,49 @@ spec:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: StackitMachineTemplate
         name: ${CLUSTER_NAME}-md-0
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/control-plane: ""
+  checks:
+    nodeStartupTimeoutSeconds: 600
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 600
+      - type: Ready
+        status: "Unknown"
+        timeoutSeconds: 600
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+  namespace: ${NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-md-0
+  checks:
+    nodeStartupTimeoutSeconds: 600
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 600
+      - type: Ready
+        status: "Unknown"
+        timeoutSeconds: 600
+  remediation:
+    triggerIf:
+      unhealthyLessThanOrEqualTo: 40%
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: StackitMachineTemplate

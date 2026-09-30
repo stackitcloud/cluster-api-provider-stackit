@@ -64,6 +64,13 @@ the generated `StackitCluster` and `StackitMachine` objects. This is useful for
 policy, ownership, automation, and observability labels that should be present
 on generated infrastructure objects.
 
+The class also defines `healthCheck` and `deletion` for the control plane and
+the `default-worker` class with the same checks, remediation limits and drain
+timeouts as the classic template's MachineHealthChecks (see
+[Classic Cluster Template](cluster-template.md)). Disable the health checks per
+cluster with `spec.topology.controlPlane.healthCheck.enabled: false` or the
+equivalent field on a MachineDeployment topology.
+
 ## Prerequisites
 
 The management cluster must run CAPI core and kubeadm-control-plane with
