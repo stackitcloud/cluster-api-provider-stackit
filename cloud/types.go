@@ -18,6 +18,7 @@ type Server struct {
 	ID               string
 	Name             string
 	State            string
+	PowerStatus      string
 	ProviderID       string
 	AvailabilityZone string
 	Addresses        []Address
@@ -60,11 +61,12 @@ type SecurityGroup struct {
 
 // Bastion describes the provider-managed SSH bastion resources.
 type Bastion struct {
-	ServerID        string
-	ServerState     string
-	PublicIPID      string
-	PublicIP        string
-	SecurityGroupID string
+	ServerID          string
+	ServerState       string
+	ServerPowerStatus string
+	PublicIPID        string
+	PublicIP          string
+	SecurityGroupID   string
 }
 
 // CreateServerInput holds all parameters required to create a new VM.

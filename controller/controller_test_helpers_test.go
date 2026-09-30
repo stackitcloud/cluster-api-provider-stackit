@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -214,5 +215,18 @@ func deleteIfExists(ctx context.Context, obj client.Object) {
 	err := k8sClient.Delete(ctx, current)
 	if err != nil {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	}
+}
+
+// drainEvents returns all events recorded so far.
+func drainEvents(recorder *events.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case event := <-recorder.Events:
+			out = append(out, event)
+		default:
+			return out
+		}
 	}
 }
