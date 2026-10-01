@@ -69,7 +69,6 @@ func TestSDKClientLoadBalancerCreateDeleteIntegration(t *testing.T) {
 	loadBalancer := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
 		Name: "capistackit-initial-target",
 		IP:   targetIP,
-		Port: 6443,
 	})
 
 	if err := client.DeleteAPIServerLoadBalancer(context.Background(), loadBalancer.ID); err != nil {
@@ -81,10 +80,10 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
+	initialIP := integrationInitialTargetIP(targetIP)
 	loadBalancer := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
 		Name: "capistackit-initial-target",
-		IP:   integrationInitialTargetIP(targetIP),
-		Port: 6443,
+		IP:   initialIP,
 	})
 	t.Cleanup(func() {
 		if err := client.DeleteAPIServerLoadBalancer(context.Background(), loadBalancer.ID); err != nil && !IsNotFound(err) {
@@ -92,17 +91,15 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 		}
 	})
 
-	target := LoadBalancerTargetInput{
-		LoadBalancerID: loadBalancer.ID,
-		Name:           "capistackit-integration-target",
-		IP:             targetIP,
-		Port:           6443,
+	targets := []LoadBalancerTargetInput{
+		{Name: "capistackit-initial-target", IP: initialIP},
+		{Name: "capistackit-integration-target", IP: targetIP},
 	}
-	if err := client.EnsureAPIServerLoadBalancerTarget(context.Background(), target); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancerTarget() error = %v", err)
+	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), loadBalancer.ID, 6443, targets); err != nil {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() error = %v", err)
 	}
-	if err := client.DeleteAPIServerLoadBalancerTarget(context.Background(), target); err != nil {
-		t.Fatalf("DeleteAPIServerLoadBalancerTarget() error = %v", err)
+	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), loadBalancer.ID, 6443, targets[:1]); err != nil {
+		t.Fatalf("SetAPIServerLoadBalancerTargets() shrink error = %v", err)
 	}
 }
 
