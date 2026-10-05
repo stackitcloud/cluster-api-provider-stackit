@@ -1055,7 +1055,6 @@ func clusterServerSelectorFromTags(tags map[string]string) map[string]string {
 		"cluster.x-k8s.io/cluster-name",
 		"cluster.x-k8s.io/cluster-namespace",
 		"cluster.x-k8s.io/managed-by",
-		"cluster-api-provider-stackit/managed",
 	} {
 		if value := tags[key]; value != "" {
 			selector[key] = value

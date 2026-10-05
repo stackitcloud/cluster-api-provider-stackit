@@ -20,17 +20,15 @@ const (
 	LabelMachineName      = "cluster.x-k8s.io/machine-name"
 	LabelMachineUID       = "cluster.x-k8s.io/machine-uid"
 	LabelManagedBy        = "cluster.x-k8s.io/managed-by"
-	LabelProviderManaged  = "cluster-api-provider-stackit/managed"
 	LabelResourceRole     = "cluster-api-provider-stackit/resource-role"
 	LabelE2E              = "cluster-api-provider-stackit/e2e"
 	LabelTestID           = "cluster-api-provider-stackit/test-id"
 
 	// ManagedByValue identifies resources managed by this provider.
-	ManagedByValue       = "cluster-api-provider-stackit"
-	ProviderManagedValue = "true"
-	ResourceRoleBastion  = "bastion"
-	ResourceRoleNodeSSH  = "node-ssh"
-	E2EValue             = "true"
+	ManagedByValue      = "cluster-api-provider-stackit"
+	ResourceRoleBastion = "bastion"
+	ResourceRoleNodeSSH = "node-ssh"
+	E2EValue            = "true"
 )
 
 // ClusterTags returns the canonical tags applied to cluster-wide cloud
@@ -41,7 +39,6 @@ func ClusterTags(clusterName, clusterNamespace string, additionalLabels map[stri
 		LabelClusterName:      clusterName,
 		LabelClusterNamespace: clusterNamespace,
 		LabelManagedBy:        ManagedByValue,
-		LabelProviderManaged:  ProviderManagedValue,
 	}
 	for k, v := range additionalLabels {
 		if _, isReserved := out[k]; isReserved {
@@ -65,7 +62,6 @@ func MachineTags(
 		LabelMachineName:      machineName,
 		LabelMachineUID:       machineUID,
 		LabelManagedBy:        ManagedByValue,
-		LabelProviderManaged:  ProviderManagedValue,
 	}
 	for k, v := range additionalLabels {
 		if _, isReserved := out[k]; isReserved {
