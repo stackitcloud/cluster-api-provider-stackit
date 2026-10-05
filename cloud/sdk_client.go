@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -703,9 +704,18 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 	if err != nil {
 		return classifySDKError("list security group rules", err)
 	}
+	normalizedCidrs := make([]string, len(cidrs))
+	for i, cidr := range cidrs {
+		_, normalizedCidr, err := net.ParseCIDR(cidr)
+		if err != nil {
+			normalizedCidrs[i] = cidr
+			continue
+		}
+		normalizedCidrs[i] = normalizedCidr.String()
+	}
 	existingRules := resp.GetItems()
-	desired := make(map[string]struct{}, len(cidrs))
-	for _, cidr := range cidrs {
+	desired := make(map[string]struct{}, len(normalizedCidrs))
+	for _, cidr := range normalizedCidrs {
 		if cidr == "" {
 			return fmt.Errorf("%w: empty bastion allowed CIDR", ErrInvalidInput)
 		}
@@ -737,6 +747,9 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 	// take access away from the previously allowed range.
 	for _, rule := range existingRules {
 		if !isSSHRule(rule) {
+			continue
+		}
+		if rule.GetIpRange() == "" {
 			continue
 		}
 		if _, keep := desired[rule.GetIpRange()]; keep {
