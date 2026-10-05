@@ -21,54 +21,60 @@ type serverStateInfo struct {
 	warn bool
 }
 
-// serverStates maps the documented STACKIT server states other than ACTIVE.
+// serverStates maps the documented STACKIT server states.
+// https://docs.api.stackit.cloud/documentation/iaas/version/v2#tag/Servers/operation/V2GetServer
+// https://github.com/stackitcloud/stackit-sdk-go/blob/services/iaas/v1.14.5/services/iaas/v2api/model_server.go#L63-L64
 var serverStates = map[string]serverStateInfo{
+	"ACTIVE":       {"InstanceActive", "server is active", false},
+	"BACKING-UP":   {"InstanceBusy", "server is temporarily unavailable", false},
 	"CREATING":     {"InstanceStarting", "server is starting", false},
-	"STARTING":     {"InstanceStarting", "server is starting", false},
+	"DEALLOCATED":  {"InstanceDeallocated", "server is deallocated", true},
+	"DEALLOCATING": {"InstanceDeallocating", "server is being deallocated", false},
+	"DELETED":      {"InstanceDeleting", "server is deleted", false},
+	"DELETING":     {"InstanceDeleting", "server is being deleted", false},
+	"ERROR":        {"InstanceFailed", "server failed", true},
+	"INACTIVE":     {"InstanceStopped", "server is stopped", true},
+	"MIGRATING":    {"InstanceBusy", "server is temporarily unavailable", false},
+	"PAUSED":       {"InstancePaused", "server is paused", true},
 	"REBOOT":       {"InstanceBusy", "server is temporarily unavailable", false},
 	"REBOOTING":    {"InstanceBusy", "server is temporarily unavailable", false},
 	"REBUILD":      {"InstanceBusy", "server is temporarily unavailable", false},
 	"REBUILDING":   {"InstanceBusy", "server is temporarily unavailable", false},
+	"RESCUE":       {"InstanceInRescue", "server is in rescue mode", true},
+	"RESCUING":     {"InstanceEnteringRescue", "server is entering rescue mode", false},
 	"RESIZING":     {"InstanceBusy", "server is temporarily unavailable", false},
-	"MIGRATING":    {"InstanceBusy", "server is temporarily unavailable", false},
-	"UPDATING":     {"InstanceBusy", "server is temporarily unavailable", false},
 	"RESTORING":    {"InstanceBusy", "server is temporarily unavailable", false},
 	"SNAPSHOTTING": {"InstanceBusy", "server is temporarily unavailable", false},
-	"BACKING-UP":   {"InstanceBusy", "server is temporarily unavailable", false},
+	"STARTING":     {"InstanceStarting", "server is starting", false},
 	"STOPPING":     {"InstanceStopping", "server is stopping", false},
-	"INACTIVE":     {"InstanceStopped", "server is stopped", true},
-	"DEALLOCATING": {"InstanceDeallocating", "server is being deallocated", false},
-	"DEALLOCATED":  {"InstanceDeallocated", "server is deallocated", true},
-	"PAUSED":       {"InstancePaused", "server is paused", true},
-	"RESCUING":     {"InstanceEnteringRescue", "server is entering rescue mode", false},
-	"RESCUE":       {"InstanceInRescue", "server is in rescue mode", true},
 	"UNRESCUING":   {"InstanceLeavingRescue", "server is leaving rescue mode", false},
-	"DELETING":     {"InstanceDeleting", "server is being deleted", false},
-	"DELETED":      {"InstanceDeleting", "server is deleted", false},
-	"ERROR":        {"InstanceFailed", "server failed", true},
+	"UPDATING":     {"InstanceBusy", "server is temporarily unavailable", false},
 }
 
 // serverStateCondition maps a server state and power status to a condition
 // reason and message. ready is true when the server can be used.
 func serverStateCondition(state, powerStatus string) (ready bool, reason, message string, warn bool) {
-	details := "state " + state
-	if powerStatus != "" {
-		details += ", power status " + powerStatus
+	if state == "" {
+		ready = true
+		return
 	}
-
-	if state == "" || state == "ACTIVE" {
-		switch powerStatus {
-		case "CRASHED":
-			return false, "InstanceCrashed", fmt.Sprintf("server crashed (%s)", details), true
-		case "ERROR":
-			return false, "InstancePowerError", fmt.Sprintf("server power error (%s)", details), true
-		}
-		return true, "", "", false
-	}
-
 	info, ok := serverStates[state]
 	if !ok {
 		info = serverStateInfo{"InstanceNotActive", "server is not active", false}
 	}
-	return false, info.reason, fmt.Sprintf("%s (%s)", info.description, details), info.warn
+	ready, warn, reason, description := state == "ACTIVE", info.warn, info.reason, info.description
+	if state == "ACTIVE" {
+		switch powerStatus {
+		case "CRASHED":
+			ready, reason, description, warn = false, "InstanceCrashed", "server crashed", true
+		case "ERROR":
+			ready, reason, description, warn = false, "InstancePowerError", "server power error", true
+		}
+	}
+	details := "state " + state
+	if powerStatus != "" {
+		details += ", power status " + powerStatus
+	}
+	message = fmt.Sprintf("%s (%s)", description, details)
+	return
 }

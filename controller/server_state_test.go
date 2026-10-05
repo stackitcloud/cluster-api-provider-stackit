@@ -24,7 +24,7 @@ var _ = Describe("serverStateCondition", func() {
 			Expect(message).To(Equal(wantMessage))
 			Expect(warn).To(Equal(wantWarn))
 		},
-		Entry("active and running", "ACTIVE", "RUNNING", true, "", "", false),
+		Entry("active and running", "ACTIVE", "RUNNING", true, "InstanceActive", "server is active (state ACTIVE, power status RUNNING)", false),
 		Entry("unknown state", "", "", true, "", "", false),
 		Entry("active but crashed", "ACTIVE", "CRASHED", false, "InstanceCrashed",
 			"server crashed (state ACTIVE, power status CRASHED)", true),
