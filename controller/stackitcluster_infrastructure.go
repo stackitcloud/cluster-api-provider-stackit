@@ -89,12 +89,38 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	)
 
 	if stackitCluster.Spec.APIServerLoadBalancer.Enabled {
+		// STACKIT takes an explicit target list rather than label-based
+		// membership, so exactly one reconciler owns the pool. Machines being
+		// deleted drop out here, before the node is drained.
+		machines, err := collections.GetFilteredMachinesForCluster(
+			ctx,
+			r.Client,
+			clusterScope.Cluster,
+			collections.ControlPlaneMachines(clusterScope.Cluster.Name),
+			collections.ActiveMachines,
+		)
+		if err != nil {
+			util.SetConditions(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				metav1.ConditionFalse,
+				"MachineListError",
+				err.Error(),
+				infrav1.ClusterLoadBalancerReadyCondition,
+			)
+			return ctrl.Result{}, fmt.Errorf("list control plane machines: %w", err)
+		}
+		targets := loadbalancerservice.APIServerTargets(machines.UnsortedList())
+
+		// Seeding with the real targets lets a load balancer deleted out of band
+		// come back with the control plane behind it.
+		seed := targets
+		if len(seed) == 0 {
+			seed = []cloud.LoadBalancerTargetInput{loadbalancerservice.BootstrapTarget(bootstrapTargetIP(network))}
+		}
 		loadBalancer, err := cloudClient.EnsureAPIServerLoadBalancer(
 			ctx,
-			loadbalancerservice.APIServerInput(
-				stackitCluster,
-				[]cloud.LoadBalancerTargetInput{loadbalancerservice.BootstrapTarget(bootstrapTargetIP(network))},
-			),
+			loadbalancerservice.APIServerInput(stackitCluster, seed),
 		)
 		if err != nil {
 			stackitCluster.Status.Ready = false
@@ -133,6 +159,34 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			Port: defaultAPIServerPort,
 		}
 		clusterScope.SetAPIServerEndpoint(endpoint)
+
+		// An empty set never overwrites a populated pool: cluster deletion filters
+		// out every machine while the API server is still needed for drain.
+		if len(targets) > 0 {
+			if err := cloudClient.SetAPIServerLoadBalancerTargets(ctx, loadBalancer.ID, defaultAPIServerPort, targets); err != nil {
+				if !cloud.IsRetryable(err) && r.Recorder != nil {
+					r.Recorder.Eventf(
+						stackitCluster, nil, corev1.EventTypeWarning, "LoadBalancerTargetError", "Update",
+						"Cannot update API server load balancer target pool: %v", err,
+					)
+				}
+				// Scoped to the load balancer condition: failing the cluster would
+				// stop the machine reconciler from replacing the broken machine.
+				util.SetConditions(
+					&stackitCluster.Status.Conditions,
+					stackitCluster.Generation,
+					metav1.ConditionFalse,
+					"LoadBalancerTargetError",
+					err.Error(),
+					infrav1.ClusterLoadBalancerReadyCondition,
+				)
+				// Requeue even on a permanent error: this return skips SetReady, so
+				// no machine exists yet whose events could retry it.
+				return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
+			}
+			log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(targets))
+		}
+
 		clusterScope.SetConditions(
 			metav1.ConditionTrue,
 			"Available",
