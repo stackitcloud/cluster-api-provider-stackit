@@ -183,46 +183,34 @@ func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
 	return fmt.Errorf("availabilityZone %q is not published in StackitCluster status.failureDomains", availabilityZone)
 }
 
-func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
+func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) (ctrl.Result, error) {
 	stackitMachine := machineScope.StackitMachine
 
 	// An empty status.instanceID is not proof that no server exists, so every
 	// deletion asks the cloud before dropping the finalizer.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, machineScope.StackitCluster)
 	if err != nil {
-		// A missing credentials Secret cannot be recovered from and commonly
-		// disappears first during namespace teardown, so finalize and make the
-		// possible leak loud rather than stranding the Machine in Terminating.
-		// Every other credentials problem is fixable and keeps retrying.
-		if apierrors.IsNotFound(err) {
-			if r.Recorder != nil {
-				r.Recorder.Eventf(stackitMachine, nil, corev1.EventTypeWarning, "CleanupSkipped", "Delete",
-					"Credentials Secret is gone; finalizing without cloud cleanup. "+
-						"Any remaining STACKIT server for this machine must be removed manually: %v", err)
-			}
-			controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
-			return nil
-		}
-		_, resultErr := util.CredentialFailureResult(
+		// Credentials can be restored. Keep the finalizer until cloud cleanup
+		// succeeds, and propagate timed retries for invalid credentials too.
+		return util.CredentialFailureResult(
 			&stackitMachine.Status.Conditions,
 			stackitMachine.Generation,
 			err,
 			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
 		)
-		return resultErr
 	}
 	if err := r.deleteAPIServerLoadBalancerTarget(ctx, cloudClient, machineScope); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 
 	instanceID, err := r.resolveServerForDeletion(ctx, cloudClient, machineScope)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if instanceID != "" {
 		if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
-			return err
+			return ctrl.Result{}, err
 		}
 		machineScope.ClearInstance()
 		if r.Recorder != nil {
@@ -232,7 +220,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 		}
 	}
 	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // resolveServerForDeletion reports the ID of the server backing this machine, or

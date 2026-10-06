@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterutil "sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -68,6 +69,12 @@ func (r *StackitClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	// An external controller owns this infrastructure object's lifecycle and
+	// status. Do not add finalizers, patch conditions, or access cloud resources.
+	if annotations.IsExternallyManaged(stackitCluster) {
+		log.V(1).Info("Skipping externally managed StackitCluster")
+		return ctrl.Result{}, nil
 	}
 
 	cluster, err := clusterutil.GetOwnerCluster(ctx, r.Client, stackitCluster.ObjectMeta)
