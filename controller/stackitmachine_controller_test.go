@@ -255,7 +255,34 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
 		})
 
+		It("records a warning event and logs when bastion node SSH access fails", func() {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			stackitCluster.Spec.Bastion = validBastionSpec()
+			Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
+			stackitCluster.Status.Ready = true
+			stackitCluster.Status.Bastion.SecurityGroupID = "bastion-sg"
+			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
+
+			fakeCloud.FailNextEnsureNodeSSH = fmt.Errorf("node ssh access timeout: %w", cloud.ErrTransient)
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "BastionSSHAccessError")
+
+			events := drainEvents(recorder)
+			Expect(events).To(ContainElement(ContainSubstring("FailedNodeSSHAccess")))
+		})
+
 		It("does not create a VM when availabilityZone is outside published failure domains", func() {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			got.Spec.AvailabilityZone = "eu01-9"
@@ -270,9 +297,14 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(got.Status.Ready).To(BeFalse())
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
+
+			events := drainEvents(recorder)
+			Expect(events).To(ContainElement(ContainSubstring("InvalidFailureDomain")))
 		})
 
 		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
 				return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
 			}
@@ -286,6 +318,9 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+			events := drainEvents(recorder)
+			Expect(events).To(ContainElement(ContainSubstring("InvalidCredentials")))
 
 			By("correcting the credentials")
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
@@ -375,6 +410,8 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("returns an error when VM creation is rejected", func() {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
 			fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", cloud.ErrInvalidInput)
 
 			result, err := reconciler.Reconcile(ctx, request)
@@ -386,6 +423,9 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
+
+			events := drainEvents(recorder)
+			Expect(events).To(ContainElement(ContainSubstring("FailedCreateInstance")))
 		})
 
 		It("deletes the VM and removes the finalizer", func() {
@@ -404,6 +444,27 @@ var _ = Describe("StackitMachine Controller", func() {
 				err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitMachine{})
 				return apierrors.IsNotFound(err)
 			}).Should(BeTrue())
+		})
+
+		It("records a warning event and logs when server deletion fails", func() {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server timeout: %w", cloud.ErrTransient)
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+
+			events := drainEvents(recorder)
+			Expect(events).To(ContainElement(ContainSubstring("FailedDeleteInstance")))
 		})
 
 		// The hook observes API server state from inside the cloud call, so it proves

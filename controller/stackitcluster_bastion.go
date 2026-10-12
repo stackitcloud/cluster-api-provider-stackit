@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
@@ -39,6 +40,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	cloudClient cloud.Client,
 	clusterScope *scope.ClusterScope,
 ) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
 	stackitCluster := clusterScope.StackitCluster
 	input := bastionservice.Input(stackitCluster, nil)
 	status := cloud.Bastion{
@@ -75,6 +77,10 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	}
 
 	if err := validateBastionSpec(stackitCluster.Spec.Bastion); err != nil {
+		log.Error(err, "Invalid bastion spec", "cluster", stackitCluster.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeWarning, "InvalidBastionSpec", "Reconcile", "Invalid bastion spec: %v", err)
+		}
 		clusterScope.SetNotReady(
 			"InvalidBastionSpec",
 			err.Error(),
@@ -86,6 +92,10 @@ func (r *StackitClusterReconciler) reconcileBastion(
 
 	cloudInit, err := r.resolveBastionCloudInit(ctx, stackitCluster)
 	if err != nil {
+		log.Error(err, "Failed to resolve bastion cloud-init", "cluster", stackitCluster.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(stackitCluster, nil, corev1.EventTypeWarning, "CloudInitRefError", "Reconcile", "Failed to resolve bastion cloudInitRef: %v", err)
+		}
 		clusterScope.SetNotReady(
 			"CloudInitRefError",
 			err.Error(),

@@ -414,6 +414,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("marks the bastion not ready when cloud-init ref is missing", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Bastion = validBastionSpec()
@@ -432,6 +434,9 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.Ready).To(BeFalse())
 		Expect(fakeCloud.ServerCount()).To(Equal(0))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionFalse, "CloudInitRefError")
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("CloudInitRefError")))
 	})
 
 	It("recreates the bastion and node SSH access when referenced cloud-init changes", func() {
@@ -487,6 +492,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("marks the network not ready when the configured network does not exist", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		got.Spec.Network.ID = "99999999-9999-9999-9999-999999999999"
@@ -500,6 +507,49 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.Ready).To(BeFalse())
 		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionFalse, "NetworkNotFound")
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "NetworkNotFound")
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("FailedGetNetwork")))
+	})
+
+	It("records a warning event and logs when API server load balancer creation fails", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+		fakeCloud.FailNextEnsureLB = fmt.Errorf("load balancer creation rejected: %w", cloud.ErrInvalidInput)
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
+		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionFalse, "LoadBalancerError")
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("FailedCreateLoadBalancer")))
+	})
+
+	It("records a warning event and logs when bastion creation fails", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		fakeCloud.FailNextEnsureBastion = fmt.Errorf("bastion creation rejected: %w", cloud.ErrInvalidInput)
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
+		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionFalse, "BastionError")
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("FailedCreateBastion")))
 	})
 
 	It("requeues when network lookup returns a transient error", func() {
@@ -518,6 +568,8 @@ var _ = Describe("StackitCluster Controller", func() {
 	// The requeue is what lets a corrected Secret take effect: nothing else
 	// enqueues the cluster once the credentials are rejected.
 	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
 			return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
 		}
@@ -531,6 +583,9 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.Ready).To(BeFalse())
 		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("InvalidCredentials")))
 
 		By("correcting the credentials")
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
@@ -610,6 +665,28 @@ var _ = Describe("StackitCluster Controller", func() {
 			err := k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{})
 			return apierrors.IsNotFound(err)
 		}).Should(BeTrue())
+	})
+
+	It("records a warning event and logs when API server load balancer deletion fails", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.APIServerLoadBalancerID).NotTo(BeEmpty())
+
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer timeout: %w", cloud.ErrTransient)
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).To(HaveOccurred())
+
+		events := drainEvents(recorder)
+		Expect(events).To(ContainElement(ContainSubstring("FailedDeleteLoadBalancer")))
 	})
 
 	// GetNetwork is the first cloud call of the reconcile, so a hook there proves
