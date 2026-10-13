@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,7 +50,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
 		}
 	}
-	stackitCluster.Status.FailureDomains = stackitFailureDomains(stackitCluster.Spec.Region)
+	clusterScope.SetFailureDomains(stackitFailureDomains(stackitCluster.Spec.Region))
 
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
@@ -70,6 +72,21 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		"",
 		infrav1.ClusterCredentialsReadyCondition,
 	)
+
+	zones, err := cloudClient.ListAvailabilityZones(ctx)
+	if err != nil {
+		stackitCluster.Status.Ready = false
+		return util.CloudFailureResult(
+			&stackitCluster.Status.Conditions,
+			stackitCluster.Generation,
+			"AvailabilityZonesError",
+			err,
+			retryableErrorRequeueAfter,
+			true,
+			infrav1.ClusterReadyCondition,
+		)
+	}
+	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
 	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
 	if err != nil {
@@ -270,6 +287,31 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	clusterScope.SetReady()
 	log.V(1).Info("StackitCluster ready", "endpoint", stackitCluster.Status.APIServerEndpoint)
 	return ctrl.Result{}, nil
+}
+
+func failureDomainsFromZones(region string, zones []string) []clusterv1.FailureDomain {
+	controlPlane := true
+	failureDomains := make([]clusterv1.FailureDomain, 0, len(zones))
+	for _, zone := range zones {
+		// Filter out virtual/metro zones (such as eu01-m or any zone with suffix -m)
+		if strings.HasSuffix(zone, "-m") {
+			continue
+		}
+		failureDomains = append(failureDomains, clusterv1.FailureDomain{
+			Name:         zone,
+			ControlPlane: &controlPlane,
+			Attributes: map[string]string{
+				"region": region,
+			},
+		})
+	}
+	if len(failureDomains) == 0 {
+		return stackitFailureDomains(region)
+	}
+	slices.SortFunc(failureDomains, func(a, b clusterv1.FailureDomain) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return failureDomains
 }
 
 func stackitFailureDomains(region string) []clusterv1.FailureDomain {

@@ -707,3 +707,24 @@ func TestSDKClientEnsureBastionDeduplicatesRepeatedCIDRs(t *testing.T) {
 			len(createdRuleCIDRs), createdRuleCIDRs)
 	}
 }
+
+func TestSDKClientListAvailabilityZones(t *testing.T) {
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/availability-zones") {
+			writeJSON(t, w, map[string]any{
+				"items": []any{"eu01-1", "eu01-2", "eu01-3"},
+			})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	zones, err := client.ListAvailabilityZones(context.Background())
+	if err != nil {
+		t.Fatalf("ListAvailabilityZones() error = %v", err)
+	}
+	if len(zones) != 3 || zones[0] != "eu01-1" || zones[1] != "eu01-2" || zones[2] != "eu01-3" {
+		t.Fatalf("ListAvailabilityZones() = %v, want [eu01-1 eu01-2 eu01-3]", zones)
+	}
+}

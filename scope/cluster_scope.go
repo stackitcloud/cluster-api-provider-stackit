@@ -99,3 +99,7 @@ func (s *ClusterScope) SetBastionStatus(bastion *cloud.Bastion, cloudInitHash st
 func (s *ClusterScope) ClearBastionStatus() {
 	s.StackitCluster.Status.Bastion = infrav1.StackitBastionStatus{}
 }
+
+func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
+	s.StackitCluster.Status.FailureDomains = failureDomains
+}

@@ -969,6 +969,35 @@ var _ = Describe("StackitCluster Controller", func() {
 		requests := reconciler.filterForStackitClusterResources(ctx, cluster)
 		Expect(requests).To(BeEmpty())
 	})
+
+	It("discovers failure domains dynamically and filters out metro (-m) zones", func() {
+		fakeCloud.AvailabilityZones = []string{"eu01-2", "eu01-m", "eu01-1", "eu01-3"}
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.FailureDomains).To(Equal([]clusterv1.FailureDomain{
+			{Name: "eu01-1", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
+			{Name: "eu01-2", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
+			{Name: "eu01-3", ControlPlane: new(true), Attributes: map[string]string{"region": "eu01"}},
+		}))
+	})
+
+	It("reports an error condition when listing availability zones fails", func() {
+		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", cloud.ErrTransient)
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
+		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "AvailabilityZonesError")
+	})
 })
 
 func expectBastionCloudInit(

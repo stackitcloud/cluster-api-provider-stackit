@@ -53,6 +53,14 @@ type Client struct {
 	FailNextDeleteBastion error
 	FailNextEnsureNodeSSH error
 	FailNextDeleteNodeSSH error
+	FailNextListAZ        error
+
+	// AvailabilityZones is returned by ListAvailabilityZones if non-empty.
+	// Defaults to eu01-1, eu01-2, eu01-3.
+	AvailabilityZones []string
+
+	// LastCreateServerInput records the most recent input passed to CreateServer.
+	LastCreateServerInput cloud.CreateServerInput
 
 	// Before* hooks, if non-nil, run before the call they belong to. They let a
 	// test observe API server state at the exact moment a cloud call would
@@ -189,6 +197,7 @@ func (c *Client) CreateServer(_ context.Context, input cloud.CreateServerInput) 
 	}
 
 	id := c.genID()
+	c.LastCreateServerInput = input
 	zone := input.AvailabilityZone
 	if zone == "" {
 		zone = "eu01-1"
@@ -714,6 +723,18 @@ func idOfSecurityGroup(securityGroup *cloud.SecurityGroup) string {
 		return ""
 	}
 	return securityGroup.ID
+}
+
+func (c *Client) ListAvailabilityZones(_ context.Context) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := consume(&c.FailNextListAZ); err != nil {
+		return nil, err
+	}
+	if len(c.AvailabilityZones) > 0 {
+		return slices.Clone(c.AvailabilityZones), nil
+	}
+	return []string{"eu01-1", "eu01-2", "eu01-3"}, nil
 }
 
 func cloneServer(s *cloud.Server) *cloud.Server {

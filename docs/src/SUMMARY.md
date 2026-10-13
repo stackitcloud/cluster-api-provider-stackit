@@ -14,7 +14,7 @@
 - [Topics](./topics/index.md)
   - [OS Images](./topics/images.md)
   - [Accessing VM instances](./topics/accessing-vm-instances.md)
-  - [Failure domains](./topics/failure-domains.md)
+  - [HA, Availability Zones & Failure Domains](./topics/failure-domains.md)
   - [IAM Permissions Used](./topics/iam-permissions.md)
   <!--- [Troubleshooting](./topics/troubleshooting.md)
   - [Instance Metadata](./topics/instance-metadata.md)-->

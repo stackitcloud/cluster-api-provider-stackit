@@ -285,6 +285,70 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
 		})
 
+		//nolint:dupl // Failure domain resolution cases test explicit failureDomain vs cluster default.
+		It("respects Machine.spec.failureDomain when StackitMachine.spec.availabilityZone is empty", func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Spec.AvailabilityZone = ""
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+			ownerMachine := &clusterv1.Machine{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, ownerMachine)).To(Succeed())
+			ownerMachine.Spec.FailureDomain = "eu01-2"
+			Expect(k8sClient.Update(ctx, ownerMachine)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+			Expect(fakeCloud.LastCreateServerInput.AvailabilityZone).To(Equal("eu01-2"))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(got.Status.AvailabilityZone).To(Equal("eu01-2"))
+		})
+
+		//nolint:dupl // Failure domain resolution cases test explicit failureDomain vs cluster default.
+		It("defaults to the first failure domain when neither failureDomain nor availabilityZone is set", func() {
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			got.Spec.AvailabilityZone = ""
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+			ownerMachine := &clusterv1.Machine{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, ownerMachine)).To(Succeed())
+			ownerMachine.Spec.FailureDomain = ""
+			Expect(k8sClient.Update(ctx, ownerMachine)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(1))
+			Expect(fakeCloud.LastCreateServerInput.AvailabilityZone).To(Equal("eu01-1"))
+
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeTrue())
+			Expect(got.Status.AvailabilityZone).To(Equal("eu01-1"))
+		})
+
+		It("does not create a VM when Machine.spec.failureDomain is outside published failure domains", func() {
+			ownerMachine := &clusterv1.Machine{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: machineName, Namespace: namespace}, ownerMachine)).To(Succeed())
+			ownerMachine.Spec.FailureDomain = "eu01-9"
+			Expect(k8sClient.Update(ctx, ownerMachine)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+			Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
+		})
+
 		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
 				return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)

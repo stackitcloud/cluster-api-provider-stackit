@@ -61,13 +61,11 @@ API contract details.
   a clear prerequisite flow, for example Terraform modules or explicit
   documented setup steps, unless the provider grows first-class management for
   those resources.
-- Failure domains are currently derived from the configured region as
-  `<region>-1`, `<region>-2`, and `<region>-3`. Production behavior should
-  discover available STACKIT zones dynamically and publish only real failure
-  domains.
-- Admission webhooks are missing. CRD validation exists, but there are no
-  defaulting / validation webhooks for immutability, safe updates, template
-  fields, cross-resource checks, or clearer user-facing validation failures.
+- Failure domains are discovered dynamically from STACKIT IaaS availability
+  zones, filtering out virtual metro zones (`-m`) so VMs are not placed into
+  expensive replicated zones by default.
+- Admission webhooks are implemented for mutating defaulting and validating
+  immutability, safe updates, and spec constraints.
 - Operational hardening is still needed. The manager deployment is still close
   to the Kubebuilder scaffold in places, and production use should define
   resource sizing, metrics TLS, HA/replica behavior, alerting, and runbooks.
@@ -76,11 +74,6 @@ API contract details.
 
 For full Cluster API support, the provider should complete the following areas:
 
-- Respect `Machine.spec.failureDomain`. The provider currently uses
-  `StackitMachine.spec.availabilityZone`. For full CAPI behavior, if CAPI sets
-  `Machine.spec.failureDomain`, the infrastructure machine must be placed in
-  that failure domain. The provider should also consider surfacing the actual
-  placement through `StackitMachine.status.failureDomain`.
 - Continue hardening ClusterClass support. Topology create/ready/delete e2e now
   covers a 1 control-plane / 1 worker workload cluster, including template
   metadata propagation to generated STACKIT infrastructure objects. Highly

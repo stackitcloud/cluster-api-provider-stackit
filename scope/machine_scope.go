@@ -12,6 +12,7 @@ package scope
 
 import (
 	"context"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -108,4 +109,37 @@ func (s *MachineScope) ClearInstance() {
 	s.StackitMachine.Status.InstanceID = ""
 	s.StackitMachine.Status.InstanceState = ""
 	s.StackitMachine.Status.AvailabilityZone = ""
+}
+
+// AvailabilityZone returns the resolved availability zone for the machine.
+// Following Cluster API conventions:
+//  1. If Machine.Spec.FailureDomain is set (e.g. by KCP spreading control plane nodes or MachineDeployment),
+//     it is used.
+//  2. Otherwise, if StackitMachine.Spec.AvailabilityZone is set, it is used.
+//  3. Otherwise, if neither is set, it defaults to the first available failure domain
+//     from StackitCluster.Status.FailureDomains (sorted alphabetically). This prevents the STACKIT IaaS
+//     API from defaulting to the expensive metro zone (eu01-m).
+func (s *MachineScope) AvailabilityZone() string {
+	if s.Machine != nil && s.Machine.Spec.FailureDomain != "" {
+		return s.Machine.Spec.FailureDomain
+	}
+
+	if s.StackitMachine != nil && s.StackitMachine.Spec.AvailabilityZone != "" {
+		return s.StackitMachine.Spec.AvailabilityZone
+	}
+
+	if s.StackitCluster != nil && len(s.StackitCluster.Status.FailureDomains) > 0 {
+		zones := make([]string, 0, len(s.StackitCluster.Status.FailureDomains))
+		for _, fd := range s.StackitCluster.Status.FailureDomains {
+			zones = append(zones, fd.Name)
+		}
+		slices.Sort(zones)
+		return zones[0]
+	}
+
+	if s.StackitCluster != nil && s.StackitCluster.Spec.Region != "" {
+		return s.StackitCluster.Spec.Region + "-1"
+	}
+
+	return ""
 }
