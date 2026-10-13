@@ -723,6 +723,32 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
+	It("only publishes the LoadBalancerReady event when the load balancer becomes available or its IP changes", func() {
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Normal LoadBalancerReady")))
+
+		// A subsequent reconcile with target changes should not republish LoadBalancerReady.
+		createControlPlaneMachine(ctx, "cp-event-test-"+clusterName, clusterName, "10.0.0.99")
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(drainEvents(recorder)).NotTo(ContainElement(HavePrefix("Normal LoadBalancerReady")))
+
+		// If the load balancer IP changes, LoadBalancerReady should be published again.
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		fakeCloud.SetLoadBalancerIP(got.Status.APIServerLoadBalancerID, "203.0.113.99")
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(drainEvents(recorder)).To(ContainElement(Equal("Normal LoadBalancerReady API server load balancer is ready at 203.0.113.99")))
+	})
+
 	It("keeps the bootstrap placeholder while no control plane machine has an address", func() {
 		// STACKIT rejects an empty target pool.
 		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "")

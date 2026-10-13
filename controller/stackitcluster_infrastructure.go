@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/collections"
@@ -154,6 +155,10 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
+
+		isLBReady := meta.IsStatusConditionTrue(stackitCluster.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition) &&
+			stackitCluster.Status.APIServerEndpoint.Host == loadBalancer.IP
+
 		endpoint := clusterv1.APIEndpoint{
 			Host: loadBalancer.IP,
 			Port: defaultAPIServerPort,
@@ -187,17 +192,19 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(targets))
 		}
 
-		clusterScope.SetConditions(
-			metav1.ConditionTrue,
-			"Available",
-			"",
-			infrav1.ClusterLoadBalancerReadyCondition,
-		)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(
-				stackitCluster, nil, corev1.EventTypeNormal, "LoadBalancerReady", "SetReady",
-				"API server load balancer is ready at %s", loadBalancer.IP,
+		if !isLBReady {
+			clusterScope.SetConditions(
+				metav1.ConditionTrue,
+				"Available",
+				"",
+				infrav1.ClusterLoadBalancerReadyCondition,
 			)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(
+					stackitCluster, nil, corev1.EventTypeNormal, "LoadBalancerReady", "SetReady",
+					"API server load balancer is ready at %s", loadBalancer.IP,
+				)
+			}
 		}
 	} else if stackitCluster.Spec.ControlPlaneEndpoint.Host != "" {
 		stackitCluster.Status.APIServerEndpoint = stackitCluster.Spec.ControlPlaneEndpoint

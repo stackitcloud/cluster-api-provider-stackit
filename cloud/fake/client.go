@@ -631,6 +631,15 @@ func (c *Client) LoadBalancerTargetIPs(id string) map[string]string {
 	return copyTags(entry.targets)
 }
 
+// SetLoadBalancerIP updates the IP of a load balancer (test helper).
+func (c *Client) SetLoadBalancerIP(id, ip string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.loadBalancers[id]; ok {
+		entry.lb.IP = ip
+	}
+}
+
 func mapContains(haystack, needle map[string]string) bool {
 	for k, v := range needle {
 		if haystack[k] != v {
