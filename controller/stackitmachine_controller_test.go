@@ -22,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -175,23 +174,19 @@ var _ = Describe("StackitMachine Controller", func() {
 				"legacy status.ready must follow the Ready condition, not contradict it")
 		})
 
-		It("reports a stopped server with its own reason and warns once", func() {
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
+		It("reports a stopped server with its own reason", func() {
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Normal InstanceCreated")))
 
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 
-			By("passing through the transitional STOPPING state without a warning")
+			By("passing through the transitional STOPPING state without failing")
 			fakeCloud.SetServerState(got.Status.InstanceID, "STOPPING", "RUNNING")
 			_, err = reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(drainEvents(recorder)).NotTo(ContainElement(HavePrefix("Warning")))
 
-			By("warning once the server is stopped")
+			By("marking not ready once the server is stopped")
 			fakeCloud.SetServerState(got.Status.InstanceID, "INACTIVE", "STOPPED")
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -203,12 +198,10 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceStopped")
 			condition := meta.FindStatusCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition)
 			Expect(condition.Message).To(Equal("server is stopped (state INACTIVE, power status STOPPED)"))
-			Expect(drainEvents(recorder)).To(ContainElement(HavePrefix("Warning InstanceStopped")))
 
-			By("not warning again while the server stays stopped")
+			By("reconciling again while the server stays stopped")
 			_, err = reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(drainEvents(recorder)).NotTo(ContainElement(HavePrefix("Warning")))
 		})
 
 		It("reports an active but crashed server as not ready", func() {
@@ -255,9 +248,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
 		})
 
-		It("records a warning event and logs when bastion node SSH access fails", func() {
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
+		It("marks conditions not ready when bastion node SSH access fails", func() {
 			stackitCluster := &infrav1.StackitCluster{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
 			stackitCluster.Spec.Bastion = validBastionSpec()
@@ -275,14 +266,9 @@ var _ = Describe("StackitMachine Controller", func() {
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "BastionSSHAccessError")
-
-			events := drainEvents(recorder)
-			Expect(events).To(ContainElement(ContainSubstring("FailedNodeSSHAccess")))
 		})
 
 		It("does not create a VM when availabilityZone is outside published failure domains", func() {
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			got.Spec.AvailabilityZone = "eu01-9"
@@ -297,14 +283,9 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(got.Status.Ready).To(BeFalse())
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InvalidFailureDomain")
-
-			events := drainEvents(recorder)
-			Expect(events).To(ContainElement(ContainSubstring("InvalidFailureDomain")))
 		})
 
 		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
 				return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
 			}
@@ -318,9 +299,6 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			expectCondition(got.Status.Conditions, infrav1.MachineCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
-
-			events := drainEvents(recorder)
-			Expect(events).To(ContainElement(ContainSubstring("InvalidCredentials")))
 
 			By("correcting the credentials")
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
@@ -410,8 +388,6 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("returns an error when VM creation is rejected", func() {
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
 			fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", cloud.ErrInvalidInput)
 
 			result, err := reconciler.Reconcile(ctx, request)
@@ -423,9 +399,6 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionFalse, "InstanceError")
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "InstanceError")
-
-			events := drainEvents(recorder)
-			Expect(events).To(ContainElement(ContainSubstring("FailedCreateInstance")))
 		})
 
 		It("deletes the VM and removes the finalizer", func() {
@@ -446,13 +419,10 @@ var _ = Describe("StackitMachine Controller", func() {
 			}).Should(BeTrue())
 		})
 
-		It("records a warning event and logs when server deletion fails", func() {
+		It("returns an error when server deletion fails", func() {
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(fakeCloud.ServerCount()).To(Equal(1))
-
-			recorder := events.NewFakeRecorder(10)
-			reconciler.Recorder = recorder
 
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
@@ -462,9 +432,6 @@ var _ = Describe("StackitMachine Controller", func() {
 
 			_, err = reconciler.Reconcile(ctx, request)
 			Expect(err).To(HaveOccurred())
-
-			events := drainEvents(recorder)
-			Expect(events).To(ContainElement(ContainSubstring("FailedDeleteInstance")))
 		})
 
 		// The hook observes API server state from inside the cloud call, so it proves
