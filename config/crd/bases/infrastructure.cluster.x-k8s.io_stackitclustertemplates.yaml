@@ -236,13 +236,13 @@ spec:
                         x-kubernetes-map-type: atomic
                       network:
                         description: |-
-                          network references the existing STACKIT network the cluster will use.
-                          For MVP the network must already exist.
+                          network configures the STACKIT network the cluster will use.
+                          ommiting the ID will create a managed dedicated network
                         properties:
                           id:
                             description: |-
                               id is the STACKIT network ID.
-                              Omiting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
+                              Omitting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
                             pattern: ^[0-9a-fA-F-]{36}$
                             type: string
                         type: object

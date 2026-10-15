@@ -47,8 +47,8 @@ type StackitClusterSpec struct {
 	// +required
 	CredentialsSecretRef corev1.SecretReference `json:"credentialsSecretRef"`
 
-	// network references the existing STACKIT network the cluster will use.
-	// For MVP the network must already exist.
+	// network configures the STACKIT network the cluster will use.
+	// ommiting the ID will create a managed dedicated network
 	// +required
 	Network StackitClusterNetworkSpec `json:"network"`
 
@@ -76,9 +76,9 @@ type StackitClusterSpec struct {
 // StackitClusterNetworkSpec references an existing STACKIT network.
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
-	// Omiting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
-	// +optional
+	// Omitting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
+	// +optional
 	ID string `json:"id,omitempty"`
 }
 

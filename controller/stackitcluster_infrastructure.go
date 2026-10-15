@@ -88,28 +88,32 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
-	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
-	if err != nil {
-		log.Error(err, "Failed to get network",
-			"networkID", stackitCluster.Spec.Network.ID,
-			"region", stackitCluster.Spec.Region,
-		)
-		record.Warnf(
-			stackitCluster, "FailedGetNetwork",
-			"Failed to get network %s in region %s: %v",
-			stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
-		)
-		stackitCluster.Status.Ready = false
-		return util.CloudFailureResult(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
-			"NetworkNotFound",
-			err,
-			retryableErrorRequeueAfter,
-			false,
-			infrav1.ClusterNetworkReadyCondition,
-			infrav1.ClusterReadyCondition,
-		)
+	if stackitCluster.Spec.Network.ID != "" {
+		network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
+		if err != nil {
+			log.Error(err, "Failed to get network",
+				"networkID", stackitCluster.Spec.Network.ID,
+				"region", stackitCluster.Spec.Region,
+			)
+			record.Warnf(
+				stackitCluster, "FailedGetNetwork",
+				"Failed to get network %s in region %s: %v",
+				stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
+			)
+			stackitCluster.Status.Ready = false
+			return util.CloudFailureResult(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				"NetworkNotFound",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterNetworkReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
+		}
+	} else {
+		//TODO: implement cloudClient.EnsureNetwork
 	}
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,
@@ -453,6 +457,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		clusterScope.ClearBastionStatus()
 		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}
+	// TODO: implement cloudClient.deleteNetwork - "if managed" etc.
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
 	return ctrl.Result{}, nil
 }
