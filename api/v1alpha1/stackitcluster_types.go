@@ -78,7 +78,6 @@ type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
 	// Omiting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
 	// +optional
-	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
 	ID string `json:"id,omitempty"`
 }
