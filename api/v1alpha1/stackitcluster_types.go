@@ -76,10 +76,11 @@ type StackitClusterSpec struct {
 // StackitClusterNetworkSpec references an existing STACKIT network.
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
-	// +required
+	// Omiting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
+	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
-	ID string `json:"id"`
+	ID string `json:"id,omitempty"`
 }
 
 // StackitAPIServerLoadBalancerSpec configures an optional load balancer for
@@ -160,6 +161,10 @@ type StackitClusterStatus struct {
 	// +optional
 	Initialization StackitClusterInitializationStatus `json:"initialization,omitempty"`
 
+	// network stores observed provider-managed network resources.
+	// +optional
+	Network StackitNetworkStatus `json:"network,omitempty"`
+
 	// apiServerEndpoint is the endpoint the Kubernetes API server is reachable at.
 	// +optional
 	APIServerEndpoint clusterv1.APIEndpoint `json:"apiServerEndpoint,omitempty,omitzero"`
@@ -215,6 +220,14 @@ type StackitBastionStatus struct {
 	// the current provider-managed bastion server.
 	// +optional
 	CloudInitHash string `json:"cloudInitHash,omitempty"`
+}
+
+// network contains status of a STACKIT network created by CAPSTK
+type StackitNetworkStatus struct {
+	// id is the STACKIT network ID
+	// +optional
+	ID      string `json:"id,omitempty"`
+	Managed bool   `json:"managed,omitempty"`
 }
 
 // Condition types maintained by the StackitClusterReconciler.
