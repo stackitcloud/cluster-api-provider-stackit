@@ -203,6 +203,17 @@ func (c *SDKClient) CreateServer(ctx context.Context, input CreateServerInput) (
 	return c.serverFromSDK(ctx, server), nil
 }
 
+func (c *SDKClient) ListAvailabilityZones(ctx context.Context) ([]string, error) {
+	resp, err := c.iaasClient.DefaultAPI.ListAvailabilityZones(ctx, c.region).Execute()
+	if err != nil {
+		return nil, classifySDKError("list availability zones", err)
+	}
+	if resp == nil || resp.Items == nil {
+		return nil, nil
+	}
+	return resp.GetItems(), nil
+}
+
 func (c *SDKClient) DeleteServer(ctx context.Context, id string) error {
 	if err := c.iaasClient.DefaultAPI.DeleteServer(ctx, c.projectID, c.region, id).Execute(); err != nil {
 		return classifySDKError("delete server", err)

@@ -183,6 +183,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// nolint:staticcheck // SA1019 ignore this deprecation as long as cluster-api doesn't support the newer recorder
 	record.InitFromRecorder(mgr.GetEventRecorderFor("cluster-api-provider-stackit"))
 
 	if err := (&controller.StackitClusterReconciler{

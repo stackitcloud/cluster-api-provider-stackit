@@ -184,16 +184,28 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 }
 
 func validateMachineAvailabilityZone(machineScope *scope.MachineScope) error {
-	availabilityZone := machineScope.StackitMachine.Spec.AvailabilityZone
-	if availabilityZone == "" || len(machineScope.StackitCluster.Status.FailureDomains) == 0 {
+	clusterFailureDomains := machineScope.StackitCluster.Status.FailureDomains
+	if len(clusterFailureDomains) == 0 {
 		return nil
 	}
-	for _, failureDomain := range machineScope.StackitCluster.Status.FailureDomains {
-		if failureDomain.Name == availabilityZone {
-			return nil
+	knownAZ := func(zone string) bool {
+		for _, failureDomain := range clusterFailureDomains {
+			if failureDomain.Name == zone {
+				return true
+			}
+		}
+		return false
+	}
+	if az := machineScope.StackitMachine.Spec.AvailabilityZone; az != "" && !knownAZ(az) {
+		return fmt.Errorf("availabilityZone %q is not published in StackitCluster status.failureDomains", az)
+	}
+	if machineScope.Machine != nil && machineScope.Machine.Spec.FailureDomain != "" {
+		fd := machineScope.Machine.Spec.FailureDomain
+		if !knownAZ(fd) {
+			return fmt.Errorf("machine failureDomain %q is not published in StackitCluster status.failureDomains", fd)
 		}
 	}
-	return fmt.Errorf("availabilityZone %q is not published in StackitCluster status.failureDomains", availabilityZone)
+	return nil
 }
 
 func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineScope *scope.MachineScope) error {
@@ -335,7 +347,7 @@ func (r *StackitMachineReconciler) ensureServer(
 		Region:           machineScope.StackitCluster.Spec.Region,
 		ImageID:          stackitMachine.Spec.ImageID,
 		MachineType:      stackitMachine.Spec.MachineType,
-		AvailabilityZone: stackitMachine.Spec.AvailabilityZone,
+		AvailabilityZone: machineScope.AvailabilityZone(),
 		SSHKeyName:       stackitMachine.Spec.SSHKeyName,
 		NetworkID:        stackitMachine.Spec.Network.ID,
 		SecurityGroups:   stackitMachine.Spec.SecurityGroups,

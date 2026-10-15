@@ -56,6 +56,8 @@ type Client interface {
 	SetAPIServerLoadBalancerTargets(ctx context.Context, loadBalancerID string, port int32, targets []LoadBalancerTargetInput) error
 
 	DeleteAPIServerLoadBalancer(ctx context.Context, id string) error
+
+	ListAvailabilityZones(ctx context.Context) ([]string, error)
 }
 
 // Factory builds a Client from credentials (raw bytes from the configured

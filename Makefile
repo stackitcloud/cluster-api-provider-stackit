@@ -23,6 +23,7 @@ STACKIT_WORKLOAD_CNI ?= cilium
 CILIUM_VERSION ?= 1.19.4
 CILIUM_VALUES ?= templates/addons/cilium-values.yaml
 CALICO_MANIFEST ?= https://raw.githubusercontent.com/projectcalico/calico/v3.30.0/manifests/calico.yaml
+ENABLE_WEBHOOKS ?= false
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -187,7 +188,7 @@ build: manifests generate fmt vet ## Build manager binary.
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/manager/main.go
+	ENABLE_WEBHOOKS=$(ENABLE_WEBHOOKS) go run ./cmd/manager/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
