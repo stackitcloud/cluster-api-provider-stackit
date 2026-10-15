@@ -88,8 +88,8 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
+	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
 	if stackitCluster.Spec.Network.ID != "" {
-		network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
 		if err != nil {
 			log.Error(err, "Failed to get network",
 				"networkID", stackitCluster.Spec.Network.ID,
