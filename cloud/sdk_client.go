@@ -234,7 +234,11 @@ func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error)
 	}, nil
 }
 
-func (c *SDKClient) CreateNetwork(ctx context.Context, id string) (*Network, error) {
+func (c *SDKClient) CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error) {
+	return nil, nil // TODO
+}
+
+func (c *SDKClient) DeleteNetwork(ctx context.Context, id string) error {
 	return nil // TODO
 }
 
