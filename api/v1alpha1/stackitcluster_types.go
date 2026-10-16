@@ -49,8 +49,8 @@ type StackitClusterSpec struct {
 
 	// network configures the STACKIT network the cluster will use.
 	// ommiting the ID will create a managed dedicated network
-	// +required
-	Network StackitClusterNetworkSpec `json:"network"`
+	// +optional
+	Network StackitClusterNetworkSpec `json:"network,omitempty"`
 
 	// apiServerLoadBalancer configures the load balancer in front of the
 	// Kubernetes API server.

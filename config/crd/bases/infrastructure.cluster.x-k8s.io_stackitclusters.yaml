@@ -224,7 +224,6 @@ spec:
                 type: string
             required:
             - credentialsSecretRef
-            - network
             - projectID
             - region
             type: object

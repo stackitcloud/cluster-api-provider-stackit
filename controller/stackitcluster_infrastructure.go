@@ -113,7 +113,8 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			)
 		}
 	} else {
-		//TODO: implement cloudClient.EnsureNetwork
+		// TODO: implement cloudClient.EnsureNetwork
+
 	}
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,

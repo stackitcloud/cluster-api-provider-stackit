@@ -234,6 +234,10 @@ func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error)
 	}, nil
 }
 
+func (c *SDKClient) CreateNetwork(ctx context.Context, id string) (*Network, error) {
+	return nil // TODO
+}
+
 func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error) {
 	if input.Name == "" || input.NetworkID == "" || input.ImageID == "" ||
 		input.MachineType == "" || input.SSHKeyName == "" {
