@@ -235,6 +235,10 @@ func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error)
 }
 
 func (c *SDKClient) CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error) {
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: network name is required", ErrInvalidInput)
+	}
+
 	return nil, nil // TODO
 }
 
