@@ -251,6 +251,14 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error
 	return &out, nil
 }
 
+func (c *Client) CreateNetwork(_ context.Context, _ cloud.CreateNetworkInput) (*cloud.Network, error) {
+	return nil, nil // TODO
+}
+
+func (c *Client) DeleteNetwork(_ context.Context, _ string) error {
+	return nil // TODO
+}
+
 func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cloud.Bastion, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

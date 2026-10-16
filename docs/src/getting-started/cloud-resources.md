@@ -18,9 +18,18 @@ network must provide:
   container image pulls, DNS, NTP, and STACKIT APIs.
 - Traffic required by the selected CNI.
 
-Network creation is intentionally outside the provider for now because networks
-usually encode platform-level policy such as address planning, routing,
-peering, VPN, DNS, and shared-service access.
+If you don't provide a network ID, CAPS will create one /24 Network for you.
+
+Planning your Networks usually involves platform-level policy such as address 
+planning and considers routing, peering, VPN, DNS, and shared-service access 
+but the default is built for convenience and a newly created (managed) network 
+will a have an attached tag indicating that it is managed by CAPS. 
+
+Only empty Networks can be deleted, so if you delete your CAPS Cluster and you 
+have no other manually created resource in that cluster, it will be deleted too.
+
+
+### How to create a STACKIT Network manually
 
 Create a network with the STACKIT CLI:
 
