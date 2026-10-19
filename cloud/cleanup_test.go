@@ -36,6 +36,12 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	if _, err := client.CreateServer(ctx, cloud.CreateServerInput{Name: "other", Tags: otherTags}); err != nil {
 		t.Fatalf("CreateServer() error = %v", err)
 	}
+	if _, err := client.CreatePublicIP(ctx, tags); err != nil {
+		t.Fatalf("CreatePublicIP() error = %v", err)
+	}
+	if _, err := client.CreatePublicIP(ctx, otherTags); err != nil {
+		t.Fatalf("CreatePublicIP() error = %v", err)
+	}
 	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
 		Name:      "matched",
 		Tags:      tags,
@@ -85,5 +91,19 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	}
 	if len(matchedLoadBalancers) != 0 {
 		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
+	}
+	matchedPublicIPs, err := client.ListPublicIPsByTags(ctx, tags)
+	if err != nil {
+		t.Fatalf("ListPublicIPsByTags() error = %v", err)
+	}
+	if len(matchedPublicIPs) != 0 {
+		t.Fatalf("matched public IP count = %d, want 0", len(matchedPublicIPs))
+	}
+	otherPublicIPs, err := client.ListPublicIPsByTags(ctx, otherTags)
+	if err != nil {
+		t.Fatalf("ListPublicIPsByTags(other) error = %v", err)
+	}
+	if len(otherPublicIPs) != 1 {
+		t.Fatalf("other public IP count = %d, want 1", len(otherPublicIPs))
 	}
 }

@@ -34,6 +34,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -490,7 +491,7 @@ var _ = Describe("Manager", Ordered, func() {
 				Eventually(func(g Gomega) {
 					output := kubectlOutput(g, "get", "stackitcluster", clusterName, "-n", cfg.Namespace, "-o", "jsonpath={.status.bastion.publicIP}")
 					g.Expect(output).NotTo(BeEmpty())
-					publicIPs, err := cloudClient.ListPublicIPsByTags(ctx, stackitE2EBastionTags(testID))
+					publicIPs, err := publicip.ListByTags(ctx, cloudClient.IaaSClient(), cloudClient.ProjectID(), cloudClient.Region(), stackitE2EBastionTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(publicIPs).To(HaveLen(1))
 					securityGroups, err := cloudClient.ListSecurityGroupsByTags(ctx, stackitE2EBastionTags(testID))
@@ -556,7 +557,7 @@ var _ = Describe("Manager", Ordered, func() {
 				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
-				publicIPs, err := cloudClient.ListPublicIPsByTags(ctx, stackitE2EBastionTags(testID))
+				publicIPs, err := publicip.ListByTags(ctx, cloudClient.IaaSClient(), cloudClient.ProjectID(), cloudClient.Region(), stackitE2EBastionTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(publicIPs).To(BeEmpty())
 				securityGroups, err := cloudClient.ListSecurityGroupsByTags(ctx, stackitE2EBastionTags(testID))

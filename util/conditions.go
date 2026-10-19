@@ -14,11 +14,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 )
 
 // SetCondition adds or updates a condition on conditions.

@@ -10,7 +10,17 @@ You may obtain a copy of the License at
 
 package cloud
 
-import "context"
+import (
+	"context"
+
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+)
+
+// Reconciler is a generic interface used by components offering a type of service.
+type Reconciler interface {
+	Reconcile(ctx context.Context) error
+	Delete(ctx context.Context) error
+}
 
 // Client is the abstraction over STACKIT cloud APIs used by the controllers.
 //
@@ -23,6 +33,12 @@ import "context"
 //   - be idempotent (CreateServer/EnsureAPIServerLoadBalancer must not produce
 //     duplicates when a resource with matching tags already exists)
 type Client interface {
+	ProjectID() string
+
+	Region() string
+
+	IaaSClient() *iaas.APIClient
+
 	GetServer(ctx context.Context, id string) (*Server, error)
 
 	FindServerByTags(ctx context.Context, tags map[string]string) (*Server, error)
@@ -42,8 +58,6 @@ type Client interface {
 	EnsureNodeSSHAccess(ctx context.Context, input NodeSSHAccessInput) (*SecurityGroup, error)
 
 	DeleteNodeSSHAccess(ctx context.Context, tags map[string]string) error
-
-	ListPublicIPsByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error)
 
 	ListSecurityGroupsByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error)
 
