@@ -35,7 +35,7 @@ type Client struct {
 	loadBalancers  map[string]*lbEntry
 	publicIPs      map[string]*publicIPEntry
 	securityGroups map[string]*securityGroupEntry
-	networks       map[string]*cloud.Network
+	networks       map[string]*networkEntry
 
 	nextID int
 
@@ -49,6 +49,8 @@ type Client struct {
 	FailNextDeleteLB      error
 	FailNextSetTargets    error
 	FailNextGetNetwork    error
+	FailNextCreateNetwork error
+	FailNextDeleteNetwork error
 	FailNextEnsureBastion error
 	FailNextDeleteBastion error
 	FailNextEnsureNodeSSH error
@@ -100,6 +102,11 @@ type securityGroupEntry struct {
 	remoteSecurityGroups []string
 }
 
+type networkEntry struct {
+	network *cloud.Network
+	tags    map[string]string
+}
+
 // New returns a Client preconfigured with the given networks.
 func New(networks ...cloud.Network) *Client {
 	c := &Client{
@@ -107,11 +114,13 @@ func New(networks ...cloud.Network) *Client {
 		loadBalancers:  make(map[string]*lbEntry),
 		publicIPs:      make(map[string]*publicIPEntry),
 		securityGroups: make(map[string]*securityGroupEntry),
-		networks:       make(map[string]*cloud.Network),
+		networks:       make(map[string]*networkEntry),
 	}
 	for i := range networks {
 		n := networks[i]
-		c.networks[n.ID] = &n
+		c.networks[n.ID] = &networkEntry{
+			network: &n,
+		}
 	}
 	return c
 }
@@ -243,20 +252,64 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error
 	if err := consume(&c.FailNextGetNetwork); err != nil {
 		return nil, err
 	}
-	n, ok := c.networks[id]
+	entry, ok := c.networks[id]
 	if !ok {
 		return nil, fmt.Errorf("network %q: %w", id, cloud.ErrNotFound)
 	}
-	out := *n
+	out := *entry.network
 	return &out, nil
 }
 
-func (c *Client) CreateNetwork(_ context.Context, _ cloud.CreateNetworkInput) (*cloud.Network, error) {
-	return nil, nil // TODO
+func (c *Client) CreateNetwork(_ context.Context, input cloud.CreateNetworkInput) (*cloud.Network, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextCreateNetwork); err != nil {
+		return nil, err
+	}
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: network name is required", cloud.ErrInvalidInput)
+	}
+
+	// Idempotency check matching SDK client behavior
+	if len(input.Tags) > 0 {
+		for _, entry := range c.networks {
+			if mapContains(entry.tags, input.Tags) {
+				out := *entry.network
+				return &out, nil
+			}
+		}
+	}
+
+	prefixes := []string{}
+	if input.IPv4Prefix != "" {
+		prefixes = []string{input.IPv4Prefix}
+	}
+	net := &cloud.Network{
+		ID:           c.genID(),
+		Name:         input.Name,
+		IPv4Prefixes: prefixes,
+	}
+	c.networks[net.ID] = &networkEntry{
+		network: net,
+		tags:    maps.Clone(input.Tags),
+	}
+	out := *net
+	return &out, nil
 }
 
-func (c *Client) DeleteNetwork(_ context.Context, _ string) error {
-	return nil // TODO
+func (c *Client) DeleteNetwork(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteNetwork); err != nil {
+		return err
+	}
+	if _, ok := c.networks[id]; !ok {
+		return fmt.Errorf("network %q: %w", id, cloud.ErrNotFound)
+	}
+	delete(c.networks, id)
+	return nil
 }
 
 func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cloud.Bastion, error) {

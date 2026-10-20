@@ -261,11 +261,35 @@ func (c *SDKClient) CreateNetwork(ctx context.Context, input CreateNetworkInput)
 		}
 	}
 
-	return nil, nil // TODO
+	payload := iaas.NewCreateNetworkPayload(input.Name)
+	if len(input.Tags) > 0 {
+		payload.SetLabels(tagsToSDKLabels(input.Tags))
+	}
+	if input.IPv4Prefix != "" {
+		ipv4Payload := iaas.NewCreateNetworkIPv4WithPrefix(input.IPv4Prefix)
+		payload.SetIpv4(iaas.CreateNetworkIPv4WithPrefixAsCreateNetworkIPv4(ipv4Payload))
+	}
+
+	network, err := c.iaasClient.DefaultAPI.CreateNetwork(ctx, c.projectID, c.region).
+		CreateNetworkPayload(*payload).
+		Execute()
+	if err != nil {
+		return nil, classifySDKError("create network", err)
+	}
+
+	ipv4 := network.GetIpv4()
+	return &Network{
+		ID:           network.GetId(),
+		Name:         network.GetName(),
+		IPv4Prefixes: ipv4.GetPrefixes(),
+	}, nil
 }
 
 func (c *SDKClient) DeleteNetwork(ctx context.Context, id string) error {
-	return nil // TODO
+	if err := c.iaasClient.DefaultAPI.DeleteNetwork(ctx, c.projectID, c.region, id).Execute(); err != nil {
+		return classifySDKError("delete network", err)
+	}
+	return nil
 }
 
 func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error) {
