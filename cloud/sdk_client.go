@@ -239,6 +239,28 @@ func (c *SDKClient) CreateNetwork(ctx context.Context, input CreateNetworkInput)
 		return nil, fmt.Errorf("%w: network name is required", ErrInvalidInput)
 	}
 
+	if len(input.Tags) > 0 {
+		// Check STACKIT API for all networks in this project & region
+		// filtered by label selector (e.g. "cluster.x-k8s.io/cluster-name=my-cluster")
+		resp, err := c.iaasClient.DefaultAPI.ListNetworks(ctx, c.projectID, c.region).
+			LabelSelector(labelSelector(input.Tags)).
+			Execute()
+
+		if err == nil && resp != nil {
+			for _, net := range resp.GetItems() {
+				// Check that the network actually contains all tags
+				if labelsContainTags(net.GetLabels(), input.Tags) {
+					ipv4 := net.GetIpv4()
+					return &Network{
+						ID:           net.GetId(),
+						Name:         net.GetName(),
+						IPv4Prefixes: ipv4.GetPrefixes(),
+					}, nil
+				}
+			}
+		}
+	}
+
 	return nil, nil // TODO
 }
 
