@@ -48,7 +48,7 @@ type StackitClusterSpec struct {
 	CredentialsSecretRef corev1.SecretReference `json:"credentialsSecretRef"`
 
 	// network configures the STACKIT network the cluster will use.
-	// omiting the ID will create a managed dedicated network
+	// omitting the ID will create a managed dedicated network
 	// +optional
 	Network StackitClusterNetworkSpec `json:"network,omitempty"`
 

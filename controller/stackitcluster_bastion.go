@@ -43,7 +43,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 ) (ctrl.Result, bool, error) {
 	log := logf.FromContext(ctx)
 	stackitCluster := clusterScope.StackitCluster
-	input := bastionservice.Input(stackitCluster, nil)
+	input := bastionservice.Input(stackitCluster, clusterScope.NetworkID(), nil)
 	status := cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
 		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,

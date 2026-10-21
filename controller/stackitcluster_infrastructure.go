@@ -33,6 +33,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
 	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	networkservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -88,8 +89,10 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
-	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
+	var network *cloud.Network
 	if stackitCluster.Spec.Network.ID != "" {
+		var err error
+		network, err = cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
 		if err != nil {
 			log.Error(err, "Failed to get network",
 				"networkID", stackitCluster.Spec.Network.ID,
@@ -112,9 +115,65 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 				infrav1.ClusterReadyCondition,
 			)
 		}
+		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
+			ID:      network.ID,
+			Managed: false,
+		}
 	} else {
-		// TODO: implement cloudClient.EnsureNetwork
+		// Managed network mode: resolve or create dedicated network
+		var err error
+		if stackitCluster.Status.Network.ID != "" {
+			network, err = cloudClient.GetNetwork(ctx, stackitCluster.Status.Network.ID)
+			if err != nil && !cloud.IsNotFound(err) {
+				log.Error(err, "Failed to get managed network",
+					"networkID", stackitCluster.Status.Network.ID,
+					"region", stackitCluster.Spec.Region,
+				)
+				return util.CloudFailureResult(
+					&stackitCluster.Status.Conditions,
+					stackitCluster.Generation,
+					"NetworkError",
+					err,
+					retryableErrorRequeueAfter,
+					false,
+					infrav1.ClusterNetworkReadyCondition,
+					infrav1.ClusterReadyCondition,
+				)
+			}
+		}
 
+		if network == nil {
+			networkInput := networkservice.Input(stackitCluster)
+			network, err = cloudClient.CreateNetwork(ctx, networkInput)
+			if err != nil {
+				log.Error(err, "Failed to create managed network",
+					"networkName", networkInput.Name,
+					"region", stackitCluster.Spec.Region,
+				)
+				record.Warnf(
+					stackitCluster, "FailedCreateNetwork",
+					"Failed to create managed network %s in region %s: %v",
+					networkInput.Name, stackitCluster.Spec.Region, err,
+				)
+				stackitCluster.Status.Ready = false
+				return util.CloudFailureResult(
+					&stackitCluster.Status.Conditions,
+					stackitCluster.Generation,
+					"NetworkCreateError",
+					err,
+					retryableErrorRequeueAfter,
+					false,
+					infrav1.ClusterNetworkReadyCondition,
+					infrav1.ClusterReadyCondition,
+				)
+			}
+			record.Eventf(stackitCluster, "NetworkCreated", "Created managed network %s", network.ID)
+		}
+
+		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
+			ID:      network.ID,
+			Managed: true,
+		}
 	}
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,
@@ -155,7 +214,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		}
 		loadBalancer, err := cloudClient.EnsureAPIServerLoadBalancer(
 			ctx,
-			loadbalancerservice.APIServerInput(stackitCluster, seed),
+			loadbalancerservice.APIServerInput(stackitCluster, clusterScope.NetworkID(), seed),
 		)
 		if err != nil {
 			log.Error(err, "Failed to create API server load balancer",
@@ -443,7 +502,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion node SSH access: %v", err)
 		return ctrl.Result{}, err
 	}
-	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, nil), cloud.Bastion{
+	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, clusterScope.NetworkID(), nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
 		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,
 		PublicIP:        stackitCluster.Status.Bastion.PublicIP,
@@ -458,7 +517,28 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		clusterScope.ClearBastionStatus()
 		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}
-	// TODO: implement cloudClient.deleteNetwork - "if managed" etc.
+	if stackitCluster.Status.Network.Managed && stackitCluster.Status.Network.ID != "" {
+		networkID := stackitCluster.Status.Network.ID
+		if err := cloudClient.DeleteNetwork(ctx, networkID); err != nil && !cloud.IsNotFound(err) {
+			if cloud.IsConflict(err) {
+				log.Info("Managed network still has resources attached; requeueing deletion",
+					"cluster", stackitCluster.Name,
+					"networkID", networkID,
+				)
+				return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
+			}
+			log.Error(err, "Failed to delete managed network",
+				"cluster", stackitCluster.Name,
+				"networkID", networkID,
+			)
+			record.Warnf(stackitCluster, "FailedDeleteNetwork",
+				"Failed to delete managed network %s: %v", networkID, err)
+			return ctrl.Result{}, err
+		}
+		record.Eventf(stackitCluster, "NetworkDeleted", "Deleted managed network %s", networkID)
+		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{}
+	}
+
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
 	return ctrl.Result{}, nil
 }

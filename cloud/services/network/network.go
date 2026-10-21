@@ -25,6 +25,17 @@ func NetworkTags(stackitCluster *infrav1.StackitCluster) map[string]string {
 	return util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, stackitCluster.Spec.AdditionalLabels)
 }
 
+// ClusterNetworkID returns the active network ID for a cluster (spec BYO or status managed).
+func ClusterNetworkID(stackitCluster *infrav1.StackitCluster) string {
+	if stackitCluster == nil {
+		return ""
+	}
+	if stackitCluster.Spec.Network.ID != "" {
+		return stackitCluster.Spec.Network.ID
+	}
+	return stackitCluster.Status.Network.ID
+}
+
 func Input(stackitCluster *infrav1.StackitCluster) cloud.CreateNetworkInput {
 	return cloud.CreateNetworkInput{
 		Name:       stackitCluster.Name + "-network",

@@ -820,4 +820,3 @@ func TestSDKClientCreateNetworkIdempotent(t *testing.T) {
 		t.Errorf("CreateNetwork() ID = %s, want %s", net.ID, testSDKNetworkID)
 	}
 }
-

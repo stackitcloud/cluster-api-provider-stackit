@@ -16,7 +16,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
-func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.BastionInput {
+func Input(stackitCluster *infrav1.StackitCluster, networkID string, cloudInit []byte) cloud.BastionInput {
 	deleteOnTermination := true
 	if stackitCluster.Spec.Bastion.RootVolume.DeleteOnTermination != nil {
 		deleteOnTermination = *stackitCluster.Spec.Bastion.RootVolume.DeleteOnTermination
@@ -29,7 +29,7 @@ func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.Basti
 		Name:         stackitCluster.Name + "-bastion",
 		ProjectID:    stackitCluster.Spec.ProjectID,
 		Region:       stackitCluster.Spec.Region,
-		NetworkID:    stackitCluster.Spec.Network.ID,
+		NetworkID:    networkID,
 		ImageID:      stackitCluster.Spec.Bastion.ImageID,
 		MachineType:  stackitCluster.Spec.Bastion.MachineType,
 		SSHKeyName:   stackitCluster.Spec.Bastion.SSHKeyName,

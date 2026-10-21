@@ -237,7 +237,7 @@ spec:
                       network:
                         description: |-
                           network configures the STACKIT network the cluster will use.
-                          ommiting the ID will create a managed dedicated network
+                          omitting the ID will create a managed dedicated network
                         properties:
                           id:
                             description: |-

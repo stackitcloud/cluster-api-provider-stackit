@@ -97,6 +97,41 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionTrue, "Available")
 		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionTrue, "Available")
 		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionTrue, "Available")
+		Expect(got.Status.Network.ID).To(Equal(testNetworkID))
+		Expect(got.Status.Network.Managed).To(BeFalse())
+	})
+
+	It("creates and manages a dedicated network when network ID is omitted", func() {
+		createOwnerCluster(ctx, clusterName+"-managed-net")
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-managed-net", Namespace: namespace},
+		})
+		managedCluster := newStackitCluster(clusterName+"-managed-net", namespace, false)
+		managedCluster.Spec.Network.ID = ""
+		Expect(k8sClient.Create(ctx, managedCluster)).To(Succeed())
+		defer deleteIfExists(ctx, managedCluster)
+
+		key := types.NamespacedName{Namespace: namespace, Name: managedCluster.Name}
+		req := reconcile.Request{NamespacedName: key}
+
+		result, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeTrue())
+		Expect(got.Status.Network.ID).NotTo(BeEmpty())
+		Expect(got.Status.Network.Managed).To(BeTrue())
+		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionTrue, "Available")
+
+		By("deleting the managed cluster and ensuring the network is deleted")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = fakeCloud.GetNetwork(ctx, got.Status.Network.ID)
+		Expect(cloud.IsNotFound(err)).To(BeTrue(), "managed network should be deleted on cluster teardown")
 	})
 
 	It("uses an externally provided control plane endpoint when load balancer creation is disabled", func() {

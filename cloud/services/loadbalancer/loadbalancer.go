@@ -41,13 +41,14 @@ func APIServerTags(stackitCluster *infrav1.StackitCluster) map[string]string {
 
 func APIServerInput(
 	stackitCluster *infrav1.StackitCluster,
+	networkID string,
 	targets []cloud.LoadBalancerTargetInput,
 ) cloud.LoadBalancerInput {
 	return cloud.LoadBalancerInput{
 		Name:      stackitCluster.Name + "-apiserver",
 		ProjectID: stackitCluster.Spec.ProjectID,
 		Region:    stackitCluster.Spec.Region,
-		NetworkID: stackitCluster.Spec.Network.ID,
+		NetworkID: networkID,
 		Port:      defaultAPIServerPort,
 		Tags:      APIServerTags(stackitCluster),
 		Targets:   targets,
