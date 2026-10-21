@@ -107,6 +107,7 @@ var _ = Describe("StackitCluster Controller", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-managed-net", Namespace: namespace},
 		})
 		managedCluster := newStackitCluster(clusterName+"-managed-net", namespace, false)
+		managedCluster.Spec.CredentialsSecretRef.Name = credentials
 		managedCluster.Spec.Network.ID = ""
 		Expect(k8sClient.Create(ctx, managedCluster)).To(Succeed())
 		defer deleteIfExists(ctx, managedCluster)
