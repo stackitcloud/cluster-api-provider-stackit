@@ -242,7 +242,7 @@ spec:
                           id:
                             description: |-
                               id is the STACKIT network ID.
-                              Omitting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
+                              Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
                             pattern: ^[0-9a-fA-F-]{36}$
                             type: string
                         type: object

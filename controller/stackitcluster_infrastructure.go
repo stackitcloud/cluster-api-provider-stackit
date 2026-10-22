@@ -129,6 +129,12 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 					"networkID", stackitCluster.Status.Network.ID,
 					"region", stackitCluster.Spec.Region,
 				)
+				record.Warnf(
+					stackitCluster, "FailedGetNetwork",
+					"Failed to get managed network %s in region %s: %v",
+					stackitCluster.Status.Network.ID, stackitCluster.Spec.Region, err,
+				)
+				stackitCluster.Status.Ready = false
 				return util.CloudFailureResult(
 					&stackitCluster.Status.Conditions,
 					stackitCluster.Generation,
@@ -517,25 +523,39 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		clusterScope.ClearBastionStatus()
 		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}
-	if stackitCluster.Status.Network.Managed && stackitCluster.Status.Network.ID != "" {
-		networkID := stackitCluster.Status.Network.ID
-		if err := cloudClient.DeleteNetwork(ctx, networkID); err != nil && !cloud.IsNotFound(err) {
+	managedNetworkID, err := networkservice.ResolveManagedNetworkID(ctx, cloudClient, stackitCluster)
+	if err != nil {
+		log.Error(err, "Failed to resolve managed network for deletion", "cluster", stackitCluster.Name)
+		record.Warnf(stackitCluster, "FailedResolveNetwork",
+			"Failed to resolve managed network: %v", err)
+		return ctrl.Result{}, err
+	}
+	if managedNetworkID != "" {
+		if err := cloudClient.DeleteNetwork(ctx, managedNetworkID); err != nil && !cloud.IsNotFound(err) {
 			if cloud.IsConflict(err) {
 				log.Info("Managed network still has resources attached; requeueing deletion",
 					"cluster", stackitCluster.Name,
-					"networkID", networkID,
+					"networkID", managedNetworkID,
 				)
+				clusterScope.SetConditions(
+					metav1.ConditionFalse,
+					"NetworkInUse",
+					err.Error(),
+					infrav1.ClusterNetworkReadyCondition,
+				)
+				record.Warnf(stackitCluster, "NetworkInUse",
+					"Managed network %s still has active resources attached; retrying deletion: %v", managedNetworkID, err)
 				return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
 			}
 			log.Error(err, "Failed to delete managed network",
 				"cluster", stackitCluster.Name,
-				"networkID", networkID,
+				"networkID", managedNetworkID,
 			)
 			record.Warnf(stackitCluster, "FailedDeleteNetwork",
-				"Failed to delete managed network %s: %v", networkID, err)
+				"Failed to delete managed network %s: %v", managedNetworkID, err)
 			return ctrl.Result{}, err
 		}
-		record.Eventf(stackitCluster, "NetworkDeleted", "Deleted managed network %s", networkID)
+		record.Eventf(stackitCluster, "NetworkDeleted", "Deleted managed network %s", managedNetworkID)
 		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{}
 	}
 

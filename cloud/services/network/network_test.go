@@ -11,11 +11,13 @@ You may obtain a copy of the License at
 package network
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -52,4 +54,81 @@ func TestNetworkInput(t *testing.T) {
 	if input.Tags["custom-label"] != "custom-value" {
 		t.Errorf("Input() missing merged additional label")
 	}
+}
+
+func TestResolveManagedNetworkID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns empty string for BYO network in spec", func(t *testing.T) {
+		fakeClient := cloudfake.New()
+		cluster := &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "byo-cluster", Namespace: "default"},
+			Spec: infrav1.StackitClusterSpec{
+				Network: infrav1.StackitClusterNetworkSpec{ID: "byo-net-id"},
+			},
+			Status: infrav1.StackitClusterStatus{
+				Network: infrav1.StackitNetworkStatus{ID: "byo-net-id", Managed: false},
+			},
+		}
+
+		id, err := ResolveManagedNetworkID(ctx, fakeClient, cluster)
+		if err != nil {
+			t.Fatalf("ResolveManagedNetworkID() error = %v", err)
+		}
+		if id != "" {
+			t.Errorf("ResolveManagedNetworkID() = %q, want empty string for BYO network", id)
+		}
+	})
+
+	t.Run("returns network ID from status when present", func(t *testing.T) {
+		fakeClient := cloudfake.New()
+		cluster := &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "managed-cluster", Namespace: "default"},
+			Status: infrav1.StackitClusterStatus{
+				Network: infrav1.StackitNetworkStatus{ID: "status-net-id", Managed: true},
+			},
+		}
+
+		id, err := ResolveManagedNetworkID(ctx, fakeClient, cluster)
+		if err != nil {
+			t.Fatalf("ResolveManagedNetworkID() error = %v", err)
+		}
+		if id != "status-net-id" {
+			t.Errorf("ResolveManagedNetworkID() = %q, want status-net-id", id)
+		}
+	})
+
+	t.Run("falls back to tag lookup when status is empty", func(t *testing.T) {
+		fakeClient := cloudfake.New()
+		cluster := &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "managed-cluster", Namespace: "default"},
+		}
+		created, err := fakeClient.CreateNetwork(ctx, Input(cluster))
+		if err != nil {
+			t.Fatalf("CreateNetwork() error = %v", err)
+		}
+
+		id, err := ResolveManagedNetworkID(ctx, fakeClient, cluster)
+		if err != nil {
+			t.Fatalf("ResolveManagedNetworkID() error = %v", err)
+		}
+		if id != created.ID {
+			t.Errorf("ResolveManagedNetworkID() = %q, want %q", id, created.ID)
+		}
+	})
+
+	t.Run("returns empty string when no network exists in status or cloud", func(t *testing.T) {
+		fakeClient := cloudfake.New()
+		cluster := &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "managed-cluster", Namespace: "default"},
+		}
+
+		id, err := ResolveManagedNetworkID(ctx, fakeClient, cluster)
+		if err != nil {
+			t.Fatalf("ResolveManagedNetworkID() error = %v", err)
+		}
+		if id != "" {
+			t.Errorf("ResolveManagedNetworkID() = %q, want empty string", id)
+		}
+	})
 }

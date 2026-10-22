@@ -60,6 +60,12 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
 	}
+	if _, err := client.CreateNetwork(ctx, cloud.CreateNetworkInput{Name: "matched-net", Tags: tags}); err != nil {
+		t.Fatalf("CreateNetwork() error = %v", err)
+	}
+	if _, err := client.CreateNetwork(ctx, cloud.CreateNetworkInput{Name: "other-net", Tags: otherTags}); err != nil {
+		t.Fatalf("CreateNetwork() error = %v", err)
+	}
 
 	if err := cloud.CleanupByTags(ctx, client, tags); err != nil {
 		t.Fatalf("CleanupByTags() error = %v", err)
@@ -85,5 +91,19 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	}
 	if len(matchedLoadBalancers) != 0 {
 		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
+	}
+	matchedNetworks, err := client.ListNetworksByTags(ctx, tags)
+	if err != nil {
+		t.Fatalf("ListNetworksByTags() error = %v", err)
+	}
+	if len(matchedNetworks) != 0 {
+		t.Fatalf("matched network count = %d, want 0", len(matchedNetworks))
+	}
+	otherNetworks, err := client.ListNetworksByTags(ctx, otherTags)
+	if err != nil {
+		t.Fatalf("ListNetworksByTags(other) error = %v", err)
+	}
+	if len(otherNetworks) != 1 {
+		t.Fatalf("other network count = %d, want 1", len(otherNetworks))
 	}
 }

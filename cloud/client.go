@@ -25,6 +25,10 @@ import "context"
 type Client interface {
 	GetNetwork(ctx context.Context, id string) (*Network, error)
 
+	FindNetworkByTags(ctx context.Context, tags map[string]string) (*Network, error)
+
+	ListNetworksByTags(ctx context.Context, tags map[string]string) ([]*Network, error)
+
 	CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error)
 
 	DeleteNetwork(ctx context.Context, id string) error

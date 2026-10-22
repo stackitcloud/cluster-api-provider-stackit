@@ -260,6 +260,47 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error
 	return &out, nil
 }
 
+func (c *Client) FindNetworkByTags(_ context.Context, tags map[string]string) (*cloud.Network, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	matched := c.networksByTags(tags)
+	if len(matched) == 0 {
+		return nil, fmt.Errorf("%w: no network matching tags", cloud.ErrNotFound)
+	}
+	if len(matched) > 1 {
+		return nil, fmt.Errorf("%w: multiple networks matching tags", cloud.ErrConflict)
+	}
+	out := *matched[0]
+	return &out, nil
+}
+
+func (c *Client) ListNetworksByTags(_ context.Context, tags map[string]string) ([]*cloud.Network, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("%w: empty tag selector", cloud.ErrInvalidInput)
+	}
+	matched := c.networksByTags(tags)
+	out := make([]*cloud.Network, 0, len(matched))
+	for _, n := range matched {
+		copy := *n
+		out = append(out, &copy)
+	}
+	return out, nil
+}
+
+func (c *Client) networksByTags(tags map[string]string) []*cloud.Network {
+	var matched []*cloud.Network
+	for _, entry := range c.networks {
+		if mapContains(entry.tags, tags) {
+			matched = append(matched, entry.network)
+		}
+	}
+	return matched
+}
+
 func (c *Client) CreateNetwork(_ context.Context, input cloud.CreateNetworkInput) (*cloud.Network, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -273,11 +314,13 @@ func (c *Client) CreateNetwork(_ context.Context, input cloud.CreateNetworkInput
 
 	// Idempotency check matching SDK client behavior
 	if len(input.Tags) > 0 {
-		for _, entry := range c.networks {
-			if mapContains(entry.tags, input.Tags) {
-				out := *entry.network
-				return &out, nil
-			}
+		matched := c.networksByTags(input.Tags)
+		if len(matched) > 1 {
+			return nil, fmt.Errorf("%w: multiple networks matching tags", cloud.ErrConflict)
+		}
+		if len(matched) == 1 {
+			out := *matched[0]
+			return &out, nil
 		}
 	}
 

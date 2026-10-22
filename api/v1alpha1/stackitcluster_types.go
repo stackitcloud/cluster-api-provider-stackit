@@ -73,10 +73,10 @@ type StackitClusterSpec struct {
 	AdditionalLabels map[string]string `json:"additionalLabels,omitempty"`
 }
 
-// StackitClusterNetworkSpec references an existing STACKIT network.
+// StackitClusterNetworkSpec configures the network for a StackitCluster.
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
-	// Omitting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
+	// Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
 	// +optional
 	ID string `json:"id,omitempty"`
@@ -221,12 +221,14 @@ type StackitBastionStatus struct {
 	CloudInitHash string `json:"cloudInitHash,omitempty"`
 }
 
-// network contains status of a STACKIT network created by CAPSTK
+// StackitNetworkStatus tracks the network used by the cluster (BYO or managed).
 type StackitNetworkStatus struct {
-	// id is the STACKIT network ID
+	// id is the STACKIT network ID.
 	// +optional
-	ID      string `json:"id,omitempty"`
-	Managed bool   `json:"managed,omitempty"`
+	ID string `json:"id,omitempty"`
+	// managed indicates whether the network is managed (created and owned) by CAPSTK.
+	// +optional
+	Managed bool `json:"managed,omitempty"`
 }
 
 // Condition types maintained by the StackitClusterReconciler.
@@ -246,7 +248,7 @@ const (
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=".status.apiServerEndpoint.host"
 // +kubebuilder:printcolumn:name="Bastion IP",type=string,JSONPath=".status.bastion.publicIP"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".spec.network.id",priority=1
+// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".status.network.id",priority=1
 // +kubebuilder:printcolumn:name="Project ID",type=string,JSONPath=".spec.projectID",priority=1
 // +kubebuilder:storageversion
 

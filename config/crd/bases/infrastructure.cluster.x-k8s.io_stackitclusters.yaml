@@ -34,7 +34,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    - jsonPath: .spec.network.id
+    - jsonPath: .status.network.id
       name: Network ID
       priority: 1
       type: string
@@ -206,7 +206,7 @@ spec:
                   id:
                     description: |-
                       id is the STACKIT network ID.
-                      Omitting the network ID provisions a dedicated STACKIT network for the cluster, tag it as managed (owned) and stores the ID
+                      Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
                     pattern: ^[0-9a-fA-F-]{36}$
                     type: string
                 type: object
@@ -398,9 +398,11 @@ spec:
                 description: network stores observed provider-managed network resources.
                 properties:
                   id:
-                    description: id is the STACKIT network ID
+                    description: id is the STACKIT network ID.
                     type: string
                   managed:
+                    description: managed indicates whether the network is managed
+                      (created and owned) by CAPSTK.
                     type: boolean
                 type: object
               ready:

@@ -111,13 +111,13 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		log.Error(err, "Failed to create server",
 			"machine", stackitMachine.Name,
 			"imageID", stackitMachine.Spec.ImageID,
-			"networkID", stackitMachine.Spec.Network.ID,
+			"networkID", machineScope.NetworkID(),
 			"region", machineScope.StackitCluster.Spec.Region,
 		)
 		record.Warnf(
 			stackitMachine, "FailedCreateInstance",
 			"Failed to create server %s (imageID: %s, networkID: %s, region: %s): %v",
-			stackitMachine.Name, stackitMachine.Spec.ImageID, stackitMachine.Spec.Network.ID,
+			stackitMachine.Name, stackitMachine.Spec.ImageID, machineScope.NetworkID(),
 			machineScope.StackitCluster.Spec.Region, err,
 		)
 		machineScope.SetNotReady(
