@@ -73,7 +73,7 @@ type StackitClusterSpec struct {
 	AdditionalLabels map[string]string `json:"additionalLabels,omitempty"`
 }
 
-// StackitClusterNetworkSpec configures the network for a StackitCluster.
+// StackitClusterNetworkSpec references the network for a StackitCluster.
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
 	// Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
