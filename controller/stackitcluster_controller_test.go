@@ -97,6 +97,109 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionTrue, "Available")
 		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionTrue, "Available")
 		expectCondition(got.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition, metav1.ConditionTrue, "Available")
+		Expect(got.Status.Network.ID).To(Equal(testNetworkID))
+		Expect(got.Status.Network.Managed).To(BeFalse())
+	})
+
+	It("creates and manages a dedicated network when network ID is omitted", func() {
+		createOwnerCluster(ctx, clusterName+"-managed-net")
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-managed-net", Namespace: namespace},
+		})
+		managedCluster := newStackitCluster(clusterName+"-managed-net", namespace, false)
+		managedCluster.Spec.CredentialsSecretRef.Name = credentials
+		managedCluster.Spec.Network.ID = ""
+		Expect(k8sClient.Create(ctx, managedCluster)).To(Succeed())
+		defer deleteIfExists(ctx, managedCluster)
+
+		key := types.NamespacedName{Namespace: namespace, Name: managedCluster.Name}
+		req := reconcile.Request{NamespacedName: key}
+
+		result, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeTrue())
+		Expect(got.Status.Network.ID).NotTo(BeEmpty())
+		Expect(got.Status.Network.Managed).To(BeTrue())
+		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionTrue, "Available")
+
+		By("deleting the managed cluster and ensuring the network is deleted")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = fakeCloud.GetNetwork(ctx, got.Status.Network.ID)
+		Expect(cloud.IsNotFound(err)).To(BeTrue(), "managed network should be deleted on cluster teardown")
+	})
+
+	It("resolves and deletes managed network via tags even when status.network was lost", func() {
+		createOwnerCluster(ctx, clusterName+"-lost-status")
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-lost-status", Namespace: namespace},
+		})
+		clusterLostStatus := newStackitCluster(clusterName+"-lost-status", namespace, false)
+		clusterLostStatus.Spec.CredentialsSecretRef.Name = credentials
+		clusterLostStatus.Spec.Network.ID = ""
+		Expect(k8sClient.Create(ctx, clusterLostStatus)).To(Succeed())
+		defer deleteIfExists(ctx, clusterLostStatus)
+
+		key := types.NamespacedName{Namespace: namespace, Name: clusterLostStatus.Name}
+		req := reconcile.Request{NamespacedName: key}
+
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		createdNetID := got.Status.Network.ID
+		Expect(createdNetID).NotTo(BeEmpty())
+
+		By("wiping the persisted network status as if patch failed")
+		got.Status.Network = infrav1.StackitNetworkStatus{}
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		By("deleting the cluster and verifying tag fallback finds and deletes the network")
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = fakeCloud.GetNetwork(ctx, createdNetID)
+		Expect(cloud.IsNotFound(err)).To(BeTrue(), "network should be deleted via tag fallback")
+	})
+
+	It("requeues deletion with condition when managed network has attached resources", func() {
+		createOwnerCluster(ctx, clusterName+"-net-conflict")
+		defer deleteIfExists(ctx, &clusterv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-net-conflict", Namespace: namespace},
+		})
+		clusterConflict := newStackitCluster(clusterName+"-net-conflict", namespace, false)
+		clusterConflict.Spec.CredentialsSecretRef.Name = credentials
+		clusterConflict.Spec.Network.ID = ""
+		Expect(k8sClient.Create(ctx, clusterConflict)).To(Succeed())
+		defer deleteIfExists(ctx, clusterConflict)
+
+		key := types.NamespacedName{Namespace: namespace, Name: clusterConflict.Name}
+		req := reconcile.Request{NamespacedName: key}
+
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+
+		By("injecting a conflict error on network delete")
+		fakeCloud.FailNextDeleteNetwork = fmt.Errorf("ports still attached: %w", cloud.ErrConflict)
+
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		result, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		expectCondition(got.Status.Conditions, infrav1.ClusterNetworkReadyCondition, metav1.ConditionFalse, "NetworkInUse")
 	})
 
 	It("uses an externally provided control plane endpoint when load balancer creation is disabled", func() {

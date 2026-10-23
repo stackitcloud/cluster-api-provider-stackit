@@ -234,6 +234,88 @@ func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error)
 	}, nil
 }
 
+func (c *SDKClient) FindNetworkByTags(ctx context.Context, tags map[string]string) (*Network, error) {
+	networks, err := c.ListNetworksByTags(ctx, tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(networks) == 0 {
+		return nil, fmt.Errorf("%w: no network matching tags", ErrNotFound)
+	}
+	if len(networks) > 1 {
+		return nil, fmt.Errorf("%w: multiple networks matching tags", ErrConflict)
+	}
+	return networks[0], nil
+}
+
+func (c *SDKClient) ListNetworksByTags(ctx context.Context, tags map[string]string) ([]*Network, error) {
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
+	}
+	resp, err := c.iaasClient.DefaultAPI.ListNetworks(ctx, c.projectID, c.region).
+		LabelSelector(labelSelector(tags)).
+		Execute()
+	if err != nil {
+		return nil, classifySDKError("list networks", err)
+	}
+	matched := []*Network{}
+	for _, net := range resp.GetItems() {
+		if labelsContainTags(net.GetLabels(), tags) {
+			ipv4 := net.GetIpv4()
+			matched = append(matched, &Network{
+				ID:           net.GetId(),
+				Name:         net.GetName(),
+				IPv4Prefixes: ipv4.GetPrefixes(),
+			})
+		}
+	}
+	return matched, nil
+}
+
+func (c *SDKClient) CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error) {
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: network name is required", ErrInvalidInput)
+	}
+
+	if len(input.Tags) > 0 {
+		if existing, err := c.FindNetworkByTags(ctx, input.Tags); err == nil {
+			return existing, nil
+		} else if !IsNotFound(err) {
+			return nil, err
+		}
+	}
+
+	payload := iaas.NewCreateNetworkPayload(input.Name)
+	if len(input.Tags) > 0 {
+		payload.SetLabels(tagsToSDKLabels(input.Tags))
+	}
+	if input.IPv4Prefix != "" {
+		ipv4Payload := iaas.NewCreateNetworkIPv4WithPrefix(input.IPv4Prefix)
+		payload.SetIpv4(iaas.CreateNetworkIPv4WithPrefixAsCreateNetworkIPv4(ipv4Payload))
+	}
+
+	network, err := c.iaasClient.DefaultAPI.CreateNetwork(ctx, c.projectID, c.region).
+		CreateNetworkPayload(*payload).
+		Execute()
+	if err != nil {
+		return nil, classifySDKError("create network", err)
+	}
+
+	ipv4 := network.GetIpv4()
+	return &Network{
+		ID:           network.GetId(),
+		Name:         network.GetName(),
+		IPv4Prefixes: ipv4.GetPrefixes(),
+	}, nil
+}
+
+func (c *SDKClient) DeleteNetwork(ctx context.Context, id string) error {
+	if err := c.iaasClient.DefaultAPI.DeleteNetwork(ctx, c.projectID, c.region, id).Execute(); err != nil {
+		return classifySDKError("delete network", err)
+	}
+	return nil
+}
+
 func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error) {
 	if input.Name == "" || input.NetworkID == "" || input.ImageID == "" ||
 		input.MachineType == "" || input.SSHKeyName == "" {

@@ -23,6 +23,16 @@ import "context"
 //   - be idempotent (CreateServer/EnsureAPIServerLoadBalancer must not produce
 //     duplicates when a resource with matching tags already exists)
 type Client interface {
+	GetNetwork(ctx context.Context, id string) (*Network, error)
+
+	FindNetworkByTags(ctx context.Context, tags map[string]string) (*Network, error)
+
+	ListNetworksByTags(ctx context.Context, tags map[string]string) ([]*Network, error)
+
+	CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error)
+
+	DeleteNetwork(ctx context.Context, id string) error
+
 	GetServer(ctx context.Context, id string) (*Server, error)
 
 	FindServerByTags(ctx context.Context, tags map[string]string) (*Server, error)
@@ -32,8 +42,6 @@ type Client interface {
 	CreateServer(ctx context.Context, input CreateServerInput) (*Server, error)
 
 	DeleteServer(ctx context.Context, id string) error
-
-	GetNetwork(ctx context.Context, id string) (*Network, error)
 
 	EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error)
 

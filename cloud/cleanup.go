@@ -55,6 +55,17 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		}
 	}
 
+	networks, err := client.ListNetworksByTags(ctx, tags)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else {
+		for _, net := range networks {
+			if err := client.DeleteNetwork(ctx, net.ID); err != nil && !IsNotFound(err) {
+				errs = append(errs, fmt.Sprintf("delete network %q: %v", net.ID, err))
+			}
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("%w: %s", ErrTransient, strings.Join(errs, "; "))
 	}

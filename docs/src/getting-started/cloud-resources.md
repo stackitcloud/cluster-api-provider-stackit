@@ -1,13 +1,25 @@
 # STACKIT Cloud Resources
 
-The provider currently consumes existing STACKIT resources. It creates and
-deletes workload-cluster servers and, when enabled, an API server load balancer,
-but it does not create networks, security groups, SSH keys, or images.
+The provider provisions and manages workload-cluster servers, API server load balancers,
+and dedicated cluster networks (when enabled), while supporting pre-existing (BYO) networks,
+security groups, SSH keys, and images.
 
 ## Network
 
 `StackitCluster.spec.network.id` is the STACKIT network ID used by all cluster
 machines and the provider-managed API server load balancer.
+
+If you don't provide a network ID, CAPS will automatically create a dedicated /24 network for you.
+
+Planning your networks usually involves platform-level policy such as address 
+planning, routing, peering, VPN, DNS, and shared-service access, but the default 
+managed network is built for convenience. A newly created (managed) network 
+will have an attached tag indicating that it is managed by CAPS. 
+
+Only empty networks can be deleted, so when you delete your CAPS cluster and 
+all cluster nodes and load balancers are removed, the managed network will be deleted too.
+
+### Bring-Your-Own (BYO) Network
 
 Choose or create a network in the same region as the workload cluster. The
 network must provide:
@@ -18,9 +30,7 @@ network must provide:
   container image pulls, DNS, NTP, and STACKIT APIs.
 - Traffic required by the selected CNI.
 
-Network creation is intentionally outside the provider for now because networks
-usually encode platform-level policy such as address planning, routing,
-peering, VPN, DNS, and shared-service access.
+### How to create a STACKIT Network manually
 
 Create a network with the STACKIT CLI:
 
