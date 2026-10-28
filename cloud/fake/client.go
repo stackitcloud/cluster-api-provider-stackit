@@ -75,6 +75,9 @@ type Client struct {
 	// LastCreateServerInput records the most recent input passed to CreateServer.
 	LastCreateServerInput cloud.CreateServerInput
 
+	// LastEnsureBastionInput records the most recent input passed to EnsureBastion.
+	LastEnsureBastionInput cloud.BastionInput
+
 	// Before* hooks, if non-nil, run before the call they belong to. They let a
 	// test observe API server state at the exact moment a cloud call would
 	// happen. Unlike FailNext*, they are not consumed.
@@ -316,10 +319,16 @@ func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cl
 	}
 
 	serverID := c.genID()
+	c.LastEnsureBastionInput = input
+	zone := input.AvailabilityZone
+	if zone == "" {
+		zone = "eu01-1"
+	}
 	server := &cloud.Server{
-		ID:    serverID,
-		Name:  input.Name,
-		State: "ACTIVE",
+		ID:               serverID,
+		Name:             input.Name,
+		State:            "ACTIVE",
+		AvailabilityZone: zone,
 		Addresses: []cloud.Address{
 			{Type: "InternalIP", Address: "10.0.0.20"},
 		},

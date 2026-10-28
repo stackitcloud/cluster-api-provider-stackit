@@ -75,17 +75,18 @@ type CreateServerInput struct {
 
 // BastionInput holds all parameters required to ensure a bastion host.
 type BastionInput struct {
-	Name         string
-	ProjectID    string
-	Region       string
-	NetworkID    string
-	ImageID      string
-	MachineType  string
-	SSHKeyName   string
-	AllowedCIDRs []string
-	Tags         map[string]string
-	RootVolume   RootVolumeInput
-	CloudInit    []byte
+	Name             string
+	ProjectID        string
+	Region           string
+	NetworkID        string
+	ImageID          string
+	MachineType      string
+	AvailabilityZone string
+	SSHKeyName       string
+	AllowedCIDRs     []string
+	Tags             map[string]string
+	RootVolume       RootVolumeInput
+	CloudInit        []byte
 }
 
 // NodeSSHAccessInput holds parameters required to allow SSH from the bastion

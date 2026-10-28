@@ -268,17 +268,18 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	}
 
 	server, err := c.CreateServer(ctx, CreateServerInput{
-		Name:           input.Name,
-		ProjectID:      input.ProjectID,
-		Region:         input.Region,
-		ImageID:        input.ImageID,
-		MachineType:    input.MachineType,
-		SSHKeyName:     input.SSHKeyName,
-		NetworkID:      input.NetworkID,
-		SecurityGroups: []string{securityGroup.ID},
-		UserData:       input.CloudInit,
-		Tags:           input.Tags,
-		RootVolume:     input.RootVolume,
+		Name:             input.Name,
+		ProjectID:        input.ProjectID,
+		Region:           input.Region,
+		ImageID:          input.ImageID,
+		MachineType:      input.MachineType,
+		AvailabilityZone: input.AvailabilityZone,
+		SSHKeyName:       input.SSHKeyName,
+		NetworkID:        input.NetworkID,
+		SecurityGroups:   []string{securityGroup.ID},
+		UserData:         input.CloudInit,
+		Tags:             input.Tags,
+		RootVolume:       input.RootVolume,
 	})
 	if err != nil {
 		return nil, err

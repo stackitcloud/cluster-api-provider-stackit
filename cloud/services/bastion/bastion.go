@@ -13,6 +13,7 @@ package bastion
 import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -26,15 +27,16 @@ func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.Basti
 	tags[util.LabelResourceRole] = util.ResourceRoleBastion
 
 	return cloud.BastionInput{
-		Name:         stackitCluster.Name + "-bastion",
-		ProjectID:    stackitCluster.Spec.ProjectID,
-		Region:       stackitCluster.Spec.Region,
-		NetworkID:    stackitCluster.Spec.Network.ID,
-		ImageID:      stackitCluster.Spec.Bastion.ImageID,
-		MachineType:  stackitCluster.Spec.Bastion.MachineType,
-		SSHKeyName:   stackitCluster.Spec.Bastion.SSHKeyName,
-		AllowedCIDRs: stackitCluster.Spec.Bastion.AllowedCIDRs,
-		Tags:         tags,
+		Name:             stackitCluster.Name + "-bastion",
+		ProjectID:        stackitCluster.Spec.ProjectID,
+		Region:           stackitCluster.Spec.Region,
+		NetworkID:        stackitCluster.Spec.Network.ID,
+		ImageID:          stackitCluster.Spec.Bastion.ImageID,
+		MachineType:      stackitCluster.Spec.Bastion.MachineType,
+		AvailabilityZone: scope.DefaultAvailabilityZone(stackitCluster),
+		SSHKeyName:       stackitCluster.Spec.Bastion.SSHKeyName,
+		AllowedCIDRs:     stackitCluster.Spec.Bastion.AllowedCIDRs,
+		Tags:             tags,
 		RootVolume: cloud.RootVolumeInput{
 			SizeGiB:             stackitCluster.Spec.Bastion.RootVolume.SizeGiB,
 			PerformanceClass:    stackitCluster.Spec.Bastion.RootVolume.PerformanceClass,

@@ -15,6 +15,7 @@ package scope
 
 import (
 	"context"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -100,6 +101,28 @@ func (s *ClusterScope) ClearBastionStatus() {
 
 func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
 	s.StackitCluster.Status.FailureDomains = failureDomains
+}
+
+// DefaultAvailabilityZone returns the default single availability zone for a
+// StackitCluster (the alphabetically first published failure domain, falling
+// back to <region>-1). This prevents the STACKIT IaaS API from defaulting to
+// the expensive metro zone (<region>-m).
+func DefaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
+	if stackitCluster == nil {
+		return ""
+	}
+	if len(stackitCluster.Status.FailureDomains) > 0 {
+		zones := make([]string, 0, len(stackitCluster.Status.FailureDomains))
+		for _, fd := range stackitCluster.Status.FailureDomains {
+			zones = append(zones, fd.Name)
+		}
+		slices.Sort(zones)
+		return zones[0]
+	}
+	if stackitCluster.Spec.Region != "" {
+		return stackitCluster.Spec.Region + "-1"
+	}
+	return ""
 }
 
 func (s *ClusterScope) Cloud() cloud.Client {

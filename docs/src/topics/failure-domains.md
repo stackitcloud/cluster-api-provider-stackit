@@ -51,6 +51,11 @@ using the following precedence:
 
 The actual zone where the VM was placed is surfaced on `StackitMachine.status.availabilityZone`.
 
+When `StackitCluster.spec.bastion.enabled` is `true`, the provider-managed bastion
+host is also placed into the cluster's default availability zone (the first
+sorted published failure domain, e.g., `eu01-1`) so it is never created in a
+metro zone (`-m`).
+
 ## Worker Node Spreading
 
 Unlike the control plane, worker nodes do not automatically spread across failure domains

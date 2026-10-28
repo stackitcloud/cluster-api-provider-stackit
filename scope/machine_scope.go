@@ -12,7 +12,6 @@ package scope
 
 import (
 	"context"
-	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -128,18 +127,5 @@ func (s *MachineScope) AvailabilityZone() string {
 		return s.StackitMachine.Spec.AvailabilityZone
 	}
 
-	if s.StackitCluster != nil && len(s.StackitCluster.Status.FailureDomains) > 0 {
-		zones := make([]string, 0, len(s.StackitCluster.Status.FailureDomains))
-		for _, fd := range s.StackitCluster.Status.FailureDomains {
-			zones = append(zones, fd.Name)
-		}
-		slices.Sort(zones)
-		return zones[0]
-	}
-
-	if s.StackitCluster != nil && s.StackitCluster.Spec.Region != "" {
-		return s.StackitCluster.Spec.Region + "-1"
-	}
-
-	return ""
+	return DefaultAvailabilityZone(s.StackitCluster)
 }

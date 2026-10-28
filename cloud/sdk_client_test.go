@@ -512,15 +512,16 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 
 	client := newTestSDKClient(t, server.URL)
 	bastion, err := client.EnsureBastion(context.Background(), BastionInput{
-		Name:         "bastion",
-		ProjectID:    testSDKProjectID,
-		Region:       testSDKRegion,
-		NetworkID:    testSDKNetworkID,
-		ImageID:      testSDKImageID,
-		MachineType:  "c2i.1",
-		SSHKeyName:   "default",
-		AllowedCIDRs: []string{"203.0.113.0/24"},
-		Tags:         map[string]string{"cluster": "test"},
+		Name:             "bastion",
+		ProjectID:        testSDKProjectID,
+		Region:           testSDKRegion,
+		NetworkID:        testSDKNetworkID,
+		ImageID:          testSDKImageID,
+		MachineType:      "c2i.1",
+		AvailabilityZone: "eu01-1",
+		SSHKeyName:       "default",
+		AllowedCIDRs:     []string{"203.0.113.0/24"},
+		Tags:             map[string]string{"cluster": "test"},
 	})
 	if err != nil {
 		t.Fatalf("EnsureBastion() error = %v", err)
@@ -529,6 +530,7 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 	if attachCallCount != 1 {
 		t.Fatalf("attach attempted %d time(s), want exactly 1 (the idempotent re-attach)", attachCallCount)
 	}
+	assertStringField(t, createPayload, "availabilityZone", "eu01-1")
 	groups, _ := createPayload["securityGroups"].([]any)
 	if len(groups) != 1 || groups[0] != testSDKSecurityGroup {
 		t.Fatalf("create payload securityGroups = %v, want [%s]", createPayload["securityGroups"], testSDKSecurityGroup)
