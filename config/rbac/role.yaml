@@ -30,6 +30,13 @@ rules:
   - create
   - patch
 - apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
   - stackitclusters
