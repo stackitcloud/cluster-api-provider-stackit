@@ -23,6 +23,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the cluster-api-provider-stackit itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- stackitmanagedcluster_admin_role.yaml
+- stackitmanagedcluster_editor_role.yaml
+- stackitmanagedcluster_viewer_role.yaml
 - stackitmachinetemplate_admin_role.yaml
 - stackitmachinetemplate_editor_role.yaml
 - stackitmachinetemplate_viewer_role.yaml
@@ -35,3 +38,5 @@ resources:
 - stackitcluster_admin_role.yaml
 - stackitcluster_editor_role.yaml
 - stackitcluster_viewer_role.yaml
+
+

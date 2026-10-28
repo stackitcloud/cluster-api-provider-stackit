@@ -1,0 +1,8 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: StackitManagedCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-stackit
+    app.kubernetes.io/managed-by: kustomize
+  name: stackitmanagedcluster-sample
+spec: {}

@@ -34,6 +34,7 @@ rules:
   resources:
   - stackitclusters
   - stackitmachines
+  - stackitmanagedclusters
   verbs:
   - create
   - delete
@@ -47,6 +48,7 @@ rules:
   resources:
   - stackitclusters/finalizers
   - stackitmachines/finalizers
+  - stackitmanagedclusters/finalizers
   verbs:
   - update
 - apiGroups:
@@ -54,6 +56,7 @@ rules:
   resources:
   - stackitclusters/status
   - stackitmachines/status
+  - stackitmanagedclusters/status
   verbs:
   - get
   - patch
