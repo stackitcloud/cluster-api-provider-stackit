@@ -20,7 +20,6 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-// Reconcile reconciles cluster public IP resources.
 func (s *Service) Reconcile(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	if !s.scope.BastionSpec().Enabled {
@@ -56,7 +55,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// Delete deletes cluster public IP resources.
 func (s *Service) Delete(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	log.V(1).Info("Deleting public IP resources")
