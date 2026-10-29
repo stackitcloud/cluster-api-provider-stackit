@@ -202,6 +202,20 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "stackitmachine")
 		os.Exit(1)
 	}
+	if err := (&controller.StackitManagedClusterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "stackitmanagedcluster")
+		os.Exit(1)
+	}
+	if err := (&controller.StackitManagedNodePoolReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "stackitmanagednodepool")
+		os.Exit(1)
+	}
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err := webhookv1alpha1.SetupStackitClusterWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "StackitCluster")

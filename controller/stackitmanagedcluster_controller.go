@@ -1,0 +1,122 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+)
+
+// StackitManagedClusterReconciler reconciles a StackitManagedCluster object.
+type StackitManagedClusterReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitmanagedclusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitmanagedclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitmanagedclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=stackitmanagednodepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinepools,verbs=get;list;watch
+
+func (r *StackitManagedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	stackitManagedCluster := &infrav1.StackitManagedCluster{}
+	if err := r.Get(ctx, req.NamespacedName, stackitManagedCluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Reconciling StackitManagedCluster", "namespace", req.Namespace, "name", req.Name)
+
+	return ctrl.Result{}, nil
+}
+
+// SetupWithManager registers the controller with the manager.
+func (r *StackitManagedClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&infrav1.StackitManagedCluster{}).
+		Watches(
+			&clusterv1.Cluster{},
+			handler.EnqueueRequestsFromMapFunc(r.filterForStackitManagedClusterResources),
+		).
+		Watches(
+			&infrav1.StackitManagedNodePool{},
+			handler.EnqueueRequestsFromMapFunc(r.stackitManagedClusterRequestsForNodePool),
+		).
+		Named("stackitmanagedcluster").
+		Complete(r)
+}
+
+func (r *StackitManagedClusterReconciler) filterForStackitManagedClusterResources(_ context.Context, obj client.Object) []reconcile.Request {
+	cluster, ok := obj.(*clusterv1.Cluster)
+	if !ok {
+		return nil
+	}
+	ref := cluster.Spec.InfrastructureRef
+	if !isStackitManagedClusterRef(ref) {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{
+			Namespace: cluster.Namespace,
+			Name:      ref.Name,
+		},
+	}}
+}
+
+func (r *StackitManagedClusterReconciler) stackitManagedClusterRequestsForNodePool(ctx context.Context, obj client.Object) []reconcile.Request {
+	nodePool, ok := obj.(*infrav1.StackitManagedNodePool)
+	if !ok || r.Client == nil {
+		return nil
+	}
+
+	machinePool, err := getMachinePoolForNodePool(ctx, r.Client, nodePool)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to get MachinePool for StackitManagedNodePool watch", "nodePool", client.ObjectKeyFromObject(nodePool))
+		return nil
+	}
+	if machinePool == nil {
+		return nil
+	}
+
+	cluster, err := getClusterForMachinePool(ctx, r.Client, machinePool)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to get Cluster for StackitManagedNodePool watch", "machinePool", client.ObjectKeyFromObject(machinePool))
+		return nil
+	}
+	if cluster == nil {
+		return nil
+	}
+
+	return r.filterForStackitManagedClusterResources(ctx, cluster)
+}

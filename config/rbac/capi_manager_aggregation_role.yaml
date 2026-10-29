@@ -18,6 +18,8 @@ rules:
   - stackitclustertemplates
   - stackitmachines
   - stackitmachinetemplates
+  - stackitmanagedclusters
+  - stackitmanagednodepools
   verbs:
   - create
   - delete

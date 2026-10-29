@@ -11,6 +11,8 @@ resources:
   - bases/infrastructure.cluster.x-k8s.io_stackitmachines.yaml
   - bases/infrastructure.cluster.x-k8s.io_stackitclustertemplates.yaml
   - bases/infrastructure.cluster.x-k8s.io_stackitmachinetemplates.yaml
+  - bases/infrastructure.cluster.x-k8s.io_stackitmanagedclusters.yaml
+  - bases/infrastructure.cluster.x-k8s.io_stackitmanagednodepools.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

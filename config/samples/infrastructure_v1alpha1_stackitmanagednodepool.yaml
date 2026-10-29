@@ -1,0 +1,22 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: StackitManagedNodePool
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-stackit
+    app.kubernetes.io/managed-by: kustomize
+  name: stackitmanagednodepool-sample
+spec:
+  name: np-default
+  availabilityZones:
+    - eu01-1
+  machine:
+    type: c2i.2
+    image:
+      name: flatcar
+      version: 4459.2.1
+  minimum: 1
+  maximum: 3
+  volume:
+    size: 50
+    type: storage_premium_perf1
+  allowSystemComponents: true

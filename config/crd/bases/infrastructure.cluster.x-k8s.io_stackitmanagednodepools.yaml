@@ -1,0 +1,280 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: stackitmanagednodepools.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: StackitManagedNodePool
+    listKind: StackitManagedNodePoolList
+    plural: stackitmanagednodepools
+    shortNames:
+    - stmnp
+    singular: stackitmanagednodepool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: StackitManagedNodePool is the Schema for the stackitmanagednodepools
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StackitManagedNodePool
+            properties:
+              allowSystemComponents:
+                description: allowSystemComponents allows system components to run
+                  on this node pool.
+                type: boolean
+              availabilityZones:
+                description: availabilityZones is the list of availability zones for
+                  the node pool.
+                items:
+                  type: string
+                type: array
+              labels:
+                additionalProperties:
+                  type: string
+                description: labels is a map of labels attached to all worker nodes
+                  of this node pool.
+                maxProperties: 80
+                type: object
+              machine:
+                description: machine configures the VM instance type and OS image
+                  for the node pool.
+                properties:
+                  image:
+                    description: image configures the OS image for the node pool.
+                    properties:
+                      name:
+                        description: name is the OS image name.
+                        type: string
+                      version:
+                        description: version is the OS image version.
+                        type: string
+                    required:
+                    - name
+                    - version
+                    type: object
+                  type:
+                    description: type selects the STACKIT machine type for the node
+                      pool.
+                    type: string
+                required:
+                - image
+                - type
+                type: object
+              maxSurge:
+                description: maxSurge is the maximum number of additional VMs created
+                  during an update.
+                format: int32
+                type: integer
+              maxUnavailable:
+                description: |-
+                  maxUnavailable is the maximum number of VMs that can be unavailable during
+                  an update.
+                format: int32
+                type: integer
+              maximum:
+                description: maximum is the maximum number of nodes in the pool.
+                format: int32
+                maximum: 1000
+                minimum: 1
+                type: integer
+              minimum:
+                description: minimum is the minimum number of nodes in the pool.
+                format: int32
+                maximum: 1000
+                type: integer
+              name:
+                description: name is the name of the node pool in SKE.
+                maxLength: 15
+                type: string
+              providerIDList:
+                description: |-
+                  providerIDList are the identification IDs of machine instances provided by
+                  the provider. This field must match the provider IDs as seen on the Node
+                  objects corresponding to a MachinePool's machine instances.
+                items:
+                  maxLength: 512
+                  minLength: 1
+                  type: string
+                maxItems: 10000
+                type: array
+                x-kubernetes-list-type: atomic
+              taints:
+                description: taints is a list of taints for all worker nodes of this
+                  node pool.
+                items:
+                  description: |-
+                    StackitManagedNodePoolTaint defines a Kubernetes taint applied to nodes in
+                    an SKE node pool.
+                  properties:
+                    effect:
+                      description: effect is the taint effect to apply.
+                      enum:
+                      - NoSchedule
+                      - PreferNoSchedule
+                      - NoExecute
+                      type: string
+                    key:
+                      description: key is the taint key to be applied to a node.
+                      type: string
+                    value:
+                      description: value is the taint value corresponding to the taint
+                        key.
+                      type: string
+                  required:
+                  - effect
+                  - key
+                  type: object
+                type: array
+              volume:
+                description: volume configures the disk volume for each node in the
+                  pool.
+                properties:
+                  size:
+                    description: size is the size of the volume in GiB.
+                    format: int32
+                    maximum: 10240
+                    minimum: 20
+                    type: integer
+                  type:
+                    description: type is the volume performance class.
+                    type: string
+                required:
+                - size
+                type: object
+            required:
+            - availabilityZones
+            - machine
+            - maximum
+            - minimum
+            - name
+            - volume
+            type: object
+            x-kubernetes-validations:
+            - message: minimum must be less than or equal to maximum
+              rule: self.minimum <= self.maximum
+          status:
+            description: status defines the observed state of StackitManagedNodePool
+            properties:
+              conditions:
+                description: conditions represent the current state of the StackitManagedNodePool
+                  resource.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              initialization:
+                description: initialization provides Cluster API v1beta2 contract
+                  state.
+                minProperties: 1
+                properties:
+                  provisioned:
+                    description: provisioned is true when the node pool infrastructure
+                      is provisioned.
+                    type: boolean
+                type: object
+              ready:
+                description: ready indicates that the node pool infrastructure is
+                  ready.
+                type: boolean
+              replicas:
+                description: replicas is the most recently observed number of replicas.
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
