@@ -68,4 +68,12 @@ resources:
   kind: StackitManagedCluster
   path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: cluster.x-k8s.io
+  group: infrastructure
+  kind: StackitManagedNodePool
+  path: github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1
+  version: v1alpha1
 version: "3"

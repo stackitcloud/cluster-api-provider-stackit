@@ -17,6 +17,7 @@ rules:
   - cluster.x-k8s.io
   resources:
   - clusters
+  - machinepools
   - machines
   verbs:
   - get
@@ -35,6 +36,7 @@ rules:
   - stackitclusters
   - stackitmachines
   - stackitmanagedclusters
+  - stackitmanagednodepools
   verbs:
   - create
   - delete
@@ -57,6 +59,7 @@ rules:
   - stackitclusters/status
   - stackitmachines/status
   - stackitmanagedclusters/status
+  - stackitmanagednodepools/status
   verbs:
   - get
   - patch
