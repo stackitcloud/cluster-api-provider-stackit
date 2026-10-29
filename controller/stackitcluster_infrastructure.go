@@ -33,6 +33,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
 	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -66,6 +67,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			infrav1.ClusterReadyCondition,
 		)
 	}
+	clusterScope.SetCloudClient(cloudClient)
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,
 		"Available",
@@ -412,6 +414,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		)
 		return ctrl.Result{}, err
 	}
+	clusterScope.SetCloudClient(cloudClient)
 	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, stackitCluster)
 	if err != nil {
 		log.Error(err, "Failed to resolve API server load balancer for deletion", "cluster", stackitCluster.Name)
@@ -438,10 +441,15 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion node SSH access: %v", err)
 		return ctrl.Result{}, err
 	}
+	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
+	if err := publicip.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+		log.Error(err, "Failed to delete bastion public IP", "cluster", stackitCluster.Name)
+		record.Warnf(stackitCluster, "FailedDeleteBastion",
+			"Failed to delete bastion public IP: %v", err)
+		return ctrl.Result{}, err
+	}
 	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
-		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,
-		PublicIP:        stackitCluster.Status.Bastion.PublicIP,
 		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
 	}); err != nil && !cloud.IsNotFound(err) {
 		log.Error(err, "Failed to delete bastion", "cluster", stackitCluster.Name)
@@ -449,7 +457,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion: %v", err)
 		return ctrl.Result{}, err
 	}
-	if hasBastionStatus(stackitCluster.Status.Bastion) {
+	if hadBastion {
 		clusterScope.ClearBastionStatus()
 		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}

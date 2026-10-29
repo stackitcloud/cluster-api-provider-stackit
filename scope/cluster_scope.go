@@ -15,6 +15,7 @@ package scope
 
 import (
 	"context"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +26,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
 
 // ClusterScope holds the per-reconcile state for a StackitCluster.
@@ -32,6 +34,7 @@ type ClusterScope struct {
 	Client         client.Client
 	Cluster        *clusterv1.Cluster
 	StackitCluster *infrav1.StackitCluster
+	CloudClient    cloud.Client
 
 	patchHelper *patch.Helper
 }
@@ -87,13 +90,9 @@ func (s *ClusterScope) SetAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {
 }
 
 func (s *ClusterScope) SetBastionStatus(bastion *cloud.Bastion, cloudInitHash string) {
-	s.StackitCluster.Status.Bastion = infrav1.StackitBastionStatus{
-		ServerID:        bastion.ServerID,
-		PublicIPID:      bastion.PublicIPID,
-		PublicIP:        bastion.PublicIP,
-		SecurityGroupID: bastion.SecurityGroupID,
-		CloudInitHash:   cloudInitHash,
-	}
+	s.StackitCluster.Status.Bastion.ServerID = bastion.ServerID
+	s.StackitCluster.Status.Bastion.SecurityGroupID = bastion.SecurityGroupID
+	s.StackitCluster.Status.Bastion.CloudInitHash = cloudInitHash
 }
 
 func (s *ClusterScope) ClearBastionStatus() {
@@ -102,4 +101,71 @@ func (s *ClusterScope) ClearBastionStatus() {
 
 func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
 	s.StackitCluster.Status.FailureDomains = failureDomains
+}
+
+// DefaultAvailabilityZone returns the default single availability zone for a
+// StackitCluster (the alphabetically first published failure domain, falling
+// back to <region>-1). This prevents the STACKIT IaaS API from defaulting to
+// the expensive metro zone (<region>-m).
+func DefaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
+	if stackitCluster == nil {
+		return ""
+	}
+	if len(stackitCluster.Status.FailureDomains) > 0 {
+		zones := make([]string, 0, len(stackitCluster.Status.FailureDomains))
+		for _, fd := range stackitCluster.Status.FailureDomains {
+			zones = append(zones, fd.Name)
+		}
+		slices.Sort(zones)
+		return zones[0]
+	}
+	if stackitCluster.Spec.Region != "" {
+		return stackitCluster.Spec.Region + "-1"
+	}
+	return ""
+}
+
+func (s *ClusterScope) Cloud() cloud.Client {
+	return s.CloudClient
+}
+
+func (s *ClusterScope) SetCloudClient(cloudClient cloud.Client) {
+	s.CloudClient = cloudClient
+}
+
+func (s *ClusterScope) ProjectID() string {
+	if s.StackitCluster.Spec.ProjectID != "" {
+		return s.StackitCluster.Spec.ProjectID
+	}
+	return s.CloudClient.ProjectID()
+}
+
+func (s *ClusterScope) Region() string {
+	if s.StackitCluster.Spec.Region != "" {
+		return s.StackitCluster.Spec.Region
+	}
+	return s.CloudClient.Region()
+}
+
+func (s *ClusterScope) IaaSClient() *iaas.APIClient {
+	return s.CloudClient.IaaSClient()
+}
+
+func (s *ClusterScope) BastionSpec() infrav1.StackitBastionSpec {
+	return s.StackitCluster.Spec.Bastion
+}
+
+func (s *ClusterScope) BastionStatus() infrav1.StackitBastionStatus {
+	return s.StackitCluster.Status.Bastion
+}
+
+func (s *ClusterScope) BastionTags() map[string]string {
+	tags := util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels)
+	tags[util.LabelResourceRole] = util.ResourceRoleBastion
+	return tags
+}
+
+func (s *ClusterScope) SetBastionPublicIP(id, ip string) {
+	s.StackitCluster.Status.Bastion.PublicIPID = id
+	s.StackitCluster.Status.Bastion.PublicIP = ip
 }

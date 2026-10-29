@@ -469,9 +469,8 @@ func lookup(m map[string]any, key string) any {
 // short-circuits on an existing server, making this the only re-attach path.
 func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.T) {
 	var (
-		createPayload    map[string]any
-		attachCallCount  int
-		publicIPAssigned bool
+		createPayload   map[string]any
+		attachCallCount int
 	)
 	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -502,13 +501,6 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 				"code": 400,
 				"msg":  "request invalid: Invalid input for security_groups. Reason: Duplicate items in the list.",
 			})
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
-			writeJSON(t, w, map[string]any{"items": []any{}})
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/public-ips"):
-			writeJSON(t, w, map[string]any{"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10"})
-		case strings.Contains(path, "/public-ips/"):
-			publicIPAssigned = true
-			writeJSON(t, w, map[string]any{"id": "66666666-6666-4666-8666-666666666666", "ip": "203.0.113.10"})
 		case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
 			writeJSON(t, w, map[string]any{
 				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
@@ -520,15 +512,16 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 
 	client := newTestSDKClient(t, server.URL)
 	bastion, err := client.EnsureBastion(context.Background(), BastionInput{
-		Name:         "bastion",
-		ProjectID:    testSDKProjectID,
-		Region:       testSDKRegion,
-		NetworkID:    testSDKNetworkID,
-		ImageID:      testSDKImageID,
-		MachineType:  "c2i.1",
-		SSHKeyName:   "default",
-		AllowedCIDRs: []string{"203.0.113.0/24"},
-		Tags:         map[string]string{"cluster": "test"},
+		Name:             "bastion",
+		ProjectID:        testSDKProjectID,
+		Region:           testSDKRegion,
+		NetworkID:        testSDKNetworkID,
+		ImageID:          testSDKImageID,
+		MachineType:      "c2i.1",
+		AvailabilityZone: "eu01-1",
+		SSHKeyName:       "default",
+		AllowedCIDRs:     []string{"203.0.113.0/24"},
+		Tags:             map[string]string{"cluster": "test"},
 	})
 	if err != nil {
 		t.Fatalf("EnsureBastion() error = %v", err)
@@ -537,15 +530,13 @@ func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.
 	if attachCallCount != 1 {
 		t.Fatalf("attach attempted %d time(s), want exactly 1 (the idempotent re-attach)", attachCallCount)
 	}
+	assertStringField(t, createPayload, "availabilityZone", "eu01-1")
 	groups, _ := createPayload["securityGroups"].([]any)
 	if len(groups) != 1 || groups[0] != testSDKSecurityGroup {
 		t.Fatalf("create payload securityGroups = %v, want [%s]", createPayload["securityGroups"], testSDKSecurityGroup)
 	}
-	if !publicIPAssigned {
-		t.Fatal("public IP was never assigned to the bastion server")
-	}
-	if bastion.PublicIP != "203.0.113.10" {
-		t.Fatalf("bastion.PublicIP = %q, want 203.0.113.10", bastion.PublicIP)
+	if bastion.ServerID != testSDKServerID {
+		t.Fatalf("bastion.ServerID = %q, want %s", bastion.ServerID, testSDKServerID)
 	}
 }
 
