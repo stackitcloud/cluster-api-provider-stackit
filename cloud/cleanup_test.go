@@ -42,6 +42,12 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	if _, err := client.CreatePublicIP(ctx, otherTags); err != nil {
 		t.Fatalf("CreatePublicIP() error = %v", err)
 	}
+	if _, err := client.CreateSecurityGroup(ctx, "matched-sg", tags); err != nil {
+		t.Fatalf("CreateSecurityGroup() error = %v", err)
+	}
+	if _, err := client.CreateSecurityGroup(ctx, "other-sg", otherTags); err != nil {
+		t.Fatalf("CreateSecurityGroup() error = %v", err)
+	}
 	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
 		Name:      "matched",
 		Tags:      tags,
@@ -105,5 +111,19 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	}
 	if len(otherPublicIPs) != 1 {
 		t.Fatalf("other public IP count = %d, want 1", len(otherPublicIPs))
+	}
+	matchedSecurityGroups, err := client.ListSecurityGroupsByTags(ctx, tags)
+	if err != nil {
+		t.Fatalf("ListSecurityGroupsByTags() error = %v", err)
+	}
+	if len(matchedSecurityGroups) != 0 {
+		t.Fatalf("matched security group count = %d, want 0", len(matchedSecurityGroups))
+	}
+	otherSecurityGroups, err := client.ListSecurityGroupsByTags(ctx, otherTags)
+	if err != nil {
+		t.Fatalf("ListSecurityGroupsByTags(other) error = %v", err)
+	}
+	if len(otherSecurityGroups) != 1 {
+		t.Fatalf("other security group count = %d, want 1", len(otherSecurityGroups))
 	}
 }

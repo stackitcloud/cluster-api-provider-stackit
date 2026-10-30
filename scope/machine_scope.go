@@ -21,7 +21,9 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
 
 // MachineScope holds the per-reconcile state for a StackitMachine.
@@ -31,6 +33,7 @@ type MachineScope struct {
 	Machine        *clusterv1.Machine
 	StackitCluster *infrav1.StackitCluster
 	StackitMachine *infrav1.StackitMachine
+	CloudClient    cloud.Client
 
 	patchHelper *patch.Helper
 }
@@ -128,4 +131,36 @@ func (s *MachineScope) AvailabilityZone() string {
 	}
 
 	return DefaultAvailabilityZone(s.StackitCluster)
+}
+
+func (s *MachineScope) SetCloudClient(cloudClient cloud.Client) {
+	s.CloudClient = cloudClient
+}
+
+func (s *MachineScope) ProjectID() string {
+	if s.StackitCluster.Spec.ProjectID != "" {
+		return s.StackitCluster.Spec.ProjectID
+	}
+	return s.CloudClient.ProjectID()
+}
+
+func (s *MachineScope) Region() string {
+	if s.StackitCluster.Spec.Region != "" {
+		return s.StackitCluster.Spec.Region
+	}
+	return s.CloudClient.Region()
+}
+
+func (s *MachineScope) IaaSClient() *iaas.APIClient {
+	return s.CloudClient.IaaSClient()
+}
+
+func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	return []securitygroup.SecurityGroupSpec{
+		nodeSSHSecurityGroupSpec(
+			s.StackitCluster,
+			s.StackitCluster.Status.Bastion.SecurityGroupID,
+			s.StackitMachine.Status.InstanceID,
+		),
+	}
 }

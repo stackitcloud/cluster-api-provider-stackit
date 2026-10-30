@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
@@ -35,8 +36,6 @@ const (
 	apiserverListenerName   = "apiserver"
 	bootstrapTargetName     = "capi-bootstrap-placeholder"
 	bootstrapTargetIP       = "10.0.0.1"
-	sshPort                 = 22
-	tcpProtocol             = "tcp"
 )
 
 // SDKClient is the STACKIT SDK-backed implementation of Client.
@@ -259,12 +258,14 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 		return nil, fmt.Errorf("%w: bastion tags are required", ErrInvalidInput)
 	}
 
-	securityGroup, err := c.ensureBastionSecurityGroup(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.ensureBastionSecurityGroupRules(ctx, securityGroup.ID, input.AllowedCIDRs); err != nil {
-		return nil, err
+	sgClient := securitygroup.NewClient(c)
+	securityGroupID := input.SecurityGroupID
+	if securityGroupID == "" {
+		securityGroup, err := sgClient.FindByTags(ctx, input.Tags)
+		if err != nil {
+			return nil, err
+		}
+		securityGroupID = securityGroup.ID
 	}
 
 	server, err := c.CreateServer(ctx, CreateServerInput{
@@ -276,7 +277,7 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 		AvailabilityZone: input.AvailabilityZone,
 		SSHKeyName:       input.SSHKeyName,
 		NetworkID:        input.NetworkID,
-		SecurityGroups:   []string{securityGroup.ID},
+		SecurityGroups:   []string{securityGroupID},
 		UserData:         input.CloudInit,
 		Tags:             input.Tags,
 		RootVolume:       input.RootVolume,
@@ -290,7 +291,7 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	// by an interrupted DeleteBastion). Kept deliberately, and idempotent: the
 	// duplicate/no-port-yet responses are tolerated so they can no longer abort
 	// the reconcile before the public IP below is assigned.
-	if err := c.addSecurityGroupToServer(ctx, server.ID, securityGroup.ID); err != nil {
+	if err := sgClient.AttachToServer(ctx, server.ID, securityGroupID); err != nil {
 		return nil, err
 	}
 
@@ -298,7 +299,7 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 		ServerID:          server.ID,
 		ServerState:       server.State,
 		ServerPowerStatus: server.PowerStatus,
-		SecurityGroupID:   securityGroup.ID,
+		SecurityGroupID:   securityGroupID,
 	}, nil
 }
 
@@ -312,10 +313,17 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 			return err
 		}
 	}
+	if serverID == "" {
+		return nil
+	}
 
+	sgClient := securitygroup.NewClient(c)
 	securityGroupID := status.SecurityGroupID
 	if securityGroupID == "" {
-		securityGroup, err := c.findSecurityGroupByTags(ctx, input.Tags)
+		securityGroupID = input.SecurityGroupID
+	}
+	if securityGroupID == "" && len(input.Tags) > 0 {
+		securityGroup, err := sgClient.FindByTags(ctx, input.Tags)
 		if err == nil {
 			securityGroupID = securityGroup.ID
 		} else if !IsNotFound(err) {
@@ -323,115 +331,15 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 		}
 	}
 
-	if serverID != "" && securityGroupID != "" {
-		if err := c.iaasClient.DefaultAPI.
-			RemoveSecurityGroupFromServer(ctx, c.projectID, c.region, serverID, securityGroupID).
-			Execute(); err != nil {
-			err := shared.ClassifySDKError("remove security group from server", err)
-			if !IsNotFound(err) && !IsConflict(err) {
-				return err
-			}
-		}
-	}
-	if serverID != "" {
-		if err := c.DeleteServer(ctx, serverID); err != nil && !IsNotFound(err) {
-			return err
-		}
-	}
 	if securityGroupID != "" {
-		if err := c.deleteSecurityGroupRules(ctx, securityGroupID); err != nil {
-			return err
-		}
-		if err := c.iaasClient.DefaultAPI.
-			DeleteSecurityGroup(ctx, c.projectID, c.region, securityGroupID).
-			Execute(); err != nil {
-			err := shared.ClassifySDKError("delete security group", err)
-			if !IsNotFound(err) {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (c *SDKClient) EnsureNodeSSHAccess(ctx context.Context, input NodeSSHAccessInput) (*SecurityGroup, error) {
-	if input.Name == "" || input.ServerID == "" || input.BastionSecurityGroupID == "" {
-		return nil, fmt.Errorf(
-			"%w: node SSH access name, server ID, and bastion security group ID are required",
-			ErrInvalidInput,
-		)
-	}
-	if len(input.Tags) == 0 {
-		return nil, fmt.Errorf("%w: node SSH access tags are required", ErrInvalidInput)
-	}
-
-	securityGroup, err := c.ensureNodeSSHSecurityGroup(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.ensureNodeSSHSecurityGroupRule(ctx, securityGroup.ID, input.BastionSecurityGroupID); err != nil {
-		return nil, err
-	}
-	if err := c.addSecurityGroupToServer(ctx, input.ServerID, securityGroup.ID); err != nil {
-		return nil, err
-	}
-	return securityGroup, nil
-}
-
-func (c *SDKClient) DeleteNodeSSHAccess(ctx context.Context, tags map[string]string) error {
-	securityGroup, err := c.findSecurityGroupByTags(ctx, tags)
-	if IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	servers, err := c.ListServersByTags(ctx, clusterServerSelectorFromTags(tags))
-	if err != nil {
-		return err
-	}
-	for _, server := range servers {
-		if err := c.iaasClient.DefaultAPI.
-			RemoveSecurityGroupFromServer(ctx, c.projectID, c.region, server.ID, securityGroup.ID).
-			Execute(); err != nil {
-			err := shared.ClassifySDKError("remove security group from server", err)
-			if !IsNotFound(err) && !IsConflict(err) {
-				return err
-			}
-		}
-	}
-	if err := c.deleteSecurityGroupRules(ctx, securityGroup.ID); err != nil {
-		return err
-	}
-	if err := c.iaasClient.DefaultAPI.
-		DeleteSecurityGroup(ctx, c.projectID, c.region, securityGroup.ID).
-		Execute(); err != nil {
-		err := shared.ClassifySDKError("delete security group", err)
-		if !IsNotFound(err) {
+		if err := sgClient.DetachFromServer(ctx, serverID, securityGroupID); err != nil {
 			return err
 		}
 	}
+	if err := c.DeleteServer(ctx, serverID); err != nil && !IsNotFound(err) {
+		return err
+	}
 	return nil
-}
-
-func (c *SDKClient) ListSecurityGroupsByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
-	}
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroups(ctx, c.projectID, c.region).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("list security groups", err)
-	}
-	matched := []*SecurityGroup{}
-	for _, securityGroup := range resp.GetItems() {
-		if shared.LabelsContainTags(securityGroup.GetLabels(), tags) {
-			securityGroup := securityGroup
-			matched = append(matched, securityGroupFromSDK(&securityGroup))
-		}
-	}
-	return matched, nil
 }
 
 func (c *SDKClient) EnsureAPIServerLoadBalancer(ctx context.Context, input LoadBalancerInput) (*LoadBalancer, error) {
@@ -604,229 +512,6 @@ func (c *SDKClient) findLoadBalancerByTags(ctx context.Context, tags map[string]
 	return matched[0], nil
 }
 
-func (c *SDKClient) ensureBastionSecurityGroup(ctx context.Context, input BastionInput) (*SecurityGroup, error) {
-	if existing, err := c.findSecurityGroupByTags(ctx, input.Tags); err == nil {
-		return existing, nil
-	} else if !IsNotFound(err) {
-		return nil, err
-	}
-	payload := iaas.NewCreateSecurityGroupPayload(input.Name + "-ssh")
-	payload.SetDescription("Cluster API Provider STACKIT bastion SSH access")
-	payload.SetLabels(shared.TagsToSDKLabels(input.Tags))
-	securityGroup, err := c.iaasClient.DefaultAPI.CreateSecurityGroup(ctx, c.projectID, c.region).
-		CreateSecurityGroupPayload(*payload).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("create security group", err)
-	}
-	return securityGroupFromSDK(securityGroup), nil
-}
-
-func (c *SDKClient) ensureNodeSSHSecurityGroup(ctx context.Context, input NodeSSHAccessInput) (*SecurityGroup, error) {
-	if existing, err := c.findSecurityGroupByTags(ctx, input.Tags); err == nil {
-		return existing, nil
-	} else if !IsNotFound(err) {
-		return nil, err
-	}
-	payload := iaas.NewCreateSecurityGroupPayload(input.Name)
-	payload.SetDescription("Cluster API Provider STACKIT node SSH access from bastion")
-	payload.SetLabels(shared.TagsToSDKLabels(input.Tags))
-	securityGroup, err := c.iaasClient.DefaultAPI.CreateSecurityGroup(ctx, c.projectID, c.region).
-		CreateSecurityGroupPayload(*payload).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("create security group", err)
-	}
-	return securityGroupFromSDK(securityGroup), nil
-}
-
-func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securityGroupID string, cidrs []string) error {
-	if securityGroupID == "" {
-		return fmt.Errorf("%w: security group ID is required", ErrInvalidInput)
-	}
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, securityGroupID).Execute()
-	if err != nil {
-		return shared.ClassifySDKError("list security group rules", err)
-	}
-	existingRules := resp.GetItems()
-	desired := make(map[string]struct{}, len(cidrs))
-	for _, cidr := range cidrs {
-		if cidr == "" {
-			return fmt.Errorf("%w: empty bastion allowed CIDR", ErrInvalidInput)
-		}
-		if _, seen := desired[cidr]; seen {
-			// A CIDR listed twice would otherwise be created twice:
-			// existingRules is a snapshot from before this loop, so the second
-			// pass does not see the rule the first pass just created, and the
-			// duplicate create fails the whole bastion reconcile.
-			continue
-		}
-		desired[cidr] = struct{}{}
-		if hasSSHRule(existingRules, cidr) {
-			continue
-		}
-		protocol := iaas.StringAsCreateProtocol(new(tcpProtocol))
-		rule := iaas.NewCreateSecurityGroupRulePayload("ingress")
-		rule.SetIpRange(cidr)
-		rule.SetPortRange(*iaas.NewPortRange(sshPort, sshPort))
-		rule.SetProtocol(protocol)
-		if _, err := c.iaasClient.DefaultAPI.CreateSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID).
-			CreateSecurityGroupRulePayload(*rule).
-			Execute(); err != nil {
-			return shared.ClassifySDKError("create security group rule", err)
-		}
-	}
-
-	// Revoke SSH rules for CIDRs that are no longer desired. Without this the
-	// rule set only ever grows, so narrowing allowedCIDRs would not actually
-	// take access away from the previously allowed range.
-	for _, rule := range existingRules {
-		if !isSSHRule(rule) {
-			continue
-		}
-		if _, keep := desired[rule.GetIpRange()]; keep {
-			continue
-		}
-		ruleID := rule.GetId()
-		if ruleID == "" {
-			continue
-		}
-		if err := c.iaasClient.DefaultAPI.
-			DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
-			Execute(); err != nil {
-			err := shared.ClassifySDKError("delete security group rule", err)
-			if !IsNotFound(err) {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (c *SDKClient) ensureNodeSSHSecurityGroupRule(
-	ctx context.Context,
-	nodeSecurityGroupID, bastionSecurityGroupID string,
-) error {
-	if nodeSecurityGroupID == "" || bastionSecurityGroupID == "" {
-		return fmt.Errorf("%w: node and bastion security group IDs are required", ErrInvalidInput)
-	}
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, nodeSecurityGroupID).Execute()
-	if err != nil {
-		return shared.ClassifySDKError("list security group rules", err)
-	}
-	if hasRemoteSecurityGroupSSHRule(resp.GetItems(), bastionSecurityGroupID) {
-		return nil
-	}
-	protocol := iaas.StringAsCreateProtocol(new(tcpProtocol))
-	rule := iaas.NewCreateSecurityGroupRulePayload("ingress")
-	rule.SetRemoteSecurityGroupId(bastionSecurityGroupID)
-	rule.SetPortRange(*iaas.NewPortRange(sshPort, sshPort))
-	rule.SetProtocol(protocol)
-	if _, err := c.iaasClient.DefaultAPI.CreateSecurityGroupRule(ctx, c.projectID, c.region, nodeSecurityGroupID).
-		CreateSecurityGroupRulePayload(*rule).
-		Execute(); err != nil {
-		return shared.ClassifySDKError("create security group rule", err)
-	}
-	return nil
-}
-
-func (c *SDKClient) findSecurityGroupByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
-	matched, err := c.ListSecurityGroupsByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no security group matching tags", ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple security groups matching tags", ErrConflict)
-	}
-	return matched[0], nil
-}
-
-// addSecurityGroupToServer attaches the group idempotently. Three outcomes are
-// expected and must not fail the caller:
-//   - conflict: already attached
-//   - invalid input: the API rejects the duplicate ("Duplicate items in the list")
-//   - not found: the server has no network port yet, so there is nothing to
-//     attach to — the next reconcile retries once it does
-func (c *SDKClient) addSecurityGroupToServer(ctx context.Context, serverID, securityGroupID string) error {
-	if err := c.iaasClient.DefaultAPI.
-		AddSecurityGroupToServer(ctx, c.projectID, c.region, serverID, securityGroupID).
-		Execute(); err != nil {
-		err := shared.ClassifySDKError("add security group to server", err)
-		if !IsConflict(err) && !IsInvalidInput(err) && !IsNotFound(err) {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *SDKClient) deleteSecurityGroupRules(ctx context.Context, securityGroupID string) error {
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, securityGroupID).Execute()
-	if err != nil {
-		err := shared.ClassifySDKError("list security group rules", err)
-		if IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	for _, rule := range resp.GetItems() {
-		ruleID := rule.GetId()
-		if ruleID == "" {
-			continue
-		}
-		if err := c.iaasClient.DefaultAPI.
-			DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
-			Execute(); err != nil {
-			err := shared.ClassifySDKError("delete security group rule", err)
-			if !IsNotFound(err) {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func hasSSHRule(rules []iaas.SecurityGroupRule, cidr string) bool {
-	for _, rule := range rules {
-		if rule.GetIpRange() == cidr && isSSHRule(rule) {
-			return true
-		}
-	}
-	return false
-}
-
-// isSSHRule reports whether the rule is an ingress TCP/22 rule, regardless of
-// which CIDR it allows.
-func isSSHRule(rule iaas.SecurityGroupRule) bool {
-	if rule.GetDirection() != "ingress" {
-		return false
-	}
-	portRange := rule.GetPortRange()
-	if portRange.GetMin() != sshPort || portRange.GetMax() != sshPort {
-		return false
-	}
-	protocol, ok := rule.GetProtocolOk()
-	return ok && protocol.GetName() == tcpProtocol
-}
-
-func hasRemoteSecurityGroupSSHRule(rules []iaas.SecurityGroupRule, remoteSecurityGroupID string) bool {
-	for _, rule := range rules {
-		if rule.GetDirection() != "ingress" || rule.GetRemoteSecurityGroupId() != remoteSecurityGroupID {
-			continue
-		}
-		portRange := rule.GetPortRange()
-		if portRange.GetMin() != sshPort || portRange.GetMax() != sshPort {
-			continue
-		}
-		if protocol, ok := rule.GetProtocolOk(); ok && protocol.GetName() == tcpProtocol {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *SDKClient) updateAPIServerTargetPool(
 	ctx context.Context,
 	loadBalancerID string,
@@ -900,16 +585,6 @@ func loadBalancerFromSDK(in *lb.LoadBalancer) *LoadBalancer {
 	}
 }
 
-func securityGroupFromSDK(in *iaas.SecurityGroup) *SecurityGroup {
-	if in == nil {
-		return nil
-	}
-	return &SecurityGroup{
-		ID:   in.GetId(),
-		Name: in.GetName(),
-	}
-}
-
 func listenerPort(listeners []lb.Listener) int32 {
 	for _, listener := range listeners {
 		if port := listener.GetPort(); port > 0 {
@@ -917,20 +592,6 @@ func listenerPort(listeners []lb.Listener) int32 {
 		}
 	}
 	return 0
-}
-
-func clusterServerSelectorFromTags(tags map[string]string) map[string]string {
-	selector := map[string]string{}
-	for _, key := range []string{
-		"cluster.x-k8s.io/cluster-name",
-		"cluster.x-k8s.io/cluster-namespace",
-		"cluster.x-k8s.io/managed-by",
-	} {
-		if value := tags[key]; value != "" {
-			selector[key] = value
-		}
-	}
-	return selector
 }
 
 func isLoadBalancerServiceNotEnabled(err error) bool {

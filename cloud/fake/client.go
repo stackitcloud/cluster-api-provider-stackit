@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
@@ -48,25 +49,24 @@ type Client struct {
 
 	// failure injection: if non-nil, the next call returns this error and the
 	// field is cleared.
-	FailNextCreateServer   error
-	FailNextDeleteServer   error
-	FailNextGetServer      error
-	FailNextFindServer     error
-	FailNextEnsureLB       error
-	FailNextDeleteLB       error
-	FailNextSetTargets     error
-	FailNextGetNetwork     error
-	FailNextEnsureBastion  error
-	FailNextDeleteBastion  error
-	FailNextEnsureNodeSSH  error
-	FailNextDeleteNodeSSH  error
-	FailNextListAZ         error
-	FailNextGetPublicIP    error
-	FailNextListPublicIPs  error
-	FailNextCreatePublicIP error
-	FailNextDeletePublicIP error
-	FailNextAddPublicIP    error
-	FailNextRemovePublicIP error
+	FailNextCreateServer     error
+	FailNextDeleteServer     error
+	FailNextGetServer        error
+	FailNextFindServer       error
+	FailNextEnsureLB         error
+	FailNextDeleteLB         error
+	FailNextSetTargets       error
+	FailNextGetNetwork       error
+	FailNextEnsureBastion    error
+	FailNextDeleteBastion    error
+	FailNextAddSecurityGroup error
+	FailNextListAZ           error
+	FailNextGetPublicIP      error
+	FailNextListPublicIPs    error
+	FailNextCreatePublicIP   error
+	FailNextDeletePublicIP   error
+	FailNextAddPublicIP      error
+	FailNextRemovePublicIP   error
 
 	// AvailabilityZones is returned by ListAvailabilityZones if non-empty.
 	// Defaults to eu01-1, eu01-2, eu01-3.
@@ -86,9 +86,9 @@ type Client struct {
 
 	// CreateServerCalls counts successful CreateServer calls (for idempotency
 	// assertions).
-	CreateServerCalls  int
-	EnsureBastionCalls int
-	EnsureNodeSSHCalls int
+	CreateServerCalls     int
+	EnsureBastionCalls    int
+	AddSecurityGroupCalls int
 }
 
 type serverEntry struct {
@@ -109,11 +109,18 @@ type publicIPEntry struct {
 	tags     map[string]string
 }
 
+type securityGroupRuleEntry struct {
+	id string
+	securitygroup.Rule
+}
+
 type securityGroupEntry struct {
 	securityGroup        *cloud.SecurityGroup
+	description          string
 	tags                 map[string]string
 	allowedCIDRs         []string
 	remoteSecurityGroups []string
+	rules                map[string]*securityGroupRuleEntry
 }
 
 // New returns a Client preconfigured with the given networks.
@@ -295,27 +302,25 @@ func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cl
 	if err := consume(&c.FailNextEnsureBastion); err != nil {
 		return nil, err
 	}
+	securityGroupID := input.SecurityGroupID
+	if securityGroupID == "" {
+		securityGroupID = idOfSecurityGroup(c.securityGroupByTags(input.Tags))
+	}
 	for _, serverEntry := range c.servers {
 		if len(input.Tags) > 0 && mapContains(serverEntry.tags, input.Tags) {
-			securityGroup := c.securityGroupByTags(input.Tags)
+			if securityGroupID != "" {
+				if serverEntry.securityGroups == nil {
+					serverEntry.securityGroups = map[string]struct{}{}
+				}
+				serverEntry.securityGroups[securityGroupID] = struct{}{}
+			}
 			return &cloud.Bastion{
 				ServerID:          serverEntry.server.ID,
 				ServerState:       serverEntry.server.State,
 				ServerPowerStatus: serverEntry.server.PowerStatus,
-				SecurityGroupID:   idOfSecurityGroup(securityGroup),
+				SecurityGroupID:   securityGroupID,
 			}, nil
 		}
-	}
-
-	securityGroupID := c.genID()
-	securityGroup := &cloud.SecurityGroup{
-		ID:   securityGroupID,
-		Name: input.Name + "-ssh",
-	}
-	c.securityGroups[securityGroupID] = &securityGroupEntry{
-		securityGroup: securityGroup,
-		tags:          copyTags(input.Tags),
-		allowedCIDRs:  append([]string(nil), input.AllowedCIDRs...),
 	}
 
 	serverID := c.genID()
@@ -333,10 +338,14 @@ func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cl
 			{Type: "InternalIP", Address: "10.0.0.20"},
 		},
 	}
+	var sgSet map[string]struct{}
+	if securityGroupID != "" {
+		sgSet = securityGroupSet([]string{securityGroupID})
+	}
 	c.servers[serverID] = &serverEntry{
 		server:         server,
 		tags:           copyTags(input.Tags),
-		securityGroups: securityGroupSet([]string{securityGroupID}),
+		securityGroups: sgSet,
 		userData:       append([]byte(nil), input.CloudInit...),
 	}
 
@@ -358,72 +367,9 @@ func (c *Client) DeleteBastion(_ context.Context, input cloud.BastionInput, stat
 	if status.ServerID != "" {
 		delete(c.servers, status.ServerID)
 	}
-	if status.SecurityGroupID != "" {
-		delete(c.securityGroups, status.SecurityGroupID)
-	}
 	for id, entry := range c.servers {
-		if mapContains(entry.tags, input.Tags) {
+		if len(input.Tags) > 0 && mapContains(entry.tags, input.Tags) {
 			delete(c.servers, id)
-		}
-	}
-	for id, entry := range c.securityGroups {
-		if mapContains(entry.tags, input.Tags) {
-			delete(c.securityGroups, id)
-		}
-	}
-	return nil
-}
-
-func (c *Client) EnsureNodeSSHAccess(_ context.Context, input cloud.NodeSSHAccessInput) (*cloud.SecurityGroup, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextEnsureNodeSSH); err != nil {
-		return nil, err
-	}
-	serverEntry, ok := c.servers[input.ServerID]
-	if !ok {
-		return nil, fmt.Errorf("server %q: %w", input.ServerID, cloud.ErrNotFound)
-	}
-	securityGroup := c.securityGroupByTags(input.Tags)
-	if securityGroup == nil {
-		securityGroup = &cloud.SecurityGroup{
-			ID:   c.genID(),
-			Name: input.Name,
-		}
-		c.securityGroups[securityGroup.ID] = &securityGroupEntry{
-			securityGroup:        securityGroup,
-			tags:                 copyTags(input.Tags),
-			remoteSecurityGroups: []string{input.BastionSecurityGroupID},
-		}
-	} else {
-		entry := c.securityGroups[securityGroup.ID]
-		if !containsString(entry.remoteSecurityGroups, input.BastionSecurityGroupID) {
-			entry.remoteSecurityGroups = append(entry.remoteSecurityGroups, input.BastionSecurityGroupID)
-		}
-	}
-	if serverEntry.securityGroups == nil {
-		serverEntry.securityGroups = map[string]struct{}{}
-	}
-	serverEntry.securityGroups[securityGroup.ID] = struct{}{}
-	c.EnsureNodeSSHCalls++
-	out := *securityGroup
-	return &out, nil
-}
-
-func (c *Client) DeleteNodeSSHAccess(_ context.Context, tags map[string]string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteNodeSSH); err != nil {
-		return err
-	}
-	for id, entry := range c.securityGroups {
-		if mapContains(entry.tags, tags) {
-			delete(c.securityGroups, id)
-			for _, server := range c.servers {
-				delete(server.securityGroups, id)
-			}
 		}
 	}
 	return nil
@@ -558,6 +504,18 @@ func (c *Client) ListSecurityGroupsByTags(_ context.Context, tags map[string]str
 		}
 	}
 	return securityGroups, nil
+}
+
+func (c *Client) CreateSecurityGroup(_ context.Context, name string, tags map[string]string) (*cloud.SecurityGroup, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, err := c.createSecurityGroupEntry(name, "", tags)
+	if err != nil {
+		return nil, err
+	}
+	out := *entry.securityGroup
+	return &out, nil
 }
 
 func (c *Client) EnsureAPIServerLoadBalancer(
@@ -736,6 +694,21 @@ func (c *Client) SecurityGroupRemoteSources(securityGroupID string) []string {
 	return append([]string(nil), entry.remoteSecurityGroups...)
 }
 
+// SecurityGroupRules returns the rules currently stored on a fake security group.
+func (c *Client) SecurityGroupRules(securityGroupID string) []securitygroup.Rule {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.securityGroups[securityGroupID]
+	if !ok {
+		return nil
+	}
+	rules := make([]securitygroup.Rule, 0, len(entry.rules))
+	for _, r := range entry.rules {
+		rules = append(rules, r.Rule)
+	}
+	return rules
+}
+
 // LoadBalancerTargetCount returns the number of targets in one load balancer
 // target pool (test helper).
 func (c *Client) LoadBalancerTargetCount(id string) int {
@@ -850,6 +823,17 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("Content-Type", "application/json")
+
+	if c.handlePublicIPRequest(rec, r) || c.handleSecurityGroupRequest(rec, r) {
+		return rec.Result(), nil
+	}
+
+	rec.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
+	return rec.Result(), nil
+}
+
+func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
 	path := r.URL.Path
 
 	switch {
@@ -866,11 +850,8 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 		default:
 			err = cloud.ErrInvalidInput
 		}
-		if err != nil {
-			writeFakeError(rec, err)
-		} else {
-			rec.WriteHeader(http.StatusNoContent)
-		}
+		writeFakeStatus(rec, err)
+		return true
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/public-ips"):
 		var body struct {
@@ -885,6 +866,7 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 		} else {
 			_ = json.NewEncoder(rec).Encode(fakePublicIPMap(created, body.Labels))
 		}
+		return true
 
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
 		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
@@ -894,6 +876,7 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 		} else {
 			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
 		}
+		return true
 
 	case r.Method == http.MethodGet && strings.Contains(path, "/public-ips/"):
 		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
@@ -903,21 +886,151 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 		} else {
 			_ = json.NewEncoder(rec).Encode(fakePublicIPMap(got, nil))
 		}
+		return true
 
 	case r.Method == http.MethodDelete && strings.Contains(path, "/public-ips/"):
 		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
-		if err := c.DeletePublicIP(r.Context(), id); err != nil {
-			writeFakeError(rec, err)
-		} else {
-			rec.WriteHeader(http.StatusNoContent)
-		}
+		writeFakeStatus(rec, c.DeletePublicIP(r.Context(), id))
+		return true
 
 	default:
-		rec.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
+		return false
 	}
+}
 
-	return rec.Result(), nil
+func (c *Client) handleSecurityGroupRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case strings.Contains(path, "/servers/") && strings.Contains(path, "/security-groups/"):
+		parts := strings.Split(path, "/servers/")
+		sub := strings.Split(parts[1], "/security-groups/")
+		serverID, securityGroupID := sub[0], sub[1]
+		var err error
+		switch r.Method {
+		case http.MethodPut:
+			err = c.addSecurityGroupToServer(serverID, securityGroupID)
+		case http.MethodDelete:
+			err = c.removeSecurityGroupFromServer(serverID, securityGroupID)
+		default:
+			err = cloud.ErrInvalidInput
+		}
+		writeFakeStatus(rec, err)
+		return true
+
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listServerItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/security-groups"):
+		var body struct {
+			Name        string            `json:"name"`
+			Description string            `json:"description"`
+			Labels      map[string]string `json:"labels"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		created, err := c.createSecurityGroup(body.Name, body.Description, body.Labels)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listSecurityGroupItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.HasSuffix(path, "/rules") && r.Method == http.MethodGet:
+		sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+		sgID := strings.TrimSuffix(sub, "/rules")
+		items, err := c.listSecurityGroupRuleItems(sgID)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.HasSuffix(path, "/rules") && r.Method == http.MethodPost:
+		c.handleCreateSecurityGroupRule(rec, r)
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.Contains(path, "/rules/") && r.Method == http.MethodDelete:
+		sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+		parts := strings.SplitN(sub, "/rules/", 2)
+		writeFakeStatus(rec, c.deleteSecurityGroupRule(parts[0], parts[1]))
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/security-groups/"):
+		id := path[strings.LastIndex(path, "/security-groups/")+len("/security-groups/"):]
+		writeFakeStatus(rec, c.deleteSecurityGroup(id))
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) handleCreateSecurityGroupRule(rec *httptest.ResponseRecorder, r *http.Request) {
+	path := r.URL.Path
+	sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+	sgID := strings.TrimSuffix(sub, "/rules")
+	var body struct {
+		Direction string `json:"direction"`
+		Protocol  string `json:"protocol"`
+		PortRange *struct {
+			Min int64 `json:"min"`
+			Max int64 `json:"max"`
+		} `json:"portRange"`
+		IPRange               string `json:"ipRange"`
+		RemoteSecurityGroupID string `json:"remoteSecurityGroupId"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	var portMin, portMax int64
+	if body.PortRange != nil {
+		portMin = body.PortRange.Min
+		portMax = body.PortRange.Max
+	}
+	created, err := c.createSecurityGroupRule(sgID, securityGroupRuleEntry{
+		Rule: securitygroup.Rule{
+			Direction:             securitygroup.Direction(body.Direction),
+			Protocol:              securitygroup.Protocol(body.Protocol),
+			PortMin:               portMin,
+			PortMax:               portMax,
+			IPRange:               body.IPRange,
+			RemoteSecurityGroupID: body.RemoteSecurityGroupID,
+		},
+	})
+	if err != nil {
+		writeFakeError(rec, err)
+	} else {
+		_ = json.NewEncoder(rec).Encode(created)
+	}
+}
+
+func writeFakeStatus(rec *httptest.ResponseRecorder, err error) {
+	if err != nil {
+		writeFakeError(rec, err)
+	} else {
+		rec.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (c *Client) listPublicIPItems(tags map[string]string) ([]map[string]any, error) {
@@ -953,6 +1066,226 @@ func fakePublicIPMap(p *cloud.PublicIP, tags map[string]string) map[string]any {
 			labels[k] = v
 		}
 		m["labels"] = labels
+	}
+	return m
+}
+
+func (c *Client) addSecurityGroupToServer(serverID, securityGroupID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextAddSecurityGroup); err != nil {
+		return err
+	}
+	serverEntry, ok := c.servers[serverID]
+	if !ok {
+		return fmt.Errorf("server %q: %w", serverID, cloud.ErrNotFound)
+	}
+	if _, ok := c.securityGroups[securityGroupID]; !ok {
+		return fmt.Errorf("security group %q: %w", securityGroupID, cloud.ErrNotFound)
+	}
+	if serverEntry.securityGroups == nil {
+		serverEntry.securityGroups = map[string]struct{}{}
+	}
+	serverEntry.securityGroups[securityGroupID] = struct{}{}
+	c.AddSecurityGroupCalls++
+	return nil
+}
+
+func (c *Client) listServerItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	items := make([]map[string]any, 0, len(c.servers))
+	for _, entry := range c.servers {
+		if len(tags) > 0 && !mapContains(entry.tags, tags) {
+			continue
+		}
+		m := map[string]any{
+			"id":          entry.server.ID,
+			"name":        entry.server.Name,
+			"machineType": "c2i.1",
+			"status":      entry.server.State,
+		}
+		if len(entry.tags) > 0 {
+			labels := make(map[string]any, len(entry.tags))
+			for k, v := range entry.tags {
+				labels[k] = v
+			}
+			m["labels"] = labels
+		}
+		items = append(items, m)
+	}
+	return items, nil
+}
+
+func (c *Client) removeSecurityGroupFromServer(serverID, securityGroupID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	serverEntry, ok := c.servers[serverID]
+	if !ok {
+		return fmt.Errorf("server %q: %w", serverID, cloud.ErrNotFound)
+	}
+	delete(serverEntry.securityGroups, securityGroupID)
+	return nil
+}
+
+func (c *Client) createSecurityGroup(name, description string, tags map[string]string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, err := c.createSecurityGroupEntry(name, description, tags)
+	if err != nil {
+		return nil, err
+	}
+	return fakeSecurityGroupMap(entry), nil
+}
+
+func (c *Client) createSecurityGroupEntry(name, description string, tags map[string]string) (*securityGroupEntry, error) {
+	if name == "" {
+		return nil, fmt.Errorf("security group name is empty: %w", cloud.ErrInvalidInput)
+	}
+	id := c.genID()
+	sg := &cloud.SecurityGroup{
+		ID:   id,
+		Name: name,
+	}
+	entry := &securityGroupEntry{
+		securityGroup: sg,
+		description:   description,
+		tags:          copyTags(tags),
+		rules:         make(map[string]*securityGroupRuleEntry),
+	}
+	c.securityGroups[id] = entry
+	return entry, nil
+}
+
+func (c *Client) listSecurityGroupItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
+	}
+	items := make([]map[string]any, 0, len(c.securityGroups))
+	for _, entry := range c.securityGroups {
+		if mapContains(entry.tags, tags) {
+			items = append(items, fakeSecurityGroupMap(entry))
+		}
+	}
+	return items, nil
+}
+
+func (c *Client) listSecurityGroupRuleItems(sgID string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", sgID, cloud.ErrNotFound)
+	}
+	items := make([]map[string]any, 0, len(entry.rules))
+	for _, rule := range entry.rules {
+		items = append(items, fakeSecurityGroupRuleMap(rule))
+	}
+	return items, nil
+}
+
+func (c *Client) createSecurityGroupRule(sgID string, rule securityGroupRuleEntry) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", sgID, cloud.ErrNotFound)
+	}
+	if entry.rules == nil {
+		entry.rules = make(map[string]*securityGroupRuleEntry)
+	}
+	rule.id = c.genID()
+	stored := rule
+	entry.rules[rule.id] = &stored
+	if rule.IPRange != "" && !containsString(entry.allowedCIDRs, rule.IPRange) {
+		entry.allowedCIDRs = append(entry.allowedCIDRs, rule.IPRange)
+	}
+	if rule.RemoteSecurityGroupID != "" && !containsString(entry.remoteSecurityGroups, rule.RemoteSecurityGroupID) {
+		entry.remoteSecurityGroups = append(entry.remoteSecurityGroups, rule.RemoteSecurityGroupID)
+	}
+	return fakeSecurityGroupRuleMap(&stored), nil
+}
+
+func (c *Client) deleteSecurityGroupRule(sgID, ruleID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return fmt.Errorf("security group %q: %w", sgID, cloud.ErrNotFound)
+	}
+	if entry.rules == nil {
+		return fmt.Errorf("rule %q: %w", ruleID, cloud.ErrNotFound)
+	}
+	if _, ok := entry.rules[ruleID]; !ok {
+		return fmt.Errorf("rule %q: %w", ruleID, cloud.ErrNotFound)
+	}
+	delete(entry.rules, ruleID)
+	return nil
+}
+
+func (c *Client) deleteSecurityGroup(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if id == "" {
+		return fmt.Errorf("security group ID is empty: %w", cloud.ErrInvalidInput)
+	}
+	if _, ok := c.securityGroups[id]; !ok {
+		return fmt.Errorf("security group %q: %w", id, cloud.ErrNotFound)
+	}
+	for serverID, server := range c.servers {
+		if _, attached := server.securityGroups[id]; attached {
+			return fmt.Errorf("security group %q is still attached to server %q: %w", id, serverID, cloud.ErrConflict)
+		}
+	}
+	delete(c.securityGroups, id)
+	return nil
+}
+
+func fakeSecurityGroupMap(entry *securityGroupEntry) map[string]any {
+	m := map[string]any{
+		"id":   entry.securityGroup.ID,
+		"name": entry.securityGroup.Name,
+	}
+	if entry.description != "" {
+		m["description"] = entry.description
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func fakeSecurityGroupRuleMap(rule *securityGroupRuleEntry) map[string]any {
+	m := map[string]any{
+		"id":        rule.id,
+		"direction": string(rule.Direction),
+	}
+	if rule.Protocol != "" {
+		m["protocol"] = map[string]any{"name": string(rule.Protocol)}
+	}
+	if rule.PortMin > 0 || rule.PortMax > 0 {
+		m["portRange"] = map[string]any{"min": rule.PortMin, "max": rule.PortMax}
+	}
+	if rule.IPRange != "" {
+		m["ipRange"] = rule.IPRange
+	}
+	if rule.RemoteSecurityGroupID != "" {
+		m["remoteSecurityGroupId"] = rule.RemoteSecurityGroupID
 	}
 	return m
 }

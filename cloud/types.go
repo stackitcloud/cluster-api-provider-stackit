@@ -15,6 +15,7 @@ package cloud
 
 import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -44,10 +45,7 @@ type LoadBalancer struct {
 type PublicIP = publicip.PublicIP
 
 // SecurityGroup describes a STACKIT security group.
-type SecurityGroup struct {
-	ID   string
-	Name string
-}
+type SecurityGroup = securitygroup.SecurityGroup
 
 // Bastion describes the provider-managed SSH bastion resources.
 type Bastion struct {
@@ -84,18 +82,10 @@ type BastionInput struct {
 	AvailabilityZone string
 	SSHKeyName       string
 	AllowedCIDRs     []string
+	SecurityGroupID  string
 	Tags             map[string]string
 	RootVolume       RootVolumeInput
 	CloudInit        []byte
-}
-
-// NodeSSHAccessInput holds parameters required to allow SSH from the bastion
-// security group to cluster nodes.
-type NodeSSHAccessInput struct {
-	Name                   string
-	ServerID               string
-	BastionSecurityGroupID string
-	Tags                   map[string]string
 }
 
 // RootVolumeInput describes the root disk of a VM.

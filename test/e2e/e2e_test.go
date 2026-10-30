@@ -35,6 +35,7 @@ import (
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -494,7 +495,7 @@ var _ = Describe("Manager", Ordered, func() {
 					publicIPs, err := publicip.ListByTags(ctx, cloudClient.IaaSClient(), cloudClient.ProjectID(), cloudClient.Region(), stackitE2EBastionTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(publicIPs).To(HaveLen(1))
-					securityGroups, err := cloudClient.ListSecurityGroupsByTags(ctx, stackitE2EBastionTags(testID))
+					securityGroups, err := securitygroup.NewClient(cloudClient).ListByTags(ctx, stackitE2EBastionTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(securityGroups).To(HaveLen(1))
 				}, 10*time.Minute, 15*time.Second).Should(Succeed())
@@ -516,7 +517,7 @@ var _ = Describe("Manager", Ordered, func() {
 			if cfg.BastionEnabled {
 				By("verifying the node SSH security group exists")
 				Eventually(func(g Gomega) {
-					securityGroups, err := cloudClient.ListSecurityGroupsByTags(ctx, stackitE2ENodeSSHTags(testID))
+					securityGroups, err := securitygroup.NewClient(cloudClient).ListByTags(ctx, stackitE2ENodeSSHTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(securityGroups).To(HaveLen(1))
 				}, 10*time.Minute, 15*time.Second).Should(Succeed())
@@ -560,10 +561,11 @@ var _ = Describe("Manager", Ordered, func() {
 				publicIPs, err := publicip.ListByTags(ctx, cloudClient.IaaSClient(), cloudClient.ProjectID(), cloudClient.Region(), stackitE2EBastionTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(publicIPs).To(BeEmpty())
-				securityGroups, err := cloudClient.ListSecurityGroupsByTags(ctx, stackitE2EBastionTags(testID))
+				sgClient := securitygroup.NewClient(cloudClient)
+				securityGroups, err := sgClient.ListByTags(ctx, stackitE2EBastionTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(securityGroups).To(BeEmpty())
-				securityGroups, err = cloudClient.ListSecurityGroupsByTags(ctx, stackitE2ENodeSSHTags(testID))
+				securityGroups, err = sgClient.ListByTags(ctx, stackitE2ENodeSSHTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(securityGroups).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
