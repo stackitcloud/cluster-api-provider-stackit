@@ -236,8 +236,8 @@ spec:
                         x-kubernetes-map-type: atomic
                       network:
                         description: |-
-                          network configures the STACKIT network the cluster will use.
-                          omitting the ID will create a managed dedicated network
+                          network references the STACKIT network the cluster will use.
+                          Omitting the ID will create a managed dedicated network for your cluster.
                         properties:
                           id:
                             description: |-

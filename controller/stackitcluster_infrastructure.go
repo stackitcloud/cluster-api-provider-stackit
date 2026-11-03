@@ -220,7 +220,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		}
 		loadBalancer, err := cloudClient.EnsureAPIServerLoadBalancer(
 			ctx,
-			loadbalancerservice.APIServerInput(stackitCluster, clusterScope.NetworkID(), seed),
+			loadbalancerservice.APIServerInput(clusterScope, seed),
 		)
 		if err != nil {
 			log.Error(err, "Failed to create API server load balancer",
@@ -508,7 +508,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion node SSH access: %v", err)
 		return ctrl.Result{}, err
 	}
-	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, clusterScope.NetworkID(), nil), cloud.Bastion{
+	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(clusterScope, nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
 		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,
 		PublicIP:        stackitCluster.Status.Bastion.PublicIP,

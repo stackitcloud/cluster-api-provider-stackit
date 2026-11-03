@@ -22,6 +22,7 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -40,15 +41,15 @@ func APIServerTags(stackitCluster *infrav1.StackitCluster) map[string]string {
 }
 
 func APIServerInput(
-	stackitCluster *infrav1.StackitCluster,
-	networkID string,
+	clusterScope *scope.ClusterScope,
 	targets []cloud.LoadBalancerTargetInput,
 ) cloud.LoadBalancerInput {
+	stackitCluster := clusterScope.StackitCluster
 	return cloud.LoadBalancerInput{
 		Name:      stackitCluster.Name + "-apiserver",
 		ProjectID: stackitCluster.Spec.ProjectID,
 		Region:    stackitCluster.Spec.Region,
-		NetworkID: networkID,
+		NetworkID: clusterScope.NetworkID(),
 		Port:      defaultAPIServerPort,
 		Tags:      APIServerTags(stackitCluster),
 		Targets:   targets,
