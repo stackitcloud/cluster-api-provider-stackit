@@ -89,97 +89,9 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
-	var network *cloud.Network
-	if stackitCluster.Spec.Network.ID != "" {
-		var err error
-		network, err = cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
-		if err != nil {
-			log.Error(err, "Failed to get network",
-				"networkID", stackitCluster.Spec.Network.ID,
-				"region", stackitCluster.Spec.Region,
-			)
-			record.Warnf(
-				stackitCluster, "FailedGetNetwork",
-				"Failed to get network %s in region %s: %v",
-				stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
-			)
-			stackitCluster.Status.Ready = false
-			return util.CloudFailureResult(
-				&stackitCluster.Status.Conditions,
-				stackitCluster.Generation,
-				"NetworkNotFound",
-				err,
-				retryableErrorRequeueAfter,
-				false,
-				infrav1.ClusterNetworkReadyCondition,
-				infrav1.ClusterReadyCondition,
-			)
-		}
-		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
-			ID:      network.ID,
-			Managed: false,
-		}
-	} else {
-		// Managed network mode: resolve or create dedicated network
-		var err error
-		if stackitCluster.Status.Network.ID != "" {
-			network, err = cloudClient.GetNetwork(ctx, stackitCluster.Status.Network.ID)
-			if err != nil && !cloud.IsNotFound(err) {
-				log.Error(err, "Failed to get managed network",
-					"networkID", stackitCluster.Status.Network.ID,
-					"region", stackitCluster.Spec.Region,
-				)
-				record.Warnf(
-					stackitCluster, "FailedGetNetwork",
-					"Failed to get managed network %s in region %s: %v",
-					stackitCluster.Status.Network.ID, stackitCluster.Spec.Region, err,
-				)
-				stackitCluster.Status.Ready = false
-				return util.CloudFailureResult(
-					&stackitCluster.Status.Conditions,
-					stackitCluster.Generation,
-					"NetworkError",
-					err,
-					retryableErrorRequeueAfter,
-					false,
-					infrav1.ClusterNetworkReadyCondition,
-					infrav1.ClusterReadyCondition,
-				)
-			}
-		}
-
-		if network == nil {
-			networkInput := networkservice.Input(stackitCluster)
-			network, err = cloudClient.CreateNetwork(ctx, networkInput)
-			if err != nil {
-				log.Error(err, "Failed to create managed network",
-					"networkName", networkInput.Name,
-					"region", stackitCluster.Spec.Region,
-				)
-				record.Warnf(
-					stackitCluster, "FailedCreateNetwork",
-					"Failed to create managed network %s in region %s: %v",
-					networkInput.Name, stackitCluster.Spec.Region, err,
-				)
-				stackitCluster.Status.Ready = false
-				return util.CloudFailureResult(
-					&stackitCluster.Status.Conditions,
-					stackitCluster.Generation,
-					"NetworkCreateError",
-					err,
-					retryableErrorRequeueAfter,
-					false,
-					infrav1.ClusterNetworkReadyCondition,
-					infrav1.ClusterReadyCondition,
-				)
-			}
-			record.Eventf(stackitCluster, "NetworkCreated", "Created managed network %s", network.ID)
-		}
-
-		stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
-			ID:      network.ID,
-			Managed: true,
-		}
+	network, result, err := r.ensureNetwork(ctx, cloudClient, clusterScope)
+	if err != nil || !result.IsZero() || network == nil {
+		return result, err
 	}
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,
@@ -429,6 +341,131 @@ func bootstrapTargetIP(network *cloud.Network) string {
 		}
 	}
 	return "10.0.0.1"
+}
+
+func (r *StackitClusterReconciler) ensureNetwork(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	clusterScope *scope.ClusterScope,
+) (*cloud.Network, ctrl.Result, error) {
+	if clusterScope.StackitCluster.Spec.Network.ID != "" {
+		return r.getUnmanagedNetwork(ctx, cloudClient, clusterScope)
+	}
+	return r.ensureManagedNetwork(ctx, cloudClient, clusterScope)
+}
+
+func (r *StackitClusterReconciler) getUnmanagedNetwork(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	clusterScope *scope.ClusterScope,
+) (*cloud.Network, ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	stackitCluster := clusterScope.StackitCluster
+
+	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
+	if err != nil {
+		log.Error(err, "Failed to get network",
+			"networkID", stackitCluster.Spec.Network.ID,
+			"region", stackitCluster.Spec.Region,
+		)
+		record.Warnf(
+			stackitCluster, "FailedGetNetwork",
+			"Failed to get network %s in region %s: %v",
+			stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
+		)
+		stackitCluster.Status.Ready = false
+		res, failureErr := util.CloudFailureResult(
+			&stackitCluster.Status.Conditions,
+			stackitCluster.Generation,
+			"NetworkNotFound",
+			err,
+			retryableErrorRequeueAfter,
+			false,
+			infrav1.ClusterNetworkReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+		return nil, res, failureErr
+	}
+	stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
+		ID:      network.ID,
+		Managed: false,
+	}
+
+	return network, ctrl.Result{}, nil
+}
+
+func (r *StackitClusterReconciler) ensureManagedNetwork(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	clusterScope *scope.ClusterScope,
+) (*cloud.Network, ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	stackitCluster := clusterScope.StackitCluster
+
+	var network *cloud.Network
+	var err error
+	if stackitCluster.Status.Network.ID != "" {
+		network, err = cloudClient.GetNetwork(ctx, stackitCluster.Status.Network.ID)
+		if err != nil && !cloud.IsNotFound(err) {
+			log.Error(err, "Failed to get managed network",
+				"networkID", stackitCluster.Status.Network.ID,
+				"region", stackitCluster.Spec.Region,
+			)
+			record.Warnf(
+				stackitCluster, "FailedGetNetwork",
+				"Failed to get managed network %s in region %s: %v",
+				stackitCluster.Status.Network.ID, stackitCluster.Spec.Region, err,
+			)
+			stackitCluster.Status.Ready = false
+			res, failureErr := util.CloudFailureResult(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				"NetworkError",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterNetworkReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
+			return nil, res, failureErr
+		}
+	}
+
+	if network == nil {
+		networkInput := networkservice.Input(stackitCluster)
+		network, err = cloudClient.CreateNetwork(ctx, networkInput)
+		if err != nil {
+			log.Error(err, "Failed to create managed network",
+				"networkName", networkInput.Name,
+				"region", stackitCluster.Spec.Region,
+			)
+			record.Warnf(
+				stackitCluster, "FailedCreateNetwork",
+				"Failed to create managed network %s in region %s: %v",
+				networkInput.Name, stackitCluster.Spec.Region, err,
+			)
+			stackitCluster.Status.Ready = false
+			res, failureErr := util.CloudFailureResult(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				"NetworkCreateError",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterNetworkReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
+			return nil, res, failureErr
+		}
+		record.Eventf(stackitCluster, "NetworkCreated", "Created managed network %s", network.ID)
+	}
+
+	stackitCluster.Status.Network = infrav1.StackitNetworkStatus{
+		ID:      network.ID,
+		Managed: true,
+	}
+
+	return network, ctrl.Result{}, nil
 }
 
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {
