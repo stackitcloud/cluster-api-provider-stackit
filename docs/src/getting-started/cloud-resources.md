@@ -19,6 +19,8 @@ will have an attached tag indicating that it is managed by CAPS.
 Only empty networks can be deleted, so when you delete your CAPS cluster and 
 all cluster nodes and load balancers are removed, the managed network will be deleted too.
 
+> **Note:** Managed network creation is currently supported on the API and controller level. The out-of-the-box cluster templates (`templates/cluster-template*.yaml`) still require `STACKIT_NETWORK_ID` because the STACKIT Cloud Controller Manager (CCM) requires a pre-configured network ID for `Service` type `LoadBalancer`. If you deploy a cluster with a managed network, ensure your CCM configuration is supplied with the network ID from `.status.network.id` after cluster creation.
+
 ### Bring-Your-Own (BYO) Network
 
 Choose or create a network in the same region as the workload cluster. The
