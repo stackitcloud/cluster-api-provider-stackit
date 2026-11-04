@@ -16,6 +16,8 @@ The current provider implementation uses these STACKIT API operations:
 | Provider action | Code path | STACKIT permission |
 | --- | --- | --- |
 | Read the configured network | `GetNetwork` | `iaas.network.get` |
+| Create managed network (if enabled) | `CreateNetwork` | `iaas.network.create` |
+| Delete managed network (if enabled) | `DeleteNetwork` | `iaas.network.delete` |
 | Create VM instances | `CreateServer` | `iaas.server.create` |
 | Find existing tagged VM instances | `ListServers` | `iaas.server.list` |
 | Read VM state | `GetServer` | `iaas.server.get` |
@@ -44,6 +46,8 @@ The current provider implementation uses these STACKIT API operations:
 The least-privilege role for the current provider is therefore:
 
 ```text
+iaas.network.create
+iaas.network.delete
 iaas.network.get
 iaas.public-ip.create
 iaas.public-ip.delete

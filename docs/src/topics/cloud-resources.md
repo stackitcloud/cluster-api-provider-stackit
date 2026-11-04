@@ -9,17 +9,17 @@ security groups, SSH keys, and images.
 `StackitCluster.spec.network.id` is the STACKIT network ID used by all cluster
 machines and the provider-managed API server load balancer.
 
-If you don't provide a network ID, CAPS will automatically create a dedicated /24 network for you.
+If you don't provide a network ID, CAPSTK will automatically create a dedicated /24 network for the cluster.
 
 Planning your networks usually involves platform-level policy such as address 
 planning, routing, peering, VPN, DNS, and shared-service access, but the default 
 managed network is built for convenience. A newly created (managed) network 
-will have an attached tag indicating that it is managed by CAPS. 
+will have an attached tag indicating that it is managed by CAPSTK (`cluster-api-provider-stackit=true`). 
 
-Only empty networks can be deleted, so when you delete your CAPS cluster and 
+Only empty networks can be deleted, so when you delete your CAPSTK cluster and 
 all cluster nodes and load balancers are removed, the managed network will be deleted too.
 
-> **Note:** Managed network creation is currently supported on the API and controller level. The out-of-the-box cluster templates (`templates/cluster-template*.yaml`) still require `STACKIT_NETWORK_ID` because the STACKIT Cloud Controller Manager (CCM) requires a pre-configured network ID for `Service` type `LoadBalancer`. If you deploy a cluster with a managed network, ensure your CCM configuration is supplied with the network ID from `.status.network.id` after cluster creation.
+> **Note:** When using a managed network, the network ID is generated dynamically during cluster reconciliation and populated on `StackitCluster.status.network.id`. Because `templates/addons/cloud-provider-stackit.yaml` requires this network ID for its `Service` type `LoadBalancer` controller, you use `templates/cluster-template-managed-network.yaml` and configure the Cloud Controller Manager after the network ID is provisioned. See [Cloud Provider with Managed Networks](../usage/addons.md#managed-networks-and-cloud-provider-stackit) for the step-by-step procedure.
 
 ### Bring-Your-Own (BYO) Network
 
