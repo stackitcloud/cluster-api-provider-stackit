@@ -55,6 +55,14 @@ var _ = Describe("STACKIT admission webhooks", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("accepts a cluster with omitted network ID for managed networks", func() {
+			cluster := validStackitCluster("managed-network-cluster")
+			cluster.Spec.Network.ID = ""
+
+			_, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("rejects a cluster without credentials secret name", func() {
 			cluster := validStackitCluster("missing-credentials")
 			cluster.Spec.CredentialsSecretRef.Name = ""
@@ -122,6 +130,16 @@ var _ = Describe("STACKIT admission webhooks", func() {
 			oldCluster := validStackitCluster("immutable-cluster")
 			newCluster := oldCluster.DeepCopy()
 			newCluster.Spec.Network.ID = "66666666-6666-6666-6666-666666666666"
+
+			_, err := validator.ValidateUpdate(ctx, oldCluster, newCluster)
+			expectInvalidField(err, "spec.network.id")
+		})
+
+		It("rejects setting network ID on a managed cluster", func() {
+			oldCluster := validStackitCluster("managed-to-byo")
+			oldCluster.Spec.Network.ID = ""
+			newCluster := oldCluster.DeepCopy()
+			newCluster.Spec.Network.ID = validNetworkID
 
 			_, err := validator.ValidateUpdate(ctx, oldCluster, newCluster)
 			expectInvalidField(err, "spec.network.id")

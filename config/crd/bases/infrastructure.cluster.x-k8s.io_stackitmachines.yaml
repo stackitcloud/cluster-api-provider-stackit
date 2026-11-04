@@ -96,11 +96,8 @@ spec:
                 properties:
                   id:
                     description: id is the STACKIT network ID.
-                    minLength: 1
                     pattern: ^[0-9a-fA-F-]{36}$
                     type: string
-                required:
-                - id
                 type: object
               providerID:
                 description: |-
@@ -142,7 +139,6 @@ spec:
             required:
             - imageID
             - machineType
-            - network
             type: object
           status:
             description: status defines the observed state of StackitMachine

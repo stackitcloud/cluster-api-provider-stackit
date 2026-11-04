@@ -728,3 +728,95 @@ func TestSDKClientListAvailabilityZones(t *testing.T) {
 		t.Fatalf("ListAvailabilityZones() = %v, want [eu01-1 eu01-2 eu01-3]", zones)
 	}
 }
+
+func TestSDKClientCreateAndDeleteNetwork(t *testing.T) {
+	var createdPayload map[string]any
+	deletedNetworkID := ""
+
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
+			writeJSON(t, w, map[string]any{
+				"items": []any{},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks") {
+			createdPayload = readJSON(t, r)
+			writeJSON(t, w, map[string]any{
+				"id":     testSDKNetworkID,
+				"name":   "test-network",
+				"status": "CREATED",
+				"ipv4": map[string]any{
+					"prefixes": []any{"10.0.0.0/24"},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/networks/"+testSDKNetworkID) {
+			deletedNetworkID = testSDKNetworkID
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	net, err := client.CreateNetwork(context.Background(), CreateNetworkInput{
+		Name:       "test-network",
+		IPv4Prefix: "10.0.0.0/24",
+		Tags:       map[string]string{"cluster": "test-cluster"},
+	})
+	if err != nil {
+		t.Fatalf("CreateNetwork() error = %v", err)
+	}
+	if net.ID != testSDKNetworkID {
+		t.Errorf("CreateNetwork() ID = %s, want %s", net.ID, testSDKNetworkID)
+	}
+	if createdPayload["name"] != "test-network" {
+		t.Errorf("CreateNetwork() payload name = %v, want test-network", createdPayload["name"])
+	}
+
+	if err := client.DeleteNetwork(context.Background(), testSDKNetworkID); err != nil {
+		t.Fatalf("DeleteNetwork() error = %v", err)
+	}
+	if deletedNetworkID != testSDKNetworkID {
+		t.Errorf("DeleteNetwork() deleted = %s, want %s", deletedNetworkID, testSDKNetworkID)
+	}
+}
+
+func TestSDKClientCreateNetworkIdempotent(t *testing.T) {
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
+			writeJSON(t, w, map[string]any{
+				"items": []any{
+					map[string]any{
+						"id":     testSDKNetworkID,
+						"name":   "existing-network",
+						"status": "CREATED",
+						"labels": map[string]any{
+							"cluster": "test-cluster",
+						},
+						"ipv4": map[string]any{
+							"prefixes": []any{"10.0.0.0/24"},
+						},
+					},
+				},
+			})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s (should not create new network when existing matches)", r.Method, r.URL.String())
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	net, err := client.CreateNetwork(context.Background(), CreateNetworkInput{
+		Name:       "existing-network",
+		IPv4Prefix: "10.0.0.0/24",
+		Tags:       map[string]string{"cluster": "test-cluster"},
+	})
+	if err != nil {
+		t.Fatalf("CreateNetwork() error = %v", err)
+	}
+	if net.ID != testSDKNetworkID {
+		t.Errorf("CreateNetwork() ID = %s, want %s", net.ID, testSDKNetworkID)
+	}
+}

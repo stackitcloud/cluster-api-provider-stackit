@@ -69,6 +69,12 @@ type Bastion struct {
 	SecurityGroupID   string
 }
 
+type CreateNetworkInput struct {
+	Name       string
+	IPv4Prefix string
+	Tags       map[string]string
+}
+
 // CreateServerInput holds all parameters required to create a new VM.
 type CreateServerInput struct {
 	Name             string

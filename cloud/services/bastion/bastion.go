@@ -13,10 +13,12 @@ package bastion
 import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
-func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.BastionInput {
+func Input(clusterScope *scope.ClusterScope, cloudInit []byte) cloud.BastionInput {
+	stackitCluster := clusterScope.StackitCluster
 	deleteOnTermination := true
 	if stackitCluster.Spec.Bastion.RootVolume.DeleteOnTermination != nil {
 		deleteOnTermination = *stackitCluster.Spec.Bastion.RootVolume.DeleteOnTermination
@@ -29,7 +31,7 @@ func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.Basti
 		Name:         stackitCluster.Name + "-bastion",
 		ProjectID:    stackitCluster.Spec.ProjectID,
 		Region:       stackitCluster.Spec.Region,
-		NetworkID:    stackitCluster.Spec.Network.ID,
+		NetworkID:    clusterScope.NetworkID(),
 		ImageID:      stackitCluster.Spec.Bastion.ImageID,
 		MachineType:  stackitCluster.Spec.Bastion.MachineType,
 		SSHKeyName:   stackitCluster.Spec.Bastion.SSHKeyName,

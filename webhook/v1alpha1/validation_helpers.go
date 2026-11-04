@@ -86,10 +86,13 @@ func validateStackitClusterSpec(spec infrav1.StackitClusterSpec, fldPath *field.
 	allErrs = append(allErrs, validateRequiredPattern(spec.ProjectID, uuidPattern, fldPath.Child("projectID"), "must be a STACKIT project UUID")...)
 	allErrs = append(allErrs, validateRequiredPattern(spec.Region, regionPattern, fldPath.Child("region"), "must use STACKIT region format, for example eu01")...)
 	allErrs = append(allErrs, validateSecretReference(spec.CredentialsSecretRef, fldPath.Child("credentialsSecretRef"))...)
-	allErrs = append(allErrs, validateRequiredPattern(spec.Network.ID, uuidPattern, fldPath.Child("network", "id"), "must be a STACKIT network UUID")...)
 
 	if !spec.APIServerLoadBalancer.Enabled && spec.ControlPlaneEndpoint.Host == "" {
 		allErrs = append(allErrs, field.Required(fldPath.Child("controlPlaneEndpoint", "host"), "required when apiServerLoadBalancer.enabled is false"))
+	}
+
+	if spec.Network.ID != "" && !uuidPattern.MatchString(spec.Network.ID) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("network", "id"), spec.Network.ID, "must be a STACKIT network UUID"))
 	}
 
 	allErrs = append(allErrs, validateBastionSpec(spec.Bastion, fldPath.Child("bastion"))...)
@@ -205,7 +208,11 @@ func validateStackitMachineSpec(spec infrav1.StackitMachineSpec, fldPath *field.
 	if spec.SSHKeyName != "" && !sshKeyNamePattern.MatchString(spec.SSHKeyName) {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("sshKeyName"), spec.SSHKeyName, "must be a valid STACKIT SSH key name"))
 	}
-	allErrs = append(allErrs, validateRequiredPattern(spec.Network.ID, uuidPattern, fldPath.Child("network", "id"), "must be a STACKIT network UUID")...)
+
+	if spec.Network.ID != "" && !uuidPattern.MatchString(spec.Network.ID) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("network", "id"), spec.Network.ID, "must be a STACKIT network UUID"))
+	}
+
 	allErrs = append(allErrs, validateRootVolume(spec.RootVolume, fldPath.Child("rootVolume"))...)
 	allErrs = append(allErrs, validateSecurityGroups(spec.SecurityGroups, fldPath.Child("securityGroups"))...)
 	allErrs = append(allErrs, validateAdditionalLabels(spec.AdditionalLabels, fldPath.Child("additionalLabels"))...)

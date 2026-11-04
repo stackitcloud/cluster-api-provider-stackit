@@ -103,3 +103,14 @@ func (s *ClusterScope) ClearBastionStatus() {
 func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
 	s.StackitCluster.Status.FailureDomains = failureDomains
 }
+
+// NetworkID returns the cluster network ID (from spec if BYO, or status if managed).
+func (s *ClusterScope) NetworkID() string {
+	if s.StackitCluster == nil {
+		return ""
+	}
+	if s.StackitCluster.Spec.Network.ID != "" {
+		return s.StackitCluster.Spec.Network.ID
+	}
+	return s.StackitCluster.Status.Network.ID
+}

@@ -66,8 +66,8 @@ type StackitMachineSpec struct {
 	RootVolume StackitRootVolumeSpec `json:"rootVolume,omitempty"`
 
 	// network references the STACKIT network the VM should be attached to.
-	// +required
-	Network StackitMachineNetworkSpec `json:"network"`
+	// +optional
+	Network StackitMachineNetworkSpec `json:"network,omitempty"`
 
 	// securityGroups is a list of STACKIT security group IDs applied to the VM.
 	// +optional
@@ -101,10 +101,9 @@ type StackitRootVolumeSpec struct {
 // StackitMachineNetworkSpec references an existing STACKIT network.
 type StackitMachineNetworkSpec struct {
 	// id is the STACKIT network ID.
-	// +required
-	// +kubebuilder:validation:MinLength=1
+	// +optional
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
-	ID string `json:"id"`
+	ID string `json:"id,omitempty"`
 }
 
 // StackitMachineStatus defines the observed state of StackitMachine.

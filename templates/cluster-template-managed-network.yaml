@@ -1,0 +1,255 @@
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    cluster-api-provider-stackit/cloud-provider-stackit: "true"
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    services:
+      cidrBlocks:
+        - 10.128.0.0/12
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: StackitCluster
+    name: ${CLUSTER_NAME}
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KubeadmControlPlane
+    name: ${CLUSTER_NAME}-control-plane
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: StackitCluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  projectID: ${STACKIT_PROJECT_ID}
+  region: ${STACKIT_REGION}
+  credentialsSecretRef:
+    name: ${STACKIT_CREDENTIALS_SECRET_NAME}
+    namespace: ${NAMESPACE}
+  apiServerLoadBalancer:
+    enabled: true
+  bastion:
+    enabled: false
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlane
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${NAMESPACE}
+spec:
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+  version: ${KUBERNETES_VERSION}
+  machineTemplate:
+    spec:
+      deletion:
+        nodeDrainTimeoutSeconds: 900
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: StackitMachineTemplate
+        name: ${CLUSTER_NAME}-control-plane
+  kubeadmConfigSpec:
+    preKubeadmCommands:
+      - |
+        set -eu
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y apt-transport-https ca-certificates conntrack curl gpg containerd
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/${KUBERNETES_APT_REPOSITORY_MINOR}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_APT_REPOSITORY_MINOR}/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+        apt-get update
+        apt-get install -y kubelet kubeadm kubectl
+        apt-mark hold kubelet kubeadm kubectl
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+        systemctl restart containerd
+        modprobe br_netfilter
+        printf 'net.bridge.bridge-nf-call-iptables=1\nnet.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-kubernetes-cri.conf
+        sysctl --system
+        (journalctl -fu kubelet --no-pager > /dev/console 2>&1 &)
+    initConfiguration:
+      nodeRegistration:
+        name: "{{ ds.meta_data.local_hostname }}"
+        criSocket: unix:///var/run/containerd/containerd.sock
+        kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+    joinConfiguration:
+      nodeRegistration:
+        name: "{{ ds.meta_data.local_hostname }}"
+        criSocket: unix:///var/run/containerd/containerd.sock
+        kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+    clusterConfiguration:
+      controllerManager:
+        extraArgs:
+          - name: cloud-provider
+            value: external
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: StackitMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    spec:
+      imageID: ${STACKIT_IMAGE_ID}
+      machineType: ${STACKIT_MACHINE_TYPE}
+      rootVolume:
+        sizeGiB: 50
+        performanceClass: storage_premium_perf6
+        deleteOnTermination: true
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+  namespace: ${NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: ${WORKER_MACHINE_COUNT}
+  remediation:
+    maxInFlight: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+      cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-md-0
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+        cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-md-0
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      version: ${KUBERNETES_VERSION}
+      deletion:
+        nodeDrainTimeoutSeconds: 900
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: ${CLUSTER_NAME}-md-0
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: StackitMachineTemplate
+        name: ${CLUSTER_NAME}-md-0
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/control-plane: ""
+  checks:
+    nodeStartupTimeoutSeconds: 600
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 600
+      - type: Ready
+        status: "Unknown"
+        timeoutSeconds: 600
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+  namespace: ${NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-md-0
+  checks:
+    nodeStartupTimeoutSeconds: 600
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 600
+      - type: Ready
+        status: "Unknown"
+        timeoutSeconds: 600
+  remediation:
+    triggerIf:
+      unhealthyLessThanOrEqualTo: 40%
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: StackitMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    spec:
+      imageID: ${STACKIT_IMAGE_ID}
+      machineType: ${STACKIT_MACHINE_TYPE}
+      rootVolume:
+        sizeGiB: 50
+        performanceClass: storage_premium_perf6
+        deleteOnTermination: true
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    spec:
+      preKubeadmCommands:
+        - |
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y apt-transport-https ca-certificates conntrack curl gpg containerd
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://pkgs.k8s.io/core:/stable:/${KUBERNETES_APT_REPOSITORY_MINOR}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_APT_REPOSITORY_MINOR}/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+          apt-get update
+          apt-get install -y kubelet kubeadm kubectl
+          apt-mark hold kubelet kubeadm kubectl
+          mkdir -p /etc/containerd
+          containerd config default > /etc/containerd/config.toml
+          sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+          systemctl restart containerd
+          modprobe br_netfilter
+          printf 'net.bridge.bridge-nf-call-iptables=1\nnet.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-kubernetes-cri.conf
+          sysctl --system
+          (journalctl -fu kubelet --no-pager > /dev/console 2>&1 &)
+      joinConfiguration:
+        nodeRegistration:
+          name: "{{ ds.meta_data.local_hostname }}"
+          criSocket: unix:///var/run/containerd/containerd.sock
+          kubeletExtraArgs:
+            - name: cloud-provider
+              value: external
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta2
+kind: ClusterResourceSet
+metadata:
+  name: ${CLUSTER_NAME}-cloud-provider-stackit
+  namespace: ${NAMESPACE}
+spec:
+  strategy: Reconcile
+  clusterSelector:
+    matchLabels:
+      cluster-api-provider-stackit/cloud-provider-stackit: "true"
+  resources:
+    - kind: Secret
+      name: ${CLUSTER_NAME}-cloud-provider-stackit
