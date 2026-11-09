@@ -21,12 +21,24 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ManagedNodePoolFinalizer allows StackitManagedNodePoolReconciler to coordinate
+// node pool lifecycle before the StackitManagedNodePool is removed from the API
+// server.
+const (
+	ManagedNodePoolFinalizer      = "infrastructure.cluster.x-k8s.io/stackitmanagednodepool"
+	ManagedNodePoolReadyCondition = "Ready"
+	ManagedNodePoolBootstrapName  = "capstk-system"
+)
+
 // StackitManagedNodePoolSpec defines the desired state of StackitManagedNodePool.
 // +kubebuilder:validation:XValidation:rule="self.minimum <= self.maximum",message="minimum must be less than or equal to maximum"
 type StackitManagedNodePoolSpec struct {
 	// name is the name of the node pool in SKE.
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable"
+	// +kubebuilder:validation:XValidation:rule="self != 'capstk-system'",message="name 'capstk-system' is reserved for the provider bootstrap node pool"
 	Name string `json:"name"`
 
 	// availabilityZones is the list of availability zones for the node pool.

@@ -25,6 +25,7 @@ import (
 	"github.com/stackitcloud/stackit-sdk-go/core/oapierror"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	skev2 "github.com/stackitcloud/stackit-sdk-go/services/ske/v2api"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	stackitTokenEndpointEnv = "STACKIT_TOKEN_BASEURL"
 	stackitIAASEndpointEnv  = "STACKIT_IAAS_ENDPOINT"
 	stackitLBEndpointEnv    = "STACKIT_LOADBALANCER_ENDPOINT"
+	stackitSKEEndpointEnv   = "STACKIT_SKE_ENDPOINT"
 
 	apiserverTargetPoolName = "apiserver"
 	apiserverListenerName   = "apiserver"
@@ -62,7 +64,7 @@ func NewClient(_ context.Context, creds Credentials) (Client, error) {
 	if creds.Region == "" {
 		return nil, fmt.Errorf("%w: region is empty", ErrInvalidInput)
 	}
-	if len(creds.ServiceAccountJSON) == 0 && os.Getenv(stackitNoAuthEnv) != "true" {
+	if len(creds.ServiceAccountJSON) == 0 && !noAuthEnabled() {
 		return nil, fmt.Errorf("%w: service account JSON is empty", ErrInvalidInput)
 	}
 
@@ -83,11 +85,34 @@ func NewClient(_ context.Context, creds Credentials) (Client, error) {
 	}, nil
 }
 
+// NewSKEClient returns the real STACKIT SKE v2 API client.
+func NewSKEClient(_ context.Context, creds Credentials) (skev2.DefaultAPI, error) {
+	if creds.ProjectID == "" {
+		return nil, fmt.Errorf("%w: project ID is empty", ErrInvalidInput)
+	}
+	if creds.Region == "" {
+		return nil, fmt.Errorf("%w: region is empty", ErrInvalidInput)
+	}
+	if len(creds.ServiceAccountJSON) == 0 && !noAuthEnabled() {
+		return nil, fmt.Errorf("%w: service account JSON is empty", ErrInvalidInput)
+	}
+
+	skeClient, err := skev2.NewAPIClient(stackitOptions(creds, os.Getenv(stackitSKEEndpointEnv))...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: create SKE SDK client: %v", ErrInvalidInput, err)
+	}
+	return skeClient.DefaultAPI, nil
+}
+
+func noAuthEnabled() bool {
+	return os.Getenv(stackitNoAuthEnv) == "true"
+}
+
 func stackitOptions(creds Credentials, endpoint string) []config.ConfigurationOption {
 	opts := []config.ConfigurationOption{
 		config.WithUserAgent("cluster-api-provider-stackit"),
 	}
-	if os.Getenv(stackitNoAuthEnv) == "true" {
+	if noAuthEnabled() {
 		opts = append(opts, config.WithoutAuthentication())
 	} else {
 		opts = append(opts, config.WithServiceAccountKey(string(creds.ServiceAccountJSON)))
@@ -1091,6 +1116,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// ClassifySDKError maps STACKIT OpenAPI SDK errors to CAPSTK cloud sentinel
+// errors while preserving pre-classified sentinel errors from test fakes.
+func ClassifySDKError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if IsNotFound(err) || IsUnauthorized(err) || IsInvalidInput(err) || IsConflict(err) || IsTransient(err) {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return classifySDKError(op, err)
 }
 
 func classifySDKError(op string, err error) error {

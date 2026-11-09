@@ -17,6 +17,7 @@ package util
 const (
 	LabelClusterName      = "cluster.x-k8s.io/cluster-name"
 	LabelClusterNamespace = "cluster.x-k8s.io/cluster-namespace"
+	LabelClusterUID       = "cluster.x-k8s.io/cluster-uid"
 	LabelMachineName      = "cluster.x-k8s.io/machine-name"
 	LabelMachineUID       = "cluster.x-k8s.io/machine-uid"
 	LabelManagedBy        = "cluster.x-k8s.io/managed-by"
@@ -38,6 +39,28 @@ func ClusterTags(clusterName, clusterNamespace string, additionalLabels map[stri
 	out := map[string]string{
 		LabelClusterName:      clusterName,
 		LabelClusterNamespace: clusterNamespace,
+		LabelManagedBy:        ManagedByValue,
+	}
+	for k, v := range additionalLabels {
+		if _, isReserved := out[k]; isReserved {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// ManagedClusterTags returns the canonical tags applied to SKE managed clusters,
+// including the StackitManagedCluster UID. additionalLabels is merged in last
+// so the provider's own tags cannot be overwritten.
+func ManagedClusterTags(
+	clusterName, clusterNamespace, clusterUID string,
+	additionalLabels map[string]string,
+) map[string]string {
+	out := map[string]string{
+		LabelClusterName:      clusterName,
+		LabelClusterNamespace: clusterNamespace,
+		LabelClusterUID:       clusterUID,
 		LabelManagedBy:        ManagedByValue,
 	}
 	for k, v := range additionalLabels {

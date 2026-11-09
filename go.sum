@@ -141,6 +141,8 @@ github.com/stackitcloud/stackit-sdk-go/services/iaas v1.12.0 h1:H4V3H8qSKOaOalIr
 github.com/stackitcloud/stackit-sdk-go/services/iaas v1.12.0/go.mod h1:Ts06id0KejUlQWbpR+/rm+tKng6QkTuFV1VQTPJ4dA4=
 github.com/stackitcloud/stackit-sdk-go/services/loadbalancer v1.13.0 h1:UuLNwFHjJCpL11y4F7B9oBKtZkxpu01VkNPILNkpex4=
 github.com/stackitcloud/stackit-sdk-go/services/loadbalancer v1.13.0/go.mod h1:+Ld3dn648I+YKcBV3fEkYpDSr3fel421+LurJGywSBs=
+github.com/stackitcloud/stackit-sdk-go/services/ske v1.21.0 h1:eu9PhRdL2GkXpHtf4NN9YBCUYcARdvAwq+g/FW4hmi4=
+github.com/stackitcloud/stackit-sdk-go/services/ske v1.21.0/go.mod h1:TbqmZhLMofmfl+HhVl6oHYcI3zvXTm1vRjN3A/fOkM4=
 github.com/stoewer/go-strcase v1.3.0 h1:g0eASXYtp+yvN9fK8sH94oCIk0fau9uV1/ZdJ0AVEzs=
 github.com/stoewer/go-strcase v1.3.0/go.mod h1:fAH5hQ5pehh+j3nZfvwdk2RgEgQjAoM8wodgtPmh1xo=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=

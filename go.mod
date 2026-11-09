@@ -8,6 +8,7 @@ require (
 	github.com/stackitcloud/stackit-sdk-go/core v0.26.0
 	github.com/stackitcloud/stackit-sdk-go/services/iaas v1.12.0
 	github.com/stackitcloud/stackit-sdk-go/services/loadbalancer v1.13.0
+	github.com/stackitcloud/stackit-sdk-go/services/ske v1.21.0
 	k8s.io/api v0.35.4
 	k8s.io/apimachinery v0.35.4
 	k8s.io/client-go v0.35.4

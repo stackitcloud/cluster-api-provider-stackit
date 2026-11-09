@@ -10,7 +10,11 @@ You may obtain a copy of the License at
 
 package cloud
 
-import "context"
+import (
+	"context"
+
+	skev2 "github.com/stackitcloud/stackit-sdk-go/services/ske/v2api"
+)
 
 // Client is the abstraction over STACKIT cloud APIs used by the controllers.
 //
@@ -66,6 +70,12 @@ type Client interface {
 // Controllers receive a Factory rather than a Client so that the real
 // implementation can be swapped for the fake in tests.
 type Factory func(ctx context.Context, creds Credentials) (Client, error)
+
+// SKEFactory builds an SKE v2 API client from parsed STACKIT credentials.
+//
+// Controllers receive an SKEFactory so that the real SDK client can be swapped
+// for an in-memory fake in tests.
+type SKEFactory func(ctx context.Context, creds Credentials) (skev2.DefaultAPI, error)
 
 // Credentials carries the materials needed to construct a STACKIT API client.
 // For MVP we only need the service-account JSON and project ID.

@@ -51,6 +51,7 @@ rules:
   - stackitclusters/finalizers
   - stackitmachines/finalizers
   - stackitmanagedclusters/finalizers
+  - stackitmanagednodepools/finalizers
   verbs:
   - update
 - apiGroups:

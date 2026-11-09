@@ -121,7 +121,14 @@ spec:
               name:
                 description: name is the name of the node pool in SKE.
                 maxLength: 15
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: name is immutable
+                  rule: self == oldSelf
+                - message: name 'capstk-system' is reserved for the provider bootstrap
+                    node pool
+                  rule: self != 'capstk-system'
               providerIDList:
                 description: |-
                   providerIDList are the identification IDs of machine instances provided by

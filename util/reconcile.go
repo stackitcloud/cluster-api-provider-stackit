@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	skev2 "github.com/stackitcloud/stackit-sdk-go/services/ske/v2api"
+
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 )
@@ -89,5 +91,40 @@ func CredentialsSecretKey(stackitCluster *infrav1.StackitCluster) types.Namespac
 	return types.NamespacedName{
 		Namespace: namespace,
 		Name:      stackitCluster.Spec.CredentialsSecretRef.Name,
+	}
+}
+
+func BuildSKEClient(
+	ctx context.Context,
+	k8sClient client.Client,
+	factory cloud.SKEFactory,
+	managedCluster *infrav1.StackitManagedCluster,
+) (skev2.DefaultAPI, error) {
+	if factory == nil {
+		return nil, errors.New("SKEClientFactory is not configured")
+	}
+
+	secret := &corev1.Secret{}
+	key := ManagedClusterCredentialsSecretKey(managedCluster)
+	if err := k8sClient.Get(ctx, key, secret); err != nil {
+		return nil, fmt.Errorf("get credentials secret %s: %w", key, err)
+	}
+
+	creds, err := ParseCredentialsSecret(secret, managedCluster.Spec.ProjectID, managedCluster.Spec.Region)
+	if err != nil {
+		return nil, err
+	}
+
+	return factory(ctx, creds)
+}
+
+func ManagedClusterCredentialsSecretKey(managedCluster *infrav1.StackitManagedCluster) types.NamespacedName {
+	namespace := managedCluster.Spec.CredentialsSecretRef.Namespace
+	if namespace == "" {
+		namespace = managedCluster.Namespace
+	}
+	return types.NamespacedName{
+		Namespace: namespace,
+		Name:      managedCluster.Spec.CredentialsSecretRef.Name,
 	}
 }

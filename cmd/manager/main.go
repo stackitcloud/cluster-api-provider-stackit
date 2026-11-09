@@ -203,8 +203,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StackitManagedClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		SKEClientFactory: cloud.NewSKEClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "stackitmanagedcluster")
 		os.Exit(1)

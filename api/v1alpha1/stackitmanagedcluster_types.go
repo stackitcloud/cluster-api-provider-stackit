@@ -22,6 +22,19 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
+// ManagedClusterFinalizer allows StackitManagedClusterReconciler to clean up
+// external SKE resources before the StackitManagedCluster is removed from the
+// API server.
+const (
+	ManagedClusterFinalizer       = "infrastructure.cluster.x-k8s.io/stackitmanagedcluster"
+	LegacyManagedClusterFinalizer = "stackitmanagedcluster.infrastructure.cluster.x-k8s.io"
+)
+
+// Condition types maintained by the StackitManagedClusterReconciler.
+const (
+	ManagedClusterReadyCondition = "Ready"
+)
+
 // StackitManagedClusterSpec defines the desired state of StackitManagedCluster.
 // +kubebuilder:validation:XValidation:rule="has(self.credentialsSecretRef.name) && size(self.credentialsSecretRef.name) > 0",message="credentialsSecretRef.name is required"
 type StackitManagedClusterSpec struct {
