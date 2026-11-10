@@ -10,35 +10,32 @@ You may obtain a copy of the License at
 
 package cloud
 
-import "errors"
+import "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 
-// Sentinel errors returned by Client implementations. Controllers use
-// errors.Is to classify them into requeue / condition-update behavior.
+// Sentinel errors returned by Client implementations, re-exported from shared.
+// Controllers use errors.Is to classify them into requeue / condition-update behavior.
 var (
-	ErrNotFound     = errors.New("not found")
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrInvalidInput = errors.New("invalid input")
-	ErrConflict     = errors.New("conflict")
-	ErrTransient    = errors.New("transient")
+	ErrNotFound     = shared.ErrNotFound
+	ErrUnauthorized = shared.ErrUnauthorized
+	ErrInvalidInput = shared.ErrInvalidInput
+	ErrConflict     = shared.ErrConflict
+	ErrTransient    = shared.ErrTransient
 )
 
 // IsNotFound reports whether err wraps ErrNotFound.
-func IsNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
+func IsNotFound(err error) bool { return shared.IsNotFound(err) }
 
 // IsUnauthorized reports whether err wraps ErrUnauthorized.
-func IsUnauthorized(err error) bool { return errors.Is(err, ErrUnauthorized) }
+func IsUnauthorized(err error) bool { return shared.IsUnauthorized(err) }
 
 // IsInvalidInput reports whether err wraps ErrInvalidInput.
-func IsInvalidInput(err error) bool { return errors.Is(err, ErrInvalidInput) }
+func IsInvalidInput(err error) bool { return shared.IsInvalidInput(err) }
 
 // IsConflict reports whether err wraps ErrConflict.
-func IsConflict(err error) bool { return errors.Is(err, ErrConflict) }
+func IsConflict(err error) bool { return shared.IsConflict(err) }
 
 // IsTransient reports whether err wraps ErrTransient.
-func IsTransient(err error) bool { return errors.Is(err, ErrTransient) }
+func IsTransient(err error) bool { return shared.IsTransient(err) }
 
-// IsRetryable reports whether err should trigger a requeue (conflict or
-// transient).
-func IsRetryable(err error) bool {
-	return IsConflict(err) || IsTransient(err)
-}
+// IsRetryable reports whether err should trigger a requeue (conflict or transient).
+func IsRetryable(err error) bool { return shared.IsRetryable(err) }

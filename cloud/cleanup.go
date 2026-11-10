@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 )
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
@@ -29,6 +31,25 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 	bastionTags := make(map[string]string, len(tags)+1)
 	maps.Copy(bastionTags, tags)
 	bastionTags["cluster-api-provider-stackit/resource-role"] = "bastion"
+	bastionServers, err := client.ListServersByTags(ctx, bastionTags)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	publicIPs, err := publicip.ListByTags(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), tags)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else {
+		for _, pubIP := range publicIPs {
+			for _, server := range bastionServers {
+				if err := publicip.DetachFromServer(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), server.ID, pubIP.ID); err != nil {
+					errs = append(errs, fmt.Sprintf("detach public IP %q from server %q: %v", pubIP.ID, server.ID, err))
+				}
+			}
+			if err := publicip.DeleteByID(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), pubIP.ID); err != nil {
+				errs = append(errs, fmt.Sprintf("delete public IP %q: %v", pubIP.ID, err))
+			}
+		}
+	}
 	if err := client.DeleteBastion(ctx, BastionInput{Tags: bastionTags}, Bastion{}); err != nil && !IsNotFound(err) {
 		errs = append(errs, fmt.Sprintf("delete bastion resources: %v", err))
 	}

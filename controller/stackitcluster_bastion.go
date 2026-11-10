@@ -29,6 +29,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
@@ -46,8 +47,6 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	input := bastionservice.Input(stackitCluster, nil)
 	status := cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
-		PublicIPID:      stackitCluster.Status.Bastion.PublicIPID,
-		PublicIP:        stackitCluster.Status.Bastion.PublicIP,
 		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
 	}
 
@@ -57,10 +56,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		// the status keeps the tag-based cleanup to once per cluster.
 		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
-			if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil {
-				return ctrl.Result{}, false, err
-			}
-			if err := cloudClient.DeleteBastion(ctx, input, status); err != nil {
+			if err := r.deleteBastionResources(ctx, cloudClient, clusterScope, input, status, false); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			clusterScope.ClearBastionStatus()
@@ -102,10 +98,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	input.CloudInit = cloudInit
 
 	if bastionNeedsRecreate(stackitCluster, cloudInit) {
-		if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil && !cloud.IsNotFound(err) {
-			return ctrl.Result{}, false, err
-		}
-		if err := cloudClient.DeleteBastion(ctx, input, status); err != nil && !cloud.IsNotFound(err) {
+		if err := r.deleteBastionResources(ctx, cloudClient, clusterScope, input, status, true); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		clusterScope.ClearBastionStatus()
@@ -133,6 +126,9 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			stackitCluster, "BastionCreated", "Created bastion %s", bastion.ServerID,
 		)
 	}
+	if err := publicip.New(clusterScope).Reconcile(ctx); err != nil {
+		return ctrl.Result{}, false, err
+	}
 	if ready, reason, message, warn := serverStateCondition(bastion.ServerState, bastion.ServerPowerStatus); !ready {
 		previousReason := ""
 		if previous := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition); previous != nil {
@@ -145,7 +141,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
-	if bastion.PublicIP == "" {
+	if stackitCluster.Status.Bastion.PublicIP == "" {
 		clusterScope.SetNotReady(
 			"Provisioning",
 			"waiting for bastion public IP address",
@@ -186,6 +182,32 @@ func validateBastionSpec(spec infrav1.StackitBastionSpec) error {
 
 func hasBastionStatus(status infrav1.StackitBastionStatus) bool {
 	return status.ServerID != "" || status.PublicIPID != "" || status.PublicIP != "" || status.SecurityGroupID != ""
+}
+
+func (r *StackitClusterReconciler) deleteBastionResources(
+	ctx context.Context,
+	cloudClient cloud.Client,
+	clusterScope *scope.ClusterScope,
+	input cloud.BastionInput,
+	status cloud.Bastion,
+	ignoreNotFound bool,
+) error {
+	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(clusterScope.StackitCluster)); err != nil {
+		if !ignoreNotFound || !cloud.IsNotFound(err) {
+			return err
+		}
+	}
+	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
+		if !ignoreNotFound || !cloud.IsNotFound(err) {
+			return err
+		}
+	}
+	if err := cloudClient.DeleteBastion(ctx, input, status); err != nil {
+		if !ignoreNotFound || !cloud.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func bastionNeedsRecreate(stackitCluster *infrav1.StackitCluster, cloudInit []byte) bool {

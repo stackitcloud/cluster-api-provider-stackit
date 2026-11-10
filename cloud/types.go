@@ -13,22 +13,16 @@ You may obtain a copy of the License at
 // through the Client interface in this package.
 package cloud
 
+import (
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
+)
+
 // Server describes a STACKIT compute instance in provider-neutral terms.
-type Server struct {
-	ID               string
-	Name             string
-	State            string
-	PowerStatus      string
-	ProviderID       string
-	AvailabilityZone string
-	Addresses        []Address
-}
+type Server = shared.Server
 
 // Address is an IP or DNS endpoint of a Server.
-type Address struct {
-	Type    string
-	Address string
-}
+type Address = shared.Address
 
 // Network is an existing STACKIT virtual network referenced by the provider.
 type Network struct {
@@ -47,11 +41,7 @@ type LoadBalancer struct {
 }
 
 // PublicIP describes a STACKIT public IP resource.
-type PublicIP struct {
-	ID                 string
-	IP                 string
-	NetworkInterfaceID string
-}
+type PublicIP = publicip.PublicIP
 
 // SecurityGroup describes a STACKIT security group.
 type SecurityGroup struct {
@@ -64,8 +54,6 @@ type Bastion struct {
 	ServerID          string
 	ServerState       string
 	ServerPowerStatus string
-	PublicIPID        string
-	PublicIP          string
 	SecurityGroupID   string
 }
 
@@ -87,17 +75,18 @@ type CreateServerInput struct {
 
 // BastionInput holds all parameters required to ensure a bastion host.
 type BastionInput struct {
-	Name         string
-	ProjectID    string
-	Region       string
-	NetworkID    string
-	ImageID      string
-	MachineType  string
-	SSHKeyName   string
-	AllowedCIDRs []string
-	Tags         map[string]string
-	RootVolume   RootVolumeInput
-	CloudInit    []byte
+	Name             string
+	ProjectID        string
+	Region           string
+	NetworkID        string
+	ImageID          string
+	MachineType      string
+	AvailabilityZone string
+	SSHKeyName       string
+	AllowedCIDRs     []string
+	Tags             map[string]string
+	RootVolume       RootVolumeInput
+	CloudInit        []byte
 }
 
 // NodeSSHAccessInput holds parameters required to allow SSH from the bastion

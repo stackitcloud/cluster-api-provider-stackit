@@ -14,15 +14,13 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"slices"
 	"strings"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
-	"github.com/stackitcloud/stackit-sdk-go/core/oapierror"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
@@ -83,6 +81,18 @@ func NewClient(_ context.Context, creds Credentials) (Client, error) {
 	}, nil
 }
 
+func (c *SDKClient) ProjectID() string {
+	return c.projectID
+}
+
+func (c *SDKClient) Region() string {
+	return c.region
+}
+
+func (c *SDKClient) IaaSClient() *iaas.APIClient {
+	return c.iaasClient
+}
+
 func stackitOptions(creds Credentials, endpoint string) []config.ConfigurationOption {
 	opts := []config.ConfigurationOption{
 		config.WithUserAgent("cluster-api-provider-stackit"),
@@ -104,7 +114,7 @@ func stackitOptions(creds Credentials, endpoint string) []config.ConfigurationOp
 func (c *SDKClient) GetServer(ctx context.Context, id string) (*Server, error) {
 	server, err := c.iaasClient.DefaultAPI.GetServer(ctx, c.projectID, c.region, id).Execute()
 	if err != nil {
-		return nil, classifySDKError("get server", err)
+		return nil, shared.ClassifySDKError("get server", err)
 	}
 	return c.serverFromSDK(ctx, server), nil
 }
@@ -128,15 +138,15 @@ func (c *SDKClient) ListServersByTags(ctx context.Context, tags map[string]strin
 		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
 	}
 	resp, err := c.iaasClient.DefaultAPI.ListServers(ctx, c.projectID, c.region).
-		LabelSelector(labelSelector(tags)).
+		LabelSelector(shared.LabelSelector(tags)).
 		Details(true).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("list servers", err)
+		return nil, shared.ClassifySDKError("list servers", err)
 	}
 	matched := []*Server{}
 	for _, server := range resp.GetItems() {
-		if labelsContainTags(server.GetLabels(), tags) {
+		if shared.LabelsContainTags(server.GetLabels(), tags) {
 			server := server
 			matched = append(matched, c.serverFromSDK(ctx, &server))
 		}
@@ -159,7 +169,7 @@ func (c *SDKClient) CreateServer(ctx context.Context, input CreateServerInput) (
 		payload.SetImageId(input.ImageID)
 	}
 	if len(input.Tags) > 0 {
-		payload.SetLabels(tagsToSDKLabels(input.Tags))
+		payload.SetLabels(shared.TagsToSDKLabels(input.Tags))
 	}
 	networking := iaas.NewCreateServerNetworking()
 	if input.NetworkID != "" {
@@ -198,7 +208,7 @@ func (c *SDKClient) CreateServer(ctx context.Context, input CreateServerInput) (
 		CreateServerPayload(*payload).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("create server", err)
+		return nil, shared.ClassifySDKError("create server", err)
 	}
 	return c.serverFromSDK(ctx, server), nil
 }
@@ -206,7 +216,7 @@ func (c *SDKClient) CreateServer(ctx context.Context, input CreateServerInput) (
 func (c *SDKClient) ListAvailabilityZones(ctx context.Context) ([]string, error) {
 	resp, err := c.iaasClient.DefaultAPI.ListAvailabilityZones(ctx, c.region).Execute()
 	if err != nil {
-		return nil, classifySDKError("list availability zones", err)
+		return nil, shared.ClassifySDKError("list availability zones", err)
 	}
 	if resp == nil || resp.Items == nil {
 		return nil, nil
@@ -216,7 +226,7 @@ func (c *SDKClient) ListAvailabilityZones(ctx context.Context) ([]string, error)
 
 func (c *SDKClient) DeleteServer(ctx context.Context, id string) error {
 	if err := c.iaasClient.DefaultAPI.DeleteServer(ctx, c.projectID, c.region, id).Execute(); err != nil {
-		return classifySDKError("delete server", err)
+		return shared.ClassifySDKError("delete server", err)
 	}
 	return nil
 }
@@ -224,7 +234,7 @@ func (c *SDKClient) DeleteServer(ctx context.Context, id string) error {
 func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error) {
 	network, err := c.iaasClient.DefaultAPI.GetNetwork(ctx, c.projectID, c.region, id).Execute()
 	if err != nil {
-		return nil, classifySDKError("get network", err)
+		return nil, shared.ClassifySDKError("get network", err)
 	}
 	ipv4 := network.GetIpv4()
 	return &Network{
@@ -258,17 +268,18 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 	}
 
 	server, err := c.CreateServer(ctx, CreateServerInput{
-		Name:           input.Name,
-		ProjectID:      input.ProjectID,
-		Region:         input.Region,
-		ImageID:        input.ImageID,
-		MachineType:    input.MachineType,
-		SSHKeyName:     input.SSHKeyName,
-		NetworkID:      input.NetworkID,
-		SecurityGroups: []string{securityGroup.ID},
-		UserData:       input.CloudInit,
-		Tags:           input.Tags,
-		RootVolume:     input.RootVolume,
+		Name:             input.Name,
+		ProjectID:        input.ProjectID,
+		Region:           input.Region,
+		ImageID:          input.ImageID,
+		MachineType:      input.MachineType,
+		AvailabilityZone: input.AvailabilityZone,
+		SSHKeyName:       input.SSHKeyName,
+		NetworkID:        input.NetworkID,
+		SecurityGroups:   []string{securityGroup.ID},
+		UserData:         input.CloudInit,
+		Tags:             input.Tags,
+		RootVolume:       input.RootVolume,
 	})
 	if err != nil {
 		return nil, err
@@ -283,31 +294,10 @@ func (c *SDKClient) EnsureBastion(ctx context.Context, input BastionInput) (*Bas
 		return nil, err
 	}
 
-	publicIP, err := c.ensurePublicIP(ctx, input.Tags)
-	if err != nil {
-		return nil, err
-	}
-	if publicIP.NetworkInterfaceID == "" {
-		if err := c.iaasClient.DefaultAPI.
-			AddPublicIpToServer(ctx, c.projectID, c.region, server.ID, publicIP.ID).
-			Execute(); err != nil {
-			err := classifySDKError("add public IP to server", err)
-			if !IsConflict(err) {
-				return nil, err
-			}
-		}
-		publicIP, err = c.getPublicIP(ctx, publicIP.ID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return &Bastion{
 		ServerID:          server.ID,
 		ServerState:       server.State,
 		ServerPowerStatus: server.PowerStatus,
-		PublicIPID:        publicIP.ID,
-		PublicIP:          publicIP.IP,
 		SecurityGroupID:   securityGroup.ID,
 	}, nil
 }
@@ -323,16 +313,6 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 		}
 	}
 
-	publicIPID := status.PublicIPID
-	if publicIPID == "" {
-		publicIP, err := c.findPublicIPByTags(ctx, input.Tags)
-		if err == nil {
-			publicIPID = publicIP.ID
-		} else if !IsNotFound(err) {
-			return err
-		}
-	}
-
 	securityGroupID := status.SecurityGroupID
 	if securityGroupID == "" {
 		securityGroup, err := c.findSecurityGroupByTags(ctx, input.Tags)
@@ -343,21 +323,11 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 		}
 	}
 
-	if serverID != "" && publicIPID != "" {
-		if err := c.iaasClient.DefaultAPI.
-			RemovePublicIpFromServer(ctx, c.projectID, c.region, serverID, publicIPID).
-			Execute(); err != nil {
-			err := classifySDKError("remove public IP from server", err)
-			if !IsNotFound(err) && !IsConflict(err) {
-				return err
-			}
-		}
-	}
 	if serverID != "" && securityGroupID != "" {
 		if err := c.iaasClient.DefaultAPI.
 			RemoveSecurityGroupFromServer(ctx, c.projectID, c.region, serverID, securityGroupID).
 			Execute(); err != nil {
-			err := classifySDKError("remove security group from server", err)
+			err := shared.ClassifySDKError("remove security group from server", err)
 			if !IsNotFound(err) && !IsConflict(err) {
 				return err
 			}
@@ -368,14 +338,6 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 			return err
 		}
 	}
-	if publicIPID != "" {
-		if err := c.iaasClient.DefaultAPI.DeletePublicIP(ctx, c.projectID, c.region, publicIPID).Execute(); err != nil {
-			err := classifySDKError("delete public IP", err)
-			if !IsNotFound(err) {
-				return err
-			}
-		}
-	}
 	if securityGroupID != "" {
 		if err := c.deleteSecurityGroupRules(ctx, securityGroupID); err != nil {
 			return err
@@ -383,7 +345,7 @@ func (c *SDKClient) DeleteBastion(ctx context.Context, input BastionInput, statu
 		if err := c.iaasClient.DefaultAPI.
 			DeleteSecurityGroup(ctx, c.projectID, c.region, securityGroupID).
 			Execute(); err != nil {
-			err := classifySDKError("delete security group", err)
+			err := shared.ClassifySDKError("delete security group", err)
 			if !IsNotFound(err) {
 				return err
 			}
@@ -432,7 +394,7 @@ func (c *SDKClient) DeleteNodeSSHAccess(ctx context.Context, tags map[string]str
 		if err := c.iaasClient.DefaultAPI.
 			RemoveSecurityGroupFromServer(ctx, c.projectID, c.region, server.ID, securityGroup.ID).
 			Execute(); err != nil {
-			err := classifySDKError("remove security group from server", err)
+			err := shared.ClassifySDKError("remove security group from server", err)
 			if !IsNotFound(err) && !IsConflict(err) {
 				return err
 			}
@@ -444,7 +406,7 @@ func (c *SDKClient) DeleteNodeSSHAccess(ctx context.Context, tags map[string]str
 	if err := c.iaasClient.DefaultAPI.
 		DeleteSecurityGroup(ctx, c.projectID, c.region, securityGroup.ID).
 		Execute(); err != nil {
-		err := classifySDKError("delete security group", err)
+		err := shared.ClassifySDKError("delete security group", err)
 		if !IsNotFound(err) {
 			return err
 		}
@@ -452,39 +414,19 @@ func (c *SDKClient) DeleteNodeSSHAccess(ctx context.Context, tags map[string]str
 	return nil
 }
 
-func (c *SDKClient) ListPublicIPsByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
-	}
-	resp, err := c.iaasClient.DefaultAPI.ListPublicIPs(ctx, c.projectID, c.region).
-		LabelSelector(labelSelector(tags)).
-		Execute()
-	if err != nil {
-		return nil, classifySDKError("list public IPs", err)
-	}
-	matched := []*PublicIP{}
-	for _, publicIP := range resp.GetItems() {
-		if labelsContainTags(publicIP.GetLabels(), tags) {
-			publicIP := publicIP
-			matched = append(matched, publicIPFromSDK(&publicIP))
-		}
-	}
-	return matched, nil
-}
-
 func (c *SDKClient) ListSecurityGroupsByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
 	}
 	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroups(ctx, c.projectID, c.region).
-		LabelSelector(labelSelector(tags)).
+		LabelSelector(shared.LabelSelector(tags)).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("list security groups", err)
+		return nil, shared.ClassifySDKError("list security groups", err)
 	}
 	matched := []*SecurityGroup{}
 	for _, securityGroup := range resp.GetItems() {
-		if labelsContainTags(securityGroup.GetLabels(), tags) {
+		if shared.LabelsContainTags(securityGroup.GetLabels(), tags) {
 			securityGroup := securityGroup
 			matched = append(matched, securityGroupFromSDK(&securityGroup))
 		}
@@ -502,7 +444,7 @@ func (c *SDKClient) EnsureAPIServerLoadBalancer(ctx context.Context, input LoadB
 	payload.SetName(input.Name)
 	payload.SetRegion(input.Region)
 	if len(input.Tags) > 0 {
-		payload.SetLabels(loadBalancerLabels(input.Tags))
+		payload.SetLabels(shared.LoadBalancerLabels(input.Tags))
 	}
 	options := lb.NewLoadBalancerOptions()
 	options.SetEphemeralAddress(true)
@@ -544,14 +486,14 @@ func (c *SDKClient) EnsureAPIServerLoadBalancer(ctx context.Context, input LoadB
 		CreateLoadBalancerPayload(*payload).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("create load balancer", err)
+		return nil, shared.ClassifySDKError("create load balancer", err)
 	}
 	return loadBalancerFromSDK(lbResp), nil
 }
 
 func (c *SDKClient) DeleteAPIServerLoadBalancer(ctx context.Context, id string) error {
 	if _, err := c.lbClient.DefaultAPI.DeleteLoadBalancer(ctx, c.projectID, c.region, id).Execute(); err != nil {
-		return classifySDKError("delete load balancer", err)
+		return shared.ClassifySDKError("delete load balancer", err)
 	}
 	return nil
 }
@@ -565,16 +507,16 @@ func (c *SDKClient) ListAPIServerLoadBalancersByTags(
 	}
 	resp, err := c.lbClient.DefaultAPI.ListLoadBalancers(ctx, c.projectID, c.region).Execute()
 	if err != nil {
-		err := classifySDKError("list load balancers", err)
+		err := shared.ClassifySDKError("list load balancers", err)
 		if isLoadBalancerServiceNotEnabled(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	matched := []*LoadBalancer{}
-	labels := loadBalancerLabels(tags)
+	labels := shared.LoadBalancerLabels(tags)
 	for _, candidate := range resp.GetLoadBalancers() {
-		if mapContains(candidate.GetLabels(), labels) {
+		if shared.MapContains(candidate.GetLabels(), labels) {
 			candidate := candidate
 			matched = append(matched, loadBalancerFromSDK(&candidate))
 		}
@@ -608,7 +550,7 @@ func (c *SDKClient) SetAPIServerLoadBalancerTargets(
 
 	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, loadBalancerID).Execute()
 	if err != nil {
-		return classifySDKError("get load balancer", err)
+		return shared.ClassifySDKError("get load balancer", err)
 	}
 	targetPool := apiServerTargetPool(loadBalancer)
 	if targetPool == nil {
@@ -670,12 +612,12 @@ func (c *SDKClient) ensureBastionSecurityGroup(ctx context.Context, input Bastio
 	}
 	payload := iaas.NewCreateSecurityGroupPayload(input.Name + "-ssh")
 	payload.SetDescription("Cluster API Provider STACKIT bastion SSH access")
-	payload.SetLabels(tagsToSDKLabels(input.Tags))
+	payload.SetLabels(shared.TagsToSDKLabels(input.Tags))
 	securityGroup, err := c.iaasClient.DefaultAPI.CreateSecurityGroup(ctx, c.projectID, c.region).
 		CreateSecurityGroupPayload(*payload).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("create security group", err)
+		return nil, shared.ClassifySDKError("create security group", err)
 	}
 	return securityGroupFromSDK(securityGroup), nil
 }
@@ -688,12 +630,12 @@ func (c *SDKClient) ensureNodeSSHSecurityGroup(ctx context.Context, input NodeSS
 	}
 	payload := iaas.NewCreateSecurityGroupPayload(input.Name)
 	payload.SetDescription("Cluster API Provider STACKIT node SSH access from bastion")
-	payload.SetLabels(tagsToSDKLabels(input.Tags))
+	payload.SetLabels(shared.TagsToSDKLabels(input.Tags))
 	securityGroup, err := c.iaasClient.DefaultAPI.CreateSecurityGroup(ctx, c.projectID, c.region).
 		CreateSecurityGroupPayload(*payload).
 		Execute()
 	if err != nil {
-		return nil, classifySDKError("create security group", err)
+		return nil, shared.ClassifySDKError("create security group", err)
 	}
 	return securityGroupFromSDK(securityGroup), nil
 }
@@ -704,7 +646,7 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 	}
 	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, securityGroupID).Execute()
 	if err != nil {
-		return classifySDKError("list security group rules", err)
+		return shared.ClassifySDKError("list security group rules", err)
 	}
 	existingRules := resp.GetItems()
 	desired := make(map[string]struct{}, len(cidrs))
@@ -731,7 +673,7 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 		if _, err := c.iaasClient.DefaultAPI.CreateSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID).
 			CreateSecurityGroupRulePayload(*rule).
 			Execute(); err != nil {
-			return classifySDKError("create security group rule", err)
+			return shared.ClassifySDKError("create security group rule", err)
 		}
 	}
 
@@ -752,7 +694,7 @@ func (c *SDKClient) ensureBastionSecurityGroupRules(ctx context.Context, securit
 		if err := c.iaasClient.DefaultAPI.
 			DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
 			Execute(); err != nil {
-			err := classifySDKError("delete security group rule", err)
+			err := shared.ClassifySDKError("delete security group rule", err)
 			if !IsNotFound(err) {
 				return err
 			}
@@ -770,7 +712,7 @@ func (c *SDKClient) ensureNodeSSHSecurityGroupRule(
 	}
 	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, nodeSecurityGroupID).Execute()
 	if err != nil {
-		return classifySDKError("list security group rules", err)
+		return shared.ClassifySDKError("list security group rules", err)
 	}
 	if hasRemoteSecurityGroupSSHRule(resp.GetItems(), bastionSecurityGroupID) {
 		return nil
@@ -783,48 +725,9 @@ func (c *SDKClient) ensureNodeSSHSecurityGroupRule(
 	if _, err := c.iaasClient.DefaultAPI.CreateSecurityGroupRule(ctx, c.projectID, c.region, nodeSecurityGroupID).
 		CreateSecurityGroupRulePayload(*rule).
 		Execute(); err != nil {
-		return classifySDKError("create security group rule", err)
+		return shared.ClassifySDKError("create security group rule", err)
 	}
 	return nil
-}
-
-func (c *SDKClient) ensurePublicIP(ctx context.Context, tags map[string]string) (*PublicIP, error) {
-	if existing, err := c.findPublicIPByTags(ctx, tags); err == nil {
-		return existing, nil
-	} else if !IsNotFound(err) {
-		return nil, err
-	}
-	payload := iaas.NewCreatePublicIPPayload()
-	payload.SetLabels(tagsToSDKLabels(tags))
-	publicIP, err := c.iaasClient.DefaultAPI.CreatePublicIP(ctx, c.projectID, c.region).
-		CreatePublicIPPayload(*payload).
-		Execute()
-	if err != nil {
-		return nil, classifySDKError("create public IP", err)
-	}
-	return publicIPFromSDK(publicIP), nil
-}
-
-func (c *SDKClient) getPublicIP(ctx context.Context, id string) (*PublicIP, error) {
-	publicIP, err := c.iaasClient.DefaultAPI.GetPublicIP(ctx, c.projectID, c.region, id).Execute()
-	if err != nil {
-		return nil, classifySDKError("get public IP", err)
-	}
-	return publicIPFromSDK(publicIP), nil
-}
-
-func (c *SDKClient) findPublicIPByTags(ctx context.Context, tags map[string]string) (*PublicIP, error) {
-	matched, err := c.ListPublicIPsByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no public IP matching tags", ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple public IPs matching tags", ErrConflict)
-	}
-	return matched[0], nil
 }
 
 func (c *SDKClient) findSecurityGroupByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
@@ -851,7 +754,7 @@ func (c *SDKClient) addSecurityGroupToServer(ctx context.Context, serverID, secu
 	if err := c.iaasClient.DefaultAPI.
 		AddSecurityGroupToServer(ctx, c.projectID, c.region, serverID, securityGroupID).
 		Execute(); err != nil {
-		err := classifySDKError("add security group to server", err)
+		err := shared.ClassifySDKError("add security group to server", err)
 		if !IsConflict(err) && !IsInvalidInput(err) && !IsNotFound(err) {
 			return err
 		}
@@ -862,7 +765,7 @@ func (c *SDKClient) addSecurityGroupToServer(ctx context.Context, serverID, secu
 func (c *SDKClient) deleteSecurityGroupRules(ctx context.Context, securityGroupID string) error {
 	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, securityGroupID).Execute()
 	if err != nil {
-		err := classifySDKError("list security group rules", err)
+		err := shared.ClassifySDKError("list security group rules", err)
 		if IsNotFound(err) {
 			return nil
 		}
@@ -876,7 +779,7 @@ func (c *SDKClient) deleteSecurityGroupRules(ctx context.Context, securityGroupI
 		if err := c.iaasClient.DefaultAPI.
 			DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
 			Execute(); err != nil {
-			err := classifySDKError("delete security group rule", err)
+			err := shared.ClassifySDKError("delete security group rule", err)
 			if !IsNotFound(err) {
 				return err
 			}
@@ -943,7 +846,7 @@ func (c *SDKClient) updateAPIServerTargetPool(
 		UpdateTargetPool(ctx, c.projectID, c.region, loadBalancerID, apiserverTargetPoolName).
 		UpdateTargetPoolPayload(*payload).
 		Execute(); err != nil {
-		return classifySDKError("update load balancer target pool", err)
+		return shared.ClassifySDKError("update load balancer target pool", err)
 	}
 	return nil
 }
@@ -992,19 +895,8 @@ func loadBalancerFromSDK(in *lb.LoadBalancer) *LoadBalancer {
 	return &LoadBalancer{
 		ID:   in.GetName(),
 		Name: in.GetName(),
-		IP:   firstNonEmpty(in.GetExternalAddress(), in.GetPrivateAddress()),
+		IP:   shared.FirstNonEmpty(in.GetExternalAddress(), in.GetPrivateAddress()),
 		Port: listenerPort(in.GetListeners()),
-	}
-}
-
-func publicIPFromSDK(in *iaas.PublicIp) *PublicIP {
-	if in == nil {
-		return nil
-	}
-	return &PublicIP{
-		ID:                 in.GetId(),
-		IP:                 in.GetIp(),
-		NetworkInterfaceID: in.GetNetworkInterface(),
 	}
 }
 
@@ -1027,32 +919,6 @@ func listenerPort(listeners []lb.Listener) int32 {
 	return 0
 }
 
-func labelSelector(tags map[string]string) string {
-	parts := make([]string, 0, len(tags))
-	for k, v := range tags {
-		parts = append(parts, k+"="+v)
-	}
-	return strings.Join(parts, ",")
-}
-
-func labelsContainTags(labels map[string]any, tags map[string]string) bool {
-	for k, want := range tags {
-		got, ok := labels[k]
-		if !ok || fmt.Sprint(got) != want {
-			return false
-		}
-	}
-	return true
-}
-
-func tagsToSDKLabels(tags map[string]string) map[string]any {
-	out := make(map[string]any, len(tags))
-	for k, v := range tags {
-		out[k] = v
-	}
-	return out
-}
-
 func clusterServerSelectorFromTags(tags map[string]string) map[string]string {
 	selector := map[string]string{}
 	for _, key := range []string{
@@ -1065,55 +931,6 @@ func clusterServerSelectorFromTags(tags map[string]string) map[string]string {
 		}
 	}
 	return selector
-}
-
-func mapContains(haystack, needle map[string]string) bool {
-	for k, v := range needle {
-		if haystack[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func loadBalancerLabels(tags map[string]string) map[string]string {
-	out := make(map[string]string, len(tags))
-	for k, v := range tags {
-		out[strings.ReplaceAll(k, "/", ".")] = v
-	}
-	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func classifySDKError(op string, err error) error {
-	var oapiErr *oapierror.GenericOpenAPIError
-	if errors.As(err, &oapiErr) {
-		switch oapiErr.StatusCode {
-		case http.StatusNotFound:
-			return fmt.Errorf("%w: %s: %v", ErrNotFound, op, err)
-		case http.StatusUnauthorized, http.StatusForbidden:
-			return fmt.Errorf("%w: %s: %v", ErrUnauthorized, op, err)
-		case http.StatusConflict:
-			return fmt.Errorf("%w: %s: %v", ErrConflict, op, err)
-		case http.StatusBadRequest, http.StatusUnprocessableEntity:
-			return fmt.Errorf("%w: %s: %v", ErrInvalidInput, op, err)
-		case http.StatusTooManyRequests:
-			return fmt.Errorf("%w: %s: %v", ErrTransient, op, err)
-		default:
-			if oapiErr.StatusCode >= 500 {
-				return fmt.Errorf("%w: %s: %v", ErrTransient, op, err)
-			}
-		}
-	}
-	return fmt.Errorf("%w: %s: %v", ErrTransient, op, err)
 }
 
 func isLoadBalancerServiceNotEnabled(err error) bool {

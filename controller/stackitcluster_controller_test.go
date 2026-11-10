@@ -986,6 +986,25 @@ var _ = Describe("StackitCluster Controller", func() {
 		}))
 	})
 
+	It("creates the bastion host in a single availability zone and not in metro (-m)", func() {
+		fakeCloud.AvailabilityZones = []string{"eu01-m", "eu01-3", "eu01-2"}
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(fakeCloud.LastEnsureBastionInput.AvailabilityZone).To(Equal("eu01-2"))
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		server, err := fakeCloud.GetServer(ctx, got.Status.Bastion.ServerID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.AvailabilityZone).To(Equal("eu01-2"))
+	})
+
 	It("reports an error condition when listing availability zones fails", func() {
 		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", cloud.ErrTransient)
 
