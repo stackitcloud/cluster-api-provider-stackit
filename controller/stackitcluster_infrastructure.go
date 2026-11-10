@@ -32,7 +32,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
-	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
@@ -143,18 +143,48 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			)
 			return ctrl.Result{}, fmt.Errorf("list control plane machines: %w", err)
 		}
-		targets := loadbalancerservice.APIServerTargets(machines.UnsortedList())
+		targets := loadbalancer.APIServerTargets(machines.UnsortedList())
 
 		// Seeding with the real targets lets a load balancer deleted out of band
 		// come back with the control plane behind it.
 		seed := targets
 		if len(seed) == 0 {
-			seed = []cloud.LoadBalancerTargetInput{loadbalancerservice.BootstrapTarget(bootstrapTargetIP(network))}
+			seed = []loadbalancer.Target{loadbalancer.BootstrapTarget(bootstrapTargetIP(network))}
 		}
-		loadBalancer, err := cloudClient.EnsureAPIServerLoadBalancer(
-			ctx,
-			loadbalancerservice.APIServerInput(stackitCluster, seed),
-		)
+		clusterScope.SetAPIServerLoadBalancerTargets(targets, seed)
+
+		hadLoadBalancerID := stackitCluster.Status.APIServerLoadBalancerID != ""
+		previousEndpointHost := stackitCluster.Status.APIServerEndpoint.Host
+		wasLBReady := meta.IsStatusConditionTrue(stackitCluster.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition)
+
+		err = loadbalancer.New(clusterScope).Reconcile(ctx)
+		if !hadLoadBalancerID && stackitCluster.Status.APIServerLoadBalancerID != "" {
+			record.Eventf(
+				stackitCluster, "LoadBalancerCreated",
+				"Created API server load balancer %s", stackitCluster.Status.APIServerLoadBalancerID,
+			)
+		}
+		if loadbalancer.IsTargetPoolUpdateError(err) {
+			if !cloud.IsRetryable(err) {
+				record.Warnf(
+					stackitCluster, "LoadBalancerTargetError",
+					"Cannot update API server load balancer target pool: %v", err,
+				)
+			}
+			// Scoped to the load balancer condition: failing the cluster would
+			// stop the machine reconciler from replacing the broken machine.
+			util.SetConditions(
+				&stackitCluster.Status.Conditions,
+				stackitCluster.Generation,
+				metav1.ConditionFalse,
+				"LoadBalancerTargetError",
+				err.Error(),
+				infrav1.ClusterLoadBalancerReadyCondition,
+			)
+			// Requeue even on a permanent error: this return skips SetReady, so
+			// no machine exists yet whose events could retry it.
+			return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
+		}
 		if err != nil {
 			log.Error(err, "Failed to create API server load balancer",
 				"cluster", stackitCluster.Name,
@@ -176,17 +206,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 				infrav1.ClusterReadyCondition,
 			)
 		}
-		hadLoadBalancerID := stackitCluster.Status.APIServerLoadBalancerID != ""
-		if loadBalancer != nil {
-			stackitCluster.Status.APIServerLoadBalancerID = loadBalancer.ID
-			if !hadLoadBalancerID && loadBalancer.ID != "" {
-				record.Eventf(
-					stackitCluster, "LoadBalancerCreated",
-					"Created API server load balancer %s", loadBalancer.ID,
-				)
-			}
-		}
-		if loadBalancer == nil || loadBalancer.IP == "" {
+		if stackitCluster.Status.APIServerEndpoint.Host == "" {
 			clusterScope.SetNotReady(
 				"Provisioning",
 				"waiting for API server load balancer IP address",
@@ -196,42 +216,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		isLBReady := meta.IsStatusConditionTrue(stackitCluster.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition) &&
-			stackitCluster.Status.APIServerEndpoint.Host == loadBalancer.IP
-
-		endpoint := clusterv1.APIEndpoint{
-			Host: loadBalancer.IP,
-			Port: defaultAPIServerPort,
-		}
-		clusterScope.SetAPIServerEndpoint(endpoint)
-
-		// An empty set never overwrites a populated pool: cluster deletion filters
-		// out every machine while the API server is still needed for drain.
-		if len(targets) > 0 {
-			if err := cloudClient.SetAPIServerLoadBalancerTargets(ctx, loadBalancer.ID, defaultAPIServerPort, targets); err != nil {
-				if !cloud.IsRetryable(err) {
-					record.Warnf(
-						stackitCluster, "LoadBalancerTargetError",
-						"Cannot update API server load balancer target pool: %v", err,
-					)
-				}
-				// Scoped to the load balancer condition: failing the cluster would
-				// stop the machine reconciler from replacing the broken machine.
-				util.SetConditions(
-					&stackitCluster.Status.Conditions,
-					stackitCluster.Generation,
-					metav1.ConditionFalse,
-					"LoadBalancerTargetError",
-					err.Error(),
-					infrav1.ClusterLoadBalancerReadyCondition,
-				)
-				// Requeue even on a permanent error: this return skips SetReady, so
-				// no machine exists yet whose events could retry it.
-				return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, nil
-			}
-			log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(targets))
-		}
-
+		isLBReady := wasLBReady && previousEndpointHost == stackitCluster.Status.APIServerEndpoint.Host
 		if !isLBReady {
 			clusterScope.SetConditions(
 				metav1.ConditionTrue,
@@ -241,7 +226,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			)
 			record.Eventf(
 				stackitCluster, "LoadBalancerReady",
-				"API server load balancer is ready at %s", loadBalancer.IP,
+				"API server load balancer is ready at %s", stackitCluster.Status.APIServerEndpoint.Host,
 			)
 		}
 	} else if stackitCluster.Spec.ControlPlaneEndpoint.Host != "" {
@@ -386,8 +371,8 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 	}
 
 	// Cleanup runs unconditionally: neither spec nor status is a trustworthy
-	// record of what exists in the cloud. ResolveID, DeleteBastion, and the
-	// public IP and security group services fall back to tag lookups and
+	// record of what exists in the cloud. DeleteBastion and the load balancer,
+	// public IP, and security group services fall back to tag lookups and
 	// tolerate NotFound.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
@@ -417,21 +402,14 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		return ctrl.Result{}, err
 	}
 	clusterScope.SetCloudClient(cloudClient)
-	loadBalancerID, err := loadbalancerservice.ResolveID(ctx, cloudClient, stackitCluster)
-	if err != nil {
-		log.Error(err, "Failed to resolve API server load balancer for deletion", "cluster", stackitCluster.Name)
-		record.Warnf(stackitCluster, "FailedResolveLoadBalancer",
-			"Failed to resolve API server load balancer: %v", err)
+	loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
+	if err := loadbalancer.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+		log.Error(err, "Failed to delete API server load balancer", "cluster", stackitCluster.Name, "loadBalancerID", loadBalancerID)
+		record.Warnf(stackitCluster, "FailedDeleteLoadBalancer",
+			"Failed to delete API server load balancer %s: %v", loadBalancerID, err)
 		return ctrl.Result{}, err
 	}
 	if loadBalancerID != "" {
-		if err := cloudClient.DeleteAPIServerLoadBalancer(ctx, loadBalancerID); err != nil && !cloud.IsNotFound(err) {
-			log.Error(err, "Failed to delete API server load balancer", "cluster", stackitCluster.Name, "loadBalancerID", loadBalancerID)
-			record.Warnf(stackitCluster, "FailedDeleteLoadBalancer",
-				"Failed to delete API server load balancer %s: %v", loadBalancerID, err)
-			return ctrl.Result{}, err
-		}
-		stackitCluster.Status.APIServerLoadBalancerID = ""
 		record.Eventf(
 			stackitCluster, "LoadBalancerDeleted",
 			"Deleted API server load balancer %s", loadBalancerID,

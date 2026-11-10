@@ -14,6 +14,7 @@ import (
 	"context"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
 // Reconciler is a generic interface used by components offering a type of service.
@@ -30,14 +31,16 @@ type Reconciler interface {
 //   - return ErrInvalidInput for permanent input validation errors
 //   - return ErrConflict for retryable conflict errors
 //   - return ErrTransient for retryable transient errors
-//   - be idempotent (CreateServer/EnsureAPIServerLoadBalancer must not produce
-//     duplicates when a resource with matching tags already exists)
+//   - be idempotent (CreateServer must not produce duplicates when a resource
+//     with matching tags already exists)
 type Client interface {
 	ProjectID() string
 
 	Region() string
 
 	IaaSClient() *iaas.APIClient
+
+	LoadBalancerClient() *lb.APIClient
 
 	GetServer(ctx context.Context, id string) (*Server, error)
 
@@ -54,16 +57,6 @@ type Client interface {
 	EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error)
 
 	DeleteBastion(ctx context.Context, input BastionInput, status Bastion) error
-
-	EnsureAPIServerLoadBalancer(ctx context.Context, input LoadBalancerInput) (*LoadBalancer, error)
-
-	ListAPIServerLoadBalancersByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error)
-
-	// SetAPIServerLoadBalancerTargets replaces the contents of the API-server
-	// target pool. STACKIT rejects an empty pool.
-	SetAPIServerLoadBalancerTargets(ctx context.Context, loadBalancerID string, port int32, targets []LoadBalancerTargetInput) error
-
-	DeleteAPIServerLoadBalancer(ctx context.Context, id string) error
 
 	ListAvailabilityZones(ctx context.Context) ([]string, error)
 }

@@ -14,6 +14,7 @@ You may obtain a copy of the License at
 package cloud
 
 import (
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
@@ -33,13 +34,7 @@ type Network struct {
 }
 
 // LoadBalancer describes an API-server load balancer.
-type LoadBalancer struct {
-	ID      string
-	Name    string
-	IP      string
-	DNSName string
-	Port    int32
-}
+type LoadBalancer = loadbalancer.LoadBalancer
 
 // PublicIP describes a STACKIT public IP resource.
 type PublicIP = publicip.PublicIP
@@ -95,20 +90,6 @@ type RootVolumeInput struct {
 	DeleteOnTermination bool
 }
 
-// LoadBalancerInput holds all parameters required to ensure an API-server LB.
-type LoadBalancerInput struct {
-	Name      string
-	ProjectID string
-	Region    string
-	NetworkID string
-	Tags      map[string]string
-	Port      int32
-	Targets   []LoadBalancerTargetInput
-}
-
 // LoadBalancerTargetInput describes a VM target in the API-server load
 // balancer target pool.
-type LoadBalancerTargetInput struct {
-	Name string
-	IP   string
-}
+type LoadBalancerTargetInput = loadbalancer.Target

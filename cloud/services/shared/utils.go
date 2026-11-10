@@ -28,15 +28,6 @@ func MapContains(haystack, needle map[string]string) bool {
 	return true
 }
 
-// TODO: Move to LB Service
-func LoadBalancerLabels(tags map[string]string) map[string]string {
-	out := make(map[string]string, len(tags))
-	for k, v := range tags {
-		out[strings.ReplaceAll(k, "/", ".")] = v
-	}
-	return out
-}
-
 func FirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {

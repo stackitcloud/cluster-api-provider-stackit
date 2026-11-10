@@ -34,6 +34,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
@@ -445,7 +446,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 5*time.Minute, 15*time.Second).Should(Succeed())
@@ -555,7 +556,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 				publicIPs, err := publicip.ListByTags(ctx, cloudClient.IaaSClient(), cloudClient.ProjectID(), cloudClient.Region(), stackitE2EBastionTags(testID))
@@ -633,7 +634,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -728,7 +729,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -857,7 +858,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -1018,7 +1019,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -1137,7 +1138,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -1276,7 +1277,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
@@ -1401,7 +1402,7 @@ var _ = Describe("Manager", Ordered, func() {
 				servers, err := cloudClient.ListServersByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := cloudClient.ListAPIServerLoadBalancersByTags(ctx, leakTags)
+				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(loadBalancers).To(BeEmpty())
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())

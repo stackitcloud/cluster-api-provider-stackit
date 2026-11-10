@@ -48,29 +48,11 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	if _, err := client.CreateSecurityGroup(ctx, "other-sg", otherTags); err != nil {
 		t.Fatalf("CreateSecurityGroup() error = %v", err)
 	}
-	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-		Name:      "matched",
-		Tags:      tags,
-		NetworkID: "network-id",
-		Port:      6443,
-		Targets: []cloud.LoadBalancerTargetInput{{
-			Name: "target",
-			IP:   "10.0.0.10",
-		}},
-	}); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
+	if _, err := client.CreateLoadBalancer(ctx, "matched", tags); err != nil {
+		t.Fatalf("CreateLoadBalancer() error = %v", err)
 	}
-	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-		Name:      "other",
-		Tags:      otherTags,
-		NetworkID: "network-id",
-		Port:      6443,
-		Targets: []cloud.LoadBalancerTargetInput{{
-			Name: "target",
-			IP:   "10.0.0.11",
-		}},
-	}); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
+	if _, err := client.CreateLoadBalancer(ctx, "other", otherTags); err != nil {
+		t.Fatalf("CreateLoadBalancer() error = %v", err)
 	}
 
 	if err := cloud.CleanupByTags(ctx, client, tags); err != nil {
@@ -91,12 +73,19 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	if len(otherServers) != 1 {
 		t.Fatalf("other server count = %d, want 1", len(otherServers))
 	}
-	matchedLoadBalancers, err := client.ListAPIServerLoadBalancersByTags(ctx, tags)
+	matchedLoadBalancers, err := client.ListLoadBalancersByTags(ctx, tags)
 	if err != nil {
-		t.Fatalf("ListAPIServerLoadBalancersByTags() error = %v", err)
+		t.Fatalf("ListLoadBalancersByTags() error = %v", err)
 	}
 	if len(matchedLoadBalancers) != 0 {
 		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
+	}
+	otherLoadBalancers, err := client.ListLoadBalancersByTags(ctx, otherTags)
+	if err != nil {
+		t.Fatalf("ListLoadBalancersByTags(other) error = %v", err)
+	}
+	if len(otherLoadBalancers) != 1 {
+		t.Fatalf("other load balancer count = %d, want 1", len(otherLoadBalancers))
 	}
 	matchedPublicIPs, err := client.ListPublicIPsByTags(ctx, tags)
 	if err != nil {

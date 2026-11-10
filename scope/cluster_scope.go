@@ -25,9 +25,11 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
 const bastionSSHPort = 22
@@ -38,6 +40,9 @@ type ClusterScope struct {
 	Cluster        *clusterv1.Cluster
 	StackitCluster *infrav1.StackitCluster
 	CloudClient    cloud.Client
+
+	loadBalancerTargets     []loadbalancer.Target
+	loadBalancerSeedTargets []loadbalancer.Target
 
 	patchHelper *patch.Helper
 }
@@ -158,6 +163,46 @@ func (s *ClusterScope) Region() string {
 
 func (s *ClusterScope) IaaSClient() *iaas.APIClient {
 	return s.CloudClient.IaaSClient()
+}
+
+func (s *ClusterScope) LoadBalancerClient() *lb.APIClient {
+	return s.CloudClient.LoadBalancerClient()
+}
+
+func (s *ClusterScope) APIServerLoadBalancerTags() map[string]string {
+	return util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels)
+}
+
+func (s *ClusterScope) SetAPIServerLoadBalancerID(id string) {
+	s.StackitCluster.Status.APIServerLoadBalancerID = id
+}
+
+func (s *ClusterScope) SetAPIServerLoadBalancerTargets(targets, seedTargets []loadbalancer.Target) {
+	s.loadBalancerTargets = targets
+	s.loadBalancerSeedTargets = seedTargets
+}
+
+func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
+	return loadbalancer.LoadBalancerSpec{
+		ID:          s.StackitCluster.Status.APIServerLoadBalancerID,
+		Name:        s.StackitCluster.Name + "-apiserver",
+		NetworkID:   s.StackitCluster.Spec.Network.ID,
+		Port:        loadbalancer.DefaultAPIServerPort,
+		Tags:        s.APIServerLoadBalancerTags(),
+		Targets:     s.loadBalancerTargets,
+		SeedTargets: s.loadBalancerSeedTargets,
+		SetID:       s.SetAPIServerLoadBalancerID,
+		SetAddress: func(ip string, port int32) {
+			if ip == "" {
+				s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
+				return
+			}
+			s.SetAPIServerEndpoint(clusterv1.APIEndpoint{
+				Host: ip,
+				Port: port,
+			})
+		},
+	}
 }
 
 func (s *ClusterScope) BastionSpec() infrav1.StackitBastionSpec {

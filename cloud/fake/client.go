@@ -24,9 +24,11 @@ import (
 	"sync"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
 const (
@@ -44,6 +46,7 @@ type Client struct {
 	securityGroups map[string]*securityGroupEntry
 	networks       map[string]*cloud.Network
 	iaasClient     *iaas.APIClient
+	lbClient       *lb.APIClient
 
 	nextID int
 
@@ -145,6 +148,16 @@ func New(networks ...cloud.Network) *Client {
 		panic(fmt.Sprintf("create fake iaas client: %v", err))
 	}
 	c.iaasClient = iaasClient
+
+	lbClient, err := lb.NewAPIClient(
+		config.WithoutAuthentication(),
+		config.WithHTTPClient(&http.Client{Transport: roundTripperFunc(c.roundTripLB)}),
+		config.WithEndpoint("http://stackit.fake.local"),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("create fake loadbalancer client: %v", err))
+	}
+	c.lbClient = lbClient
 	return c
 }
 
@@ -158,6 +171,10 @@ func (c *Client) Region() string {
 
 func (c *Client) IaaSClient() *iaas.APIClient {
 	return c.iaasClient
+}
+
+func (c *Client) LoadBalancerClient() *lb.APIClient {
+	return c.lbClient
 }
 
 func consume(p *error) error {
@@ -518,105 +535,34 @@ func (c *Client) CreateSecurityGroup(_ context.Context, name string, tags map[st
 	return &out, nil
 }
 
-func (c *Client) EnsureAPIServerLoadBalancer(
-	_ context.Context,
-	input cloud.LoadBalancerInput,
-) (*cloud.LoadBalancer, error) {
+func (c *Client) CreateLoadBalancer(_ context.Context, name string, tags map[string]string) (*cloud.LoadBalancer, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := consume(&c.FailNextEnsureLB); err != nil {
+	entry, err := c.createLoadBalancerEntry(name, 6443, loadbalancer.Labels(tags), nil)
+	if err != nil {
 		return nil, err
 	}
-	for _, entry := range c.loadBalancers {
-		if len(input.Tags) > 0 && mapContains(entry.tags, input.Tags) {
-			out := *entry.lb
-			return &out, nil
-		}
-	}
-	id := c.genID()
-	lb := &cloud.LoadBalancer{
-		ID:   id,
-		Name: input.Name,
-		IP:   "203.0.113.10",
-		Port: input.Port,
-	}
-	targets := map[string]string{}
-	if len(input.Targets) == 0 {
-		targets[bootstrapTargetName] = bootstrapTargetIP
-	} else {
-		for _, target := range input.Targets {
-			targets[target.Name] = target.IP
-		}
-	}
-	c.loadBalancers[id] = &lbEntry{lb: lb, tags: copyTags(input.Tags), targets: targets}
-	out := *lb
+	out := *entry.lb
 	return &out, nil
 }
 
-func (c *Client) ListAPIServerLoadBalancersByTags(
-	_ context.Context,
-	tags map[string]string,
-) ([]*cloud.LoadBalancer, error) {
+func (c *Client) ListLoadBalancersByTags(_ context.Context, tags map[string]string) ([]*cloud.LoadBalancer, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
 	}
+	wantLabels := loadbalancer.Labels(tags)
 	loadBalancers := []*cloud.LoadBalancer{}
 	for _, entry := range c.loadBalancers {
-		if mapContains(entry.tags, tags) {
+		if mapContains(entry.tags, wantLabels) || mapContains(entry.tags, tags) {
 			out := *entry.lb
 			loadBalancers = append(loadBalancers, &out)
 		}
 	}
 	return loadBalancers, nil
-}
-
-func (c *Client) SetAPIServerLoadBalancerTargets(
-	_ context.Context,
-	loadBalancerID string,
-	port int32,
-	targets []cloud.LoadBalancerTargetInput,
-) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextSetTargets); err != nil {
-		return err
-	}
-	if loadBalancerID == "" || port <= 0 {
-		return fmt.Errorf("load balancer ID and target port are required: %w", cloud.ErrInvalidInput)
-	}
-	if len(targets) == 0 {
-		return fmt.Errorf("at least one target is required: %w", cloud.ErrInvalidInput)
-	}
-	entry, ok := c.loadBalancers[loadBalancerID]
-	if !ok {
-		return fmt.Errorf("load balancer %q: %w", loadBalancerID, cloud.ErrNotFound)
-	}
-	replaced := make(map[string]string, len(targets))
-	for _, target := range targets {
-		// The real API rejects these; accepting them would hide a regression.
-		if target.Name == "" || target.IP == "" {
-			return fmt.Errorf("target name and target IP are required: %w", cloud.ErrInvalidInput)
-		}
-		replaced[target.Name] = target.IP
-	}
-	entry.targets = replaced
-	return nil
-}
-
-func (c *Client) DeleteAPIServerLoadBalancer(_ context.Context, id string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteLB); err != nil {
-		return err
-	}
-	delete(c.loadBalancers, id)
-	return nil
 }
 
 // ServerCount returns the number of currently tracked servers (test helper).
@@ -831,6 +777,270 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 	rec.WriteHeader(http.StatusNotFound)
 	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
 	return rec.Result(), nil
+}
+
+func (c *Client) roundTripLB(r *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+
+	if c.handleLoadBalancerRequest(rec, r) {
+		return rec.Result(), nil
+	}
+
+	rec.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
+	return rec.Result(), nil
+}
+
+type fakeTargetJSON struct {
+	DisplayName string `json:"displayName"`
+	IP          string `json:"ip"`
+}
+
+func toLoadBalancerTargets(in []fakeTargetJSON) []loadbalancer.Target {
+	out := make([]loadbalancer.Target, 0, len(in))
+	for _, t := range in {
+		out = append(out, loadbalancer.Target{Name: t.DisplayName, IP: t.IP})
+	}
+	return out
+}
+
+func (c *Client) handleLoadBalancerRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):
+		items, err := c.listLoadBalancerItems()
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"loadBalancers": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/load-balancers"):
+		var body struct {
+			Name        string            `json:"name"`
+			Labels      map[string]string `json:"labels"`
+			TargetPools []struct {
+				Name       string           `json:"name"`
+				TargetPort int32            `json:"targetPort"`
+				Targets    []fakeTargetJSON `json:"targets"`
+			} `json:"targetPools"`
+			Listeners []struct {
+				Port int32 `json:"port"`
+			} `json:"listeners"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		var port int32 = 6443
+		if len(body.Listeners) > 0 && body.Listeners[0].Port > 0 {
+			port = body.Listeners[0].Port
+		}
+		var targets []loadbalancer.Target
+		if len(body.TargetPools) > 0 {
+			targets = toLoadBalancerTargets(body.TargetPools[0].Targets)
+		}
+		created, err := c.createLoadBalancer(body.Name, port, body.Labels, targets)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodPut && strings.Contains(path, "/load-balancers/") && strings.Contains(path, "/target-pools/"):
+		sub := path[strings.Index(path, "/load-balancers/")+len("/load-balancers/"):]
+		parts := strings.SplitN(sub, "/target-pools/", 2)
+		lbID := parts[0]
+		var body struct {
+			Name       string           `json:"name"`
+			TargetPort int32            `json:"targetPort"`
+			Targets    []fakeTargetJSON `json:"targets"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		pool, err := c.updateLoadBalancerTargetPool(lbID, body.TargetPort, toLoadBalancerTargets(body.Targets))
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(pool)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/load-balancers/"):
+		id := path[strings.LastIndex(path, "/load-balancers/")+len("/load-balancers/"):]
+		got, err := c.getLoadBalancerItem(id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/load-balancers/"):
+		id := path[strings.LastIndex(path, "/load-balancers/")+len("/load-balancers/"):]
+		if err := c.deleteLoadBalancer(id); err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{})
+		}
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) listLoadBalancerItems() ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	items := make([]map[string]any, 0, len(c.loadBalancers))
+	for _, entry := range c.loadBalancers {
+		items = append(items, fakeLoadBalancerMap(entry))
+	}
+	return items, nil
+}
+
+func (c *Client) getLoadBalancerItem(id string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextSetTargets); err != nil {
+		return nil, err
+	}
+	entry, ok := c.loadBalancers[id]
+	if !ok {
+		return nil, fmt.Errorf("load balancer %q: %w", id, cloud.ErrNotFound)
+	}
+	return fakeLoadBalancerMap(entry), nil
+}
+
+func (c *Client) createLoadBalancer(name string, port int32, labels map[string]string, targets []loadbalancer.Target) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextEnsureLB); err != nil {
+		return nil, err
+	}
+	entry, err := c.createLoadBalancerEntry(name, port, labels, targets)
+	if err != nil {
+		return nil, err
+	}
+	return fakeLoadBalancerMap(entry), nil
+}
+
+func (c *Client) createLoadBalancerEntry(name string, port int32, labels map[string]string, targets []loadbalancer.Target) (*lbEntry, error) {
+	if name == "" {
+		return nil, fmt.Errorf("load balancer name is empty: %w", cloud.ErrInvalidInput)
+	}
+	if port <= 0 {
+		port = 6443
+	}
+	lbObj := &cloud.LoadBalancer{
+		ID:   name,
+		Name: name,
+		IP:   "203.0.113.10",
+		Port: port,
+	}
+	targetMap := map[string]string{}
+	if len(targets) == 0 {
+		targetMap[bootstrapTargetName] = bootstrapTargetIP
+	} else {
+		for _, target := range targets {
+			targetMap[target.Name] = target.IP
+		}
+	}
+	entry := &lbEntry{
+		lb:      lbObj,
+		tags:    copyTags(labels),
+		targets: targetMap,
+	}
+	c.loadBalancers[name] = entry
+	return entry, nil
+}
+
+func (c *Client) updateLoadBalancerTargetPool(id string, port int32, targets []loadbalancer.Target) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextSetTargets); err != nil {
+		return nil, err
+	}
+	if id == "" || port <= 0 {
+		return nil, fmt.Errorf("load balancer ID and target port are required: %w", cloud.ErrInvalidInput)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("at least one target is required: %w", cloud.ErrInvalidInput)
+	}
+	entry, ok := c.loadBalancers[id]
+	if !ok {
+		return nil, fmt.Errorf("load balancer %q: %w", id, cloud.ErrNotFound)
+	}
+	replaced := make(map[string]string, len(targets))
+	for _, target := range targets {
+		if target.Name == "" || target.IP == "" {
+			return nil, fmt.Errorf("target name and target IP are required: %w", cloud.ErrInvalidInput)
+		}
+		replaced[target.Name] = target.IP
+	}
+	entry.targets = replaced
+	entry.lb.Port = port
+	return fakeTargetPoolMap(entry), nil
+}
+
+func (c *Client) deleteLoadBalancer(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteLB); err != nil {
+		return err
+	}
+	delete(c.loadBalancers, id)
+	return nil
+}
+
+func fakeLoadBalancerMap(entry *lbEntry) map[string]any {
+	m := map[string]any{
+		"name":            entry.lb.Name,
+		"externalAddress": entry.lb.IP,
+		"listeners": []any{
+			map[string]any{
+				"displayName": "apiserver",
+				"port":        entry.lb.Port,
+				"targetPool":  "apiserver",
+			},
+		},
+		"targetPools": []any{
+			fakeTargetPoolMap(entry),
+		},
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func fakeTargetPoolMap(entry *lbEntry) map[string]any {
+	targets := make([]any, 0, len(entry.targets))
+	for name, ip := range entry.targets {
+		targets = append(targets, map[string]any{
+			"displayName": name,
+			"ip":          ip,
+		})
+	}
+	return map[string]any{
+		"name":       "apiserver",
+		"targetPort": entry.lb.Port,
+		"targets":    targets,
+	}
 }
 
 func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {

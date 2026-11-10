@@ -16,6 +16,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 )
@@ -55,13 +56,14 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		errs = append(errs, fmt.Sprintf("delete bastion resources: %v", err))
 	}
 
-	loadBalancers, err := client.ListAPIServerLoadBalancersByTags(ctx, tags)
+	lbClient := loadbalancer.NewClient(client)
+	loadBalancers, err := lbClient.ListByTags(ctx, tags)
 	if err != nil {
 		errs = append(errs, err.Error())
 	} else {
-		for _, loadBalancer := range loadBalancers {
-			if err := client.DeleteAPIServerLoadBalancer(ctx, loadBalancer.ID); err != nil && !IsNotFound(err) {
-				errs = append(errs, fmt.Sprintf("delete load balancer %q: %v", loadBalancer.ID, err))
+		for _, lb := range loadBalancers {
+			if err := lbClient.DeleteByID(ctx, lb.ID); err != nil {
+				errs = append(errs, fmt.Sprintf("delete load balancer %q: %v", lb.ID, err))
 			}
 		}
 	}
