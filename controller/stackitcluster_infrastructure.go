@@ -444,13 +444,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion public IP: %v", err)
 		return ctrl.Result{}, err
 	}
-	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-	if err := publicip.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
-		log.Error(err, "Failed to delete bastion public IP", "cluster", stackitCluster.Name)
-		record.Warnf(stackitCluster, "FailedDeleteBastion",
-			"Failed to delete bastion public IP: %v", err)
-		return ctrl.Result{}, err
-	}
+
 	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
 		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
