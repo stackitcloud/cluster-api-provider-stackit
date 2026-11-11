@@ -28,6 +28,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -237,7 +238,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			Expect(got.Status.Ready).To(BeTrue())
-			Expect(fakeCloud.EnsureNodeSSHCalls).To(Equal(1))
+			Expect(fakeCloud.AddSecurityGroupCalls).To(Equal(1))
 			securityGroups, err := fakeCloud.ListSecurityGroupsByTags(ctx, map[string]string{
 				util.LabelClusterName:  clusterName,
 				util.LabelResourceRole: util.ResourceRoleNodeSSH,
@@ -245,6 +246,18 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(securityGroups).To(HaveLen(1))
 			Expect(fakeCloud.SecurityGroupRemoteSources(securityGroups[0].ID)).To(ConsistOf("bastion-sg"))
+			Expect(fakeCloud.SecurityGroupRules(securityGroups[0].ID)).To(ConsistOf(
+				securitygroup.Rule{
+					Direction:             securitygroup.DirectionIngress,
+					Protocol:              securitygroup.ProtocolTCP,
+					PortMin:               22,
+					PortMax:               22,
+					RemoteSecurityGroupID: "bastion-sg",
+				},
+				securitygroup.Rule{
+					Direction: securitygroup.DirectionEgress,
+				},
+			))
 			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
 		})
 
@@ -257,7 +270,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			stackitCluster.Status.Bastion.SecurityGroupID = "bastion-sg"
 			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
 
-			fakeCloud.FailNextEnsureNodeSSH = fmt.Errorf("node ssh access timeout: %w", cloud.ErrTransient)
+			fakeCloud.FailNextAddSecurityGroup = fmt.Errorf("node ssh access timeout: %w", cloud.ErrTransient)
 
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())

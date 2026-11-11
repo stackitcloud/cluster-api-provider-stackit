@@ -55,12 +55,6 @@ type Client interface {
 
 	DeleteBastion(ctx context.Context, input BastionInput, status Bastion) error
 
-	EnsureNodeSSHAccess(ctx context.Context, input NodeSSHAccessInput) (*SecurityGroup, error)
-
-	DeleteNodeSSHAccess(ctx context.Context, tags map[string]string) error
-
-	ListSecurityGroupsByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error)
-
 	EnsureAPIServerLoadBalancer(ctx context.Context, input LoadBalancerInput) (*LoadBalancer, error)
 
 	ListAPIServerLoadBalancersByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error)

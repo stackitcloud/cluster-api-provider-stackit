@@ -29,7 +29,7 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
-	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -91,6 +91,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 			infrav1.MachineReadyCondition,
 		)
 	}
+	machineScope.SetCloudClient(cloudClient)
 	machineScope.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
 	server, created, err := r.ensureServer(ctx, cloudClient, machineScope, bootstrapData)
@@ -160,7 +161,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err := r.reconcileBastionNodeSSHAccess(ctx, cloudClient, machineScope, server); err != nil {
+	if err := r.reconcileBastionNodeSSHAccess(ctx, machineScope, server); err != nil {
 		log.Error(err, "Failed to configure bastion SSH access for node", "machine", stackitMachine.Name)
 		record.Warnf(
 			stackitMachine, "FailedNodeSSHAccess",
@@ -364,7 +365,6 @@ func (r *StackitMachineReconciler) ensureServer(
 
 func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	ctx context.Context,
-	cloudClient cloud.Client,
 	machineScope *scope.MachineScope,
 	server *cloud.Server,
 ) error {
@@ -377,13 +377,7 @@ func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	if server == nil || server.ID == "" {
 		return fmt.Errorf("%w: server ID is empty", cloud.ErrTransient)
 	}
-	_, err := cloudClient.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-		Name:                   machineScope.StackitCluster.Name + "-node-ssh",
-		ServerID:               server.ID,
-		BastionSecurityGroupID: machineScope.StackitCluster.Status.Bastion.SecurityGroupID,
-		Tags:                   bastionservice.NodeSSHAccessTags(machineScope.StackitCluster),
-	})
-	return err
+	return securitygroup.New(machineScope).Reconcile(ctx)
 }
 
 func (r *StackitMachineReconciler) getStackitCluster(ctx context.Context, cluster *clusterv1.Cluster) (*infrav1.StackitCluster, error) {

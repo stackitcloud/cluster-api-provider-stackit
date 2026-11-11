@@ -25,9 +25,12 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
+
+const bastionSSHPort = 22
 
 // ClusterScope holds the per-reconcile state for a StackitCluster.
 type ClusterScope struct {
@@ -91,8 +94,14 @@ func (s *ClusterScope) SetAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {
 
 func (s *ClusterScope) SetBastionStatus(bastion *cloud.Bastion, cloudInitHash string) {
 	s.StackitCluster.Status.Bastion.ServerID = bastion.ServerID
-	s.StackitCluster.Status.Bastion.SecurityGroupID = bastion.SecurityGroupID
+	if bastion.SecurityGroupID != "" {
+		s.StackitCluster.Status.Bastion.SecurityGroupID = bastion.SecurityGroupID
+	}
 	s.StackitCluster.Status.Bastion.CloudInitHash = cloudInitHash
+}
+
+func (s *ClusterScope) SetBastionSecurityGroupID(id string) {
+	s.StackitCluster.Status.Bastion.SecurityGroupID = id
 }
 
 func (s *ClusterScope) ClearBastionStatus() {
@@ -160,12 +169,78 @@ func (s *ClusterScope) BastionStatus() infrav1.StackitBastionStatus {
 }
 
 func (s *ClusterScope) BastionTags() map[string]string {
-	tags := util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels)
+	return bastionTags(s.StackitCluster)
+}
+
+func bastionTags(stackitCluster *infrav1.StackitCluster) map[string]string {
+	tags := util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, stackitCluster.Spec.AdditionalLabels)
 	tags[util.LabelResourceRole] = util.ResourceRoleBastion
+	return tags
+}
+
+func NodeSSHTags(stackitCluster *infrav1.StackitCluster) map[string]string {
+	tags := util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, stackitCluster.Spec.AdditionalLabels)
+	tags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
 	return tags
 }
 
 func (s *ClusterScope) SetBastionPublicIP(id, ip string) {
 	s.StackitCluster.Status.Bastion.PublicIPID = id
 	s.StackitCluster.Status.Bastion.PublicIP = ip
+}
+
+func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	rules := make([]securitygroup.Rule, 0, len(s.StackitCluster.Spec.Bastion.AllowedCIDRs)+1)
+	for _, cidr := range s.StackitCluster.Spec.Bastion.AllowedCIDRs {
+		if cidr == "" {
+			continue
+		}
+		rules = append(rules, securitygroup.Rule{
+			Direction: securitygroup.DirectionIngress,
+			Protocol:  securitygroup.ProtocolTCP,
+			PortMin:   bastionSSHPort,
+			PortMax:   bastionSSHPort,
+			IPRange:   cidr,
+		})
+	}
+	rules = append(rules, securitygroup.Rule{
+		Direction: securitygroup.DirectionEgress,
+	})
+	return []securitygroup.SecurityGroupSpec{
+		{
+			ID:          s.StackitCluster.Status.Bastion.SecurityGroupID,
+			Name:        s.StackitCluster.Name + "-bastion-ssh",
+			Description: "Cluster API Provider STACKIT bastion SSH access",
+			Tags:        s.BastionTags(),
+			Rules:       rules,
+			SetID:       s.SetBastionSecurityGroupID,
+		},
+		nodeSSHSecurityGroupSpec(s.StackitCluster, ""),
+	}
+}
+
+func nodeSSHSecurityGroupSpec(stackitCluster *infrav1.StackitCluster, remoteSecurityGroupID string, serverIDs ...string) securitygroup.SecurityGroupSpec {
+	ingressRule := securitygroup.Rule{
+		Direction:             securitygroup.DirectionIngress,
+		Protocol:              securitygroup.ProtocolTCP,
+		PortMin:               bastionSSHPort,
+		PortMax:               bastionSSHPort,
+		RemoteSecurityGroupID: remoteSecurityGroupID,
+	}
+	if remoteSecurityGroupID == "" {
+		ingressRule.RemoteSecurityGroupTags = bastionTags(stackitCluster)
+	}
+	return securitygroup.SecurityGroupSpec{
+		Name:           stackitCluster.Name + "-node-ssh",
+		Description:    "Cluster API Provider STACKIT node SSH access from bastion",
+		Tags:           NodeSSHTags(stackitCluster),
+		ServerIDs:      serverIDs,
+		ServerSelector: util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, nil),
+		Rules: []securitygroup.Rule{
+			ingressRule,
+			{
+				Direction: securitygroup.DirectionEgress,
+			},
+		},
+	}
 }

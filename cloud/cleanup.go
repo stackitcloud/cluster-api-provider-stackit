@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 )
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
@@ -72,6 +73,18 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		for _, server := range servers {
 			if err := client.DeleteServer(ctx, server.ID); err != nil && !IsNotFound(err) {
 				errs = append(errs, fmt.Sprintf("delete server %q: %v", server.ID, err))
+			}
+		}
+	}
+
+	sgClient := securitygroup.NewClient(client)
+	securityGroups, err := sgClient.ListByTags(ctx, tags)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else {
+		for _, sg := range securityGroups {
+			if err := sgClient.DeleteByID(ctx, sg.ID); err != nil {
+				errs = append(errs, fmt.Sprintf("delete security group %q: %v", sg.ID, err))
 			}
 		}
 	}

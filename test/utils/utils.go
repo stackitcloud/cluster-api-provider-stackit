@@ -35,10 +35,12 @@ const (
 	defaultKindCluster = "kind"
 )
 
+// TODO: unreachable
 func warnError(err error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
 
+// TODO: unreachable
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
 	dir, _ := GetProjectDir()
@@ -59,6 +61,7 @@ func Run(cmd *exec.Cmd) (string, error) {
 	return string(output), nil
 }
 
+// TODO: unreachable
 // UninstallCertManager uninstalls the cert manager
 func UninstallCertManager() {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
@@ -81,6 +84,7 @@ func UninstallCertManager() {
 	}
 }
 
+// TODO: unreachable
 // InstallCertManager installs the cert manager bundle.
 func InstallCertManager() error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
@@ -100,6 +104,7 @@ func InstallCertManager() error {
 	return err
 }
 
+// TODO: unreachable
 // IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
 // by verifying the existence of key CRDs related to Cert Manager.
 func IsCertManagerCRDsInstalled() bool {
@@ -133,6 +138,7 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
+// TODO: unreachable
 // LoadImageToKindClusterWithName loads a local docker image to the kind cluster
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
@@ -149,6 +155,7 @@ func LoadImageToKindClusterWithName(name string) error {
 	return err
 }
 
+// TODO: unreachable
 // GetNonEmptyLines converts given command output string into individual objects
 // according to line breakers, and ignores the empty elements in it.
 func GetNonEmptyLines(output string) []string {
@@ -163,6 +170,7 @@ func GetNonEmptyLines(output string) []string {
 	return res
 }
 
+// TODO: unreachable
 // GetProjectDir will return the directory where the project is
 func GetProjectDir() (string, error) {
 	wd, err := os.Getwd()
@@ -173,6 +181,7 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
+// TODO: unreachable
 // UncommentCode searches for target in the file and remove the comment prefix
 // of the target content. The target content may span multiple lines.
 func UncommentCode(filename, target, prefix string) error {

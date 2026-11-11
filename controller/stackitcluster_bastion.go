@@ -30,6 +30,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
@@ -115,13 +116,21 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		return ctrl.Result{RequeueAfter: retryableErrorRequeueAfter}, false, nil
 	}
 
-	hadBastionStatus := hasBastionStatus(stackitCluster.Status.Bastion)
+	hadBastionServer := stackitCluster.Status.Bastion.ServerID != ""
+	// Temporary ordering until bastion server reconciliation is extracted into a
+	// service: ensure the security group first so its ID can be attached to the
+	// bastion server by EnsureBastion.
+	if err := securitygroup.New(clusterScope).Reconcile(ctx); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	input.SecurityGroupID = stackitCluster.Status.Bastion.SecurityGroupID
+
 	bastion, err := cloudClient.EnsureBastion(ctx, input)
 	if err != nil {
 		return ctrl.Result{}, false, err
 	}
 	clusterScope.SetBastionStatus(bastion, bastionCloudInitHash(cloudInit))
-	if !hadBastionStatus {
+	if !hadBastionServer {
 		record.Eventf(
 			stackitCluster, "BastionCreated", "Created bastion %s", bastion.ServerID,
 		)
@@ -192,11 +201,6 @@ func (r *StackitClusterReconciler) deleteBastionResources(
 	status cloud.Bastion,
 	ignoreNotFound bool,
 ) error {
-	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(clusterScope.StackitCluster)); err != nil {
-		if !ignoreNotFound || !cloud.IsNotFound(err) {
-			return err
-		}
-	}
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
 		if !ignoreNotFound || !cloud.IsNotFound(err) {
 			return err
@@ -207,11 +211,19 @@ func (r *StackitClusterReconciler) deleteBastionResources(
 			return err
 		}
 	}
+	// Temporary ordering until bastion server reconciliation is extracted into a
+	// service: the security group must be deleted after the server is detached
+	// and deleted by DeleteBastion.
+	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
+		if !ignoreNotFound || !cloud.IsNotFound(err) {
+			return err
+		}
+	}
 	return nil
 }
 
 func bastionNeedsRecreate(stackitCluster *infrav1.StackitCluster, cloudInit []byte) bool {
-	if !hasBastionStatus(stackitCluster.Status.Bastion) {
+	if stackitCluster.Status.Bastion.ServerID == "" {
 		return false
 	}
 	return stackitCluster.Status.Bastion.CloudInitHash != bastionCloudInitHash(cloudInit)

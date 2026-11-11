@@ -34,6 +34,7 @@ import (
 	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
 	loadbalancerservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -385,8 +386,9 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 	}
 
 	// Cleanup runs unconditionally: neither spec nor status is a trustworthy
-	// record of what exists in the cloud. ResolveID, DeleteBastion and
-	// DeleteNodeSSHAccess fall back to tag lookups and tolerate NotFound.
+	// record of what exists in the cloud. ResolveID, DeleteBastion, and the
+	// public IP and security group services fall back to tag lookups and
+	// tolerate NotFound.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
 		// A missing credentials Secret cannot be recovered from and commonly
@@ -435,12 +437,6 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Deleted API server load balancer %s", loadBalancerID,
 		)
 	}
-	if err := cloudClient.DeleteNodeSSHAccess(ctx, bastionservice.NodeSSHAccessTags(stackitCluster)); err != nil && !cloud.IsNotFound(err) {
-		log.Error(err, "Failed to delete bastion node SSH access", "cluster", stackitCluster.Name)
-		record.Warnf(stackitCluster, "FailedDeleteNodeSSHAccess",
-			"Failed to delete bastion node SSH access: %v", err)
-		return ctrl.Result{}, err
-	}
 	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
 		log.Error(err, "Failed to delete bastion public IP", "cluster", stackitCluster.Name)
@@ -448,6 +444,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Failed to delete bastion public IP: %v", err)
 		return ctrl.Result{}, err
 	}
+
 	if err := cloudClient.DeleteBastion(ctx, bastionservice.Input(stackitCluster, nil), cloud.Bastion{
 		ServerID:        stackitCluster.Status.Bastion.ServerID,
 		SecurityGroupID: stackitCluster.Status.Bastion.SecurityGroupID,
@@ -455,6 +452,12 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		log.Error(err, "Failed to delete bastion", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion: %v", err)
+		return ctrl.Result{}, err
+	}
+	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+		log.Error(err, "Failed to delete bastion security groups", "cluster", stackitCluster.Name)
+		record.Warnf(stackitCluster, "FailedDeleteBastion",
+			"Failed to delete bastion security groups: %v", err)
 		return ctrl.Result{}, err
 	}
 	if hadBastion {

@@ -36,6 +36,7 @@ func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.Basti
 		AvailabilityZone: scope.DefaultAvailabilityZone(stackitCluster),
 		SSHKeyName:       stackitCluster.Spec.Bastion.SSHKeyName,
 		AllowedCIDRs:     stackitCluster.Spec.Bastion.AllowedCIDRs,
+		SecurityGroupID:  stackitCluster.Status.Bastion.SecurityGroupID,
 		Tags:             tags,
 		RootVolume: cloud.RootVolumeInput{
 			SizeGiB:             stackitCluster.Spec.Bastion.RootVolume.SizeGiB,
@@ -44,10 +45,4 @@ func Input(stackitCluster *infrav1.StackitCluster, cloudInit []byte) cloud.Basti
 		},
 		CloudInit: cloudInit,
 	}
-}
-
-func NodeSSHAccessTags(stackitCluster *infrav1.StackitCluster) map[string]string {
-	tags := util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, stackitCluster.Spec.AdditionalLabels)
-	tags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
-	return tags
 }

@@ -28,7 +28,9 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
-	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
+	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
 var _ = Describe("StackitCluster Controller", func() {
@@ -135,7 +137,34 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.Bastion.SecurityGroupID).NotTo(BeEmpty())
 		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
-		Expect(fakeCloud.SecurityGroupCount()).To(Equal(1))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		Expect(fakeCloud.SecurityGroupRules(got.Status.Bastion.SecurityGroupID)).To(ConsistOf(
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionIngress,
+				Protocol:  securitygroup.ProtocolTCP,
+				PortMin:   22,
+				PortMax:   22,
+				IPRange:   "203.0.113.10/32",
+			},
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionEgress,
+			},
+		))
+		nodeSGs, err := fakeCloud.ListSecurityGroupsByTags(ctx, scope.NodeSSHTags(got))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nodeSGs).To(HaveLen(1))
+		Expect(fakeCloud.SecurityGroupRules(nodeSGs[0].ID)).To(ConsistOf(
+			securitygroup.Rule{
+				Direction:             securitygroup.DirectionIngress,
+				Protocol:              securitygroup.ProtocolTCP,
+				PortMin:               22,
+				PortMax:               22,
+				RemoteSecurityGroupID: got.Status.Bastion.SecurityGroupID,
+			},
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionEgress,
+			},
+		))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
@@ -169,14 +198,18 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		nodeSGs, err := fakeCloud.ListSecurityGroupsByTags(ctx, scope.NodeSSHTags(got))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nodeSGs).To(HaveLen(1))
+		workerServer, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+			Name:           got.Name + "-worker-0",
+			Tags:           util.MachineTags(got.Name, got.Namespace, "worker-0", "uid-1", nil),
+			SecurityGroups: []string{nodeSGs[0].ID},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServer.ID, nodeSGs[0].ID)).To(BeTrue())
+
 		got.Spec.Bastion.Enabled = false
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
@@ -186,7 +219,8 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServer.ID, nodeSGs[0].ID)).To(BeFalse())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Skipped")
@@ -202,13 +236,6 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion.PublicIP).NotTo(BeEmpty())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
-		})
-		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
@@ -450,13 +477,6 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		oldServerID := got.Status.Bastion.ServerID
 		Expect(oldServerID).NotTo(BeEmpty())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
-		})
-		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
 
 		configMap := &corev1.ConfigMap{}
