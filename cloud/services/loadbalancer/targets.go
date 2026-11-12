@@ -35,6 +35,9 @@ const (
 
 // BootstrapTarget seeds a new load balancer; STACKIT rejects an empty pool.
 func BootstrapTarget(ip string) Target {
+	if ip == "" {
+		ip = DefaultBootstrapTargetIP
+	}
 	return Target{
 		Name: bootstrapTargetName,
 		IP:   ip,

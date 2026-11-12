@@ -16,6 +16,9 @@ import (
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
@@ -31,11 +34,16 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 		"cluster-api-provider-stackit/test-id": "test-2",
 	}
 
-	if _, err := client.CreateServer(ctx, server.ServerSpec{Name: "matched", Tags: tags}); err != nil {
-		t.Fatalf("CreateServer() error = %v", err)
+	srvClient := server.NewClient(client)
+	lbClient := loadbalancer.NewClient(client)
+	pubIPClient := publicip.NewClient(client)
+	sgClient := securitygroup.NewClient(client)
+
+	if _, err := srvClient.Create(ctx, server.ServerSpec{Name: "matched", Tags: tags}); err != nil {
+		t.Fatalf("server.Create() error = %v", err)
 	}
-	if _, err := client.CreateServer(ctx, server.ServerSpec{Name: "other", Tags: otherTags}); err != nil {
-		t.Fatalf("CreateServer() error = %v", err)
+	if _, err := srvClient.Create(ctx, server.ServerSpec{Name: "other", Tags: otherTags}); err != nil {
+		t.Fatalf("server.Create() error = %v", err)
 	}
 	if _, err := client.CreatePublicIP(ctx, tags); err != nil {
 		t.Fatalf("CreatePublicIP() error = %v", err)
@@ -60,58 +68,58 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 		t.Fatalf("CleanupByTags() error = %v", err)
 	}
 
-	matchedServers, err := client.ListServersByTags(ctx, tags)
+	matchedServers, err := srvClient.ListByTags(ctx, tags)
 	if err != nil {
-		t.Fatalf("ListServersByTags() error = %v", err)
+		t.Fatalf("server.ListByTags() error = %v", err)
 	}
 	if len(matchedServers) != 0 {
 		t.Fatalf("matched server count = %d, want 0", len(matchedServers))
 	}
-	otherServers, err := client.ListServersByTags(ctx, otherTags)
+	otherServers, err := srvClient.ListByTags(ctx, otherTags)
 	if err != nil {
-		t.Fatalf("ListServersByTags(other) error = %v", err)
+		t.Fatalf("server.ListByTags(other) error = %v", err)
 	}
 	if len(otherServers) != 1 {
 		t.Fatalf("other server count = %d, want 1", len(otherServers))
 	}
-	matchedLoadBalancers, err := client.ListLoadBalancersByTags(ctx, tags)
+	matchedLoadBalancers, err := lbClient.ListByTags(ctx, tags)
 	if err != nil {
-		t.Fatalf("ListLoadBalancersByTags() error = %v", err)
+		t.Fatalf("loadbalancer.ListByTags() error = %v", err)
 	}
 	if len(matchedLoadBalancers) != 0 {
 		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
 	}
-	otherLoadBalancers, err := client.ListLoadBalancersByTags(ctx, otherTags)
+	otherLoadBalancers, err := lbClient.ListByTags(ctx, otherTags)
 	if err != nil {
-		t.Fatalf("ListLoadBalancersByTags(other) error = %v", err)
+		t.Fatalf("loadbalancer.ListByTags(other) error = %v", err)
 	}
 	if len(otherLoadBalancers) != 1 {
 		t.Fatalf("other load balancer count = %d, want 1", len(otherLoadBalancers))
 	}
-	matchedPublicIPs, err := client.ListPublicIPsByTags(ctx, tags)
+	matchedPublicIPs, err := pubIPClient.ListByTags(ctx, tags)
 	if err != nil {
-		t.Fatalf("ListPublicIPsByTags() error = %v", err)
+		t.Fatalf("publicip.ListByTags() error = %v", err)
 	}
 	if len(matchedPublicIPs) != 0 {
 		t.Fatalf("matched public IP count = %d, want 0", len(matchedPublicIPs))
 	}
-	otherPublicIPs, err := client.ListPublicIPsByTags(ctx, otherTags)
+	otherPublicIPs, err := pubIPClient.ListByTags(ctx, otherTags)
 	if err != nil {
-		t.Fatalf("ListPublicIPsByTags(other) error = %v", err)
+		t.Fatalf("publicip.ListByTags(other) error = %v", err)
 	}
 	if len(otherPublicIPs) != 1 {
 		t.Fatalf("other public IP count = %d, want 1", len(otherPublicIPs))
 	}
-	matchedSecurityGroups, err := client.ListSecurityGroupsByTags(ctx, tags)
+	matchedSecurityGroups, err := sgClient.ListByTags(ctx, tags)
 	if err != nil {
-		t.Fatalf("ListSecurityGroupsByTags() error = %v", err)
+		t.Fatalf("securitygroup.ListByTags() error = %v", err)
 	}
 	if len(matchedSecurityGroups) != 0 {
 		t.Fatalf("matched security group count = %d, want 0", len(matchedSecurityGroups))
 	}
-	otherSecurityGroups, err := client.ListSecurityGroupsByTags(ctx, otherTags)
+	otherSecurityGroups, err := sgClient.ListByTags(ctx, otherTags)
 	if err != nil {
-		t.Fatalf("ListSecurityGroupsByTags(other) error = %v", err)
+		t.Fatalf("securitygroup.ListByTags(other) error = %v", err)
 	}
 	if len(otherSecurityGroups) != 1 {
 		t.Fatalf("other security group count = %d, want 1", len(otherSecurityGroups))

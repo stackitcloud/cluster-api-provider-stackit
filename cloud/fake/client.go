@@ -35,11 +35,6 @@ import (
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
-const (
-	bootstrapTargetName = "capi-bootstrap-placeholder"
-	bootstrapTargetIP   = "10.0.0.1"
-)
-
 // Client is an in-memory implementation of cloud.Client.
 type Client struct {
 	mu sync.Mutex
@@ -116,12 +111,10 @@ type securityGroupRuleEntry struct {
 }
 
 type securityGroupEntry struct {
-	securityGroup        *securitygroup.SecurityGroup
-	description          string
-	tags                 map[string]string
-	allowedCIDRs         []string
-	remoteSecurityGroups []string
-	rules                map[string]*securityGroupRuleEntry
+	securityGroup *securitygroup.SecurityGroup
+	description   string
+	tags          map[string]string
+	rules         map[string]*securityGroupRuleEntry
 }
 
 // New returns a Client preconfigured with the given networks.
@@ -189,59 +182,6 @@ func (c *Client) genID() string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012d", c.nextID)
 }
 
-func (c *Client) GetServer(_ context.Context, id string) (*server.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextGetServer); err != nil {
-		return nil, err
-	}
-	entry, ok := c.servers[id]
-	if !ok {
-		return nil, fmt.Errorf("server %q: %w", id, shared.ErrNotFound)
-	}
-	return cloneServer(entry.server), nil
-}
-
-func (c *Client) ListServersByTags(_ context.Context, tags map[string]string) ([]*server.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
-	}
-	servers := []*server.Server{}
-	for _, entry := range c.servers {
-		if shared.MapContains(entry.tags, tags) {
-			servers = append(servers, cloneServer(entry.server))
-		}
-	}
-	return servers, nil
-}
-
-// CreateServer creates a server in the fake store.
-func (c *Client) CreateServer(_ context.Context, input server.ServerSpec) (*server.Server, error) {
-	c.mu.Lock()
-	if c.BeforeCreateServer != nil {
-		c.mu.Unlock()
-		c.BeforeCreateServer()
-		c.mu.Lock()
-	}
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextCreateServer); err != nil {
-		return nil, err
-	}
-	for _, entry := range c.servers {
-		if len(input.Tags) > 0 && shared.MapContains(entry.tags, input.Tags) {
-			return cloneServer(entry.server), nil
-		}
-	}
-
-	entry := c.createServerEntry(input)
-	return cloneServer(entry.server), nil
-}
-
 func (c *Client) createServerEntry(input server.ServerSpec) *serverEntry {
 	id := c.genID()
 	c.LastCreateServerInput = input
@@ -267,18 +207,6 @@ func (c *Client) createServerEntry(input server.ServerSpec) *serverEntry {
 	c.servers[id] = entry
 	c.CreateServerCalls++
 	return entry
-}
-
-// DeleteServer removes a server. It returns nil if the server is already gone.
-func (c *Client) DeleteServer(_ context.Context, id string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteServer); err != nil {
-		return err
-	}
-	delete(c.servers, id)
-	return nil
 }
 
 func (c *Client) GetNetwork(_ context.Context, id string) (*network.Network, error) {
@@ -317,26 +245,6 @@ func (c *Client) getPublicIP(_ context.Context, id string) (*publicip.PublicIP, 
 	}
 	out := *entry.publicIP
 	return &out, nil
-}
-
-func (c *Client) ListPublicIPsByTags(_ context.Context, tags map[string]string) ([]*publicip.PublicIP, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextListPublicIPs); err != nil {
-		return nil, err
-	}
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
-	}
-	publicIPs := []*publicip.PublicIP{}
-	for _, entry := range c.publicIPs {
-		if shared.MapContains(entry.tags, tags) {
-			out := *entry.publicIP
-			publicIPs = append(publicIPs, &out)
-		}
-	}
-	return publicIPs, nil
 }
 
 func (c *Client) CreatePublicIP(_ context.Context, tags map[string]string) (*publicip.PublicIP, error) {
@@ -415,23 +323,6 @@ func (c *Client) removePublicIPFromServer(_ context.Context, serverID, publicIPI
 	return nil
 }
 
-func (c *Client) ListSecurityGroupsByTags(_ context.Context, tags map[string]string) ([]*securitygroup.SecurityGroup, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
-	}
-	securityGroups := []*securitygroup.SecurityGroup{}
-	for _, entry := range c.securityGroups {
-		if shared.MapContains(entry.tags, tags) {
-			out := *entry.securityGroup
-			securityGroups = append(securityGroups, &out)
-		}
-	}
-	return securityGroups, nil
-}
-
 func (c *Client) CreateSecurityGroup(_ context.Context, name string, tags map[string]string) (*securitygroup.SecurityGroup, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -454,24 +345,6 @@ func (c *Client) CreateLoadBalancer(_ context.Context, name string, tags map[str
 	}
 	out := *entry.lb
 	return &out, nil
-}
-
-func (c *Client) ListLoadBalancersByTags(_ context.Context, tags map[string]string) ([]*loadbalancer.LoadBalancer, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
-	}
-	wantLabels := loadbalancer.Labels(tags)
-	loadBalancers := []*loadbalancer.LoadBalancer{}
-	for _, entry := range c.loadBalancers {
-		if shared.MapContains(entry.tags, wantLabels) || shared.MapContains(entry.tags, tags) {
-			out := *entry.lb
-			loadBalancers = append(loadBalancers, &out)
-		}
-	}
-	return loadBalancers, nil
 }
 
 // ServerCount returns the number of currently tracked servers (test helper).
@@ -535,18 +408,6 @@ func (c *Client) ServerUserData(serverID string) []byte {
 		return nil
 	}
 	return append([]byte(nil), entry.userData...)
-}
-
-// SecurityGroupRemoteSources returns the remote security groups allowed by the
-// fake security group rules.
-func (c *Client) SecurityGroupRemoteSources(securityGroupID string) []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, ok := c.securityGroups[securityGroupID]
-	if !ok {
-		return nil
-	}
-	return append([]string(nil), entry.remoteSecurityGroups...)
 }
 
 // SecurityGroupRules returns the rules currently stored on a fake security group.
@@ -618,10 +479,6 @@ func securityGroupSet(ids []string) map[string]struct{} {
 	return out
 }
 
-func containsString(values []string, needle string) bool {
-	return slices.Contains(values, needle)
-}
-
 func (c *Client) ListAvailabilityZones(_ context.Context) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -632,15 +489,6 @@ func (c *Client) ListAvailabilityZones(_ context.Context) ([]string, error) {
 		return slices.Clone(c.AvailabilityZones), nil
 	}
 	return []string{"eu01-1", "eu01-2", "eu01-3"}, nil
-}
-
-func cloneServer(s *server.Server) *server.Server {
-	out := *s
-	if s.Addresses != nil {
-		out.Addresses = make([]server.Address, len(s.Addresses))
-		copy(out.Addresses, s.Addresses)
-	}
-	return &out
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -873,7 +721,8 @@ func (c *Client) createLoadBalancerEntry(name string, port int32, labels map[str
 	}
 	targetMap := map[string]string{}
 	if len(targets) == 0 {
-		targetMap[bootstrapTargetName] = bootstrapTargetIP
+		bootstrap := loadbalancer.BootstrapTarget("")
+		targetMap[bootstrap.Name] = bootstrap.IP
 	} else {
 		for _, target := range targets {
 			targetMap[target.Name] = target.IP
@@ -1510,12 +1359,6 @@ func (c *Client) createSecurityGroupRule(sgID string, rule securityGroupRuleEntr
 	rule.id = c.genID()
 	stored := rule
 	entry.rules[rule.id] = &stored
-	if rule.IPRange != "" && !containsString(entry.allowedCIDRs, rule.IPRange) {
-		entry.allowedCIDRs = append(entry.allowedCIDRs, rule.IPRange)
-	}
-	if rule.RemoteSecurityGroupID != "" && !containsString(entry.remoteSecurityGroups, rule.RemoteSecurityGroupID) {
-		entry.remoteSecurityGroups = append(entry.remoteSecurityGroups, rule.RemoteSecurityGroupID)
-	}
 	return fakeSecurityGroupRuleMap(&stored), nil
 }
 

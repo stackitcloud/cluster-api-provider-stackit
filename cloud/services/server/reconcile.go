@@ -144,6 +144,20 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
+// Create creates a new STACKIT server from the given spec.
+func (c *Client) Create(ctx context.Context, spec ServerSpec) (*Server, error) {
+	payload := spec.toCreatePayload()
+	created, err := c.IaaSClient().DefaultAPI.CreateServer(ctx, c.ProjectID(), c.Region()).
+		CreateServerPayload(payload).
+		Execute()
+	if err != nil {
+		return nil, shared.ClassifySDKError("create server", err)
+	}
+	out := c.serverFromSDK(ctx, created)
+	logf.FromContext(ctx).V(1).Info("Created server", "name", spec.Name, "serverID", out.ID)
+	return out, nil
+}
+
 func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
 	if spec.ID != "" {
 		srv, err := c.Get(ctx, spec.ID)
@@ -170,15 +184,10 @@ func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 		)
 	}
 
-	payload := spec.toCreatePayload()
-	created, err := c.IaaSClient().DefaultAPI.CreateServer(ctx, c.ProjectID(), c.Region()).
-		CreateServerPayload(payload).
-		Execute()
+	out, err := c.Create(ctx, spec)
 	if err != nil {
-		return nil, false, shared.ClassifySDKError("create server", err)
+		return nil, false, err
 	}
-	out := c.serverFromSDK(ctx, created)
-	logf.FromContext(ctx).V(1).Info("Created server", "name", spec.Name, "serverID", out.ID)
 	return out, true, nil
 }
 

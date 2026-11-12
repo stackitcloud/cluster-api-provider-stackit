@@ -216,9 +216,10 @@ func (s LoadBalancerSpec) toCreatePayload(region string) lb.CreateLoadBalancerPa
 	}
 	targets := make([]lb.Target, 0, max(1, len(seed)))
 	if len(seed) == 0 {
+		bootstrap := BootstrapTarget("")
 		target := lb.NewTarget()
-		target.SetDisplayName(bootstrapTargetName)
-		target.SetIp(bootstrapTargetIP)
+		target.SetDisplayName(bootstrap.Name)
+		target.SetIp(bootstrap.IP)
 		targets = append(targets, *target)
 	} else {
 		for _, targetInput := range seed {
