@@ -82,21 +82,49 @@ func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Serve
 
 // ListByTags lists STACKIT servers matching the given tag selector.
 func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Server, error) {
+	items, err := c.listSDKServersByTags(ctx, tags, true)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]*Server, 0, len(items))
+	for _, srv := range items {
+		matched = append(matched, c.serverFromSDK(ctx, &srv))
+	}
+	return matched, nil
+}
+
+// ListIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
+func (c *Client) ListIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
+	items, err := c.listSDKServersByTags(ctx, tags, false)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, srv := range items {
+		if id := srv.GetId(); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (c *Client) listSDKServersByTags(ctx context.Context, tags map[string]string, details bool) ([]iaas.Server, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.IaaSClient().DefaultAPI.ListServers(ctx, c.ProjectID(), c.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Details(true).
-		Execute()
+	req := c.IaaSClient().DefaultAPI.ListServers(ctx, c.ProjectID(), c.Region()).
+		LabelSelector(shared.LabelSelector(tags))
+	if details {
+		req = req.Details(true)
+	}
+	resp, err := req.Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list servers", err)
 	}
-	matched := []*Server{}
+	var matched []iaas.Server
 	for _, srv := range resp.GetItems() {
 		if shared.LabelsContainTags(srv.GetLabels(), tags) {
-			srv := srv
-			matched = append(matched, c.serverFromSDK(ctx, &srv))
+			matched = append(matched, srv)
 		}
 	}
 	return matched, nil

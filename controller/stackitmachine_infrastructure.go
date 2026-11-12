@@ -240,7 +240,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 
 	machineScope.SetCloudClient(cloudClient)
 	instanceID := stackitMachine.Status.InstanceID
-	if err := server.New(machineScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
+	if err := server.New(machineScope).Delete(ctx); err != nil {
 		log.Error(err, "Failed to delete server", "machine", stackitMachine.Name, "instanceID", instanceID)
 		record.Warnf(stackitMachine, "FailedDeleteInstance",
 			"Failed to delete server %s: %v", instanceID, err)

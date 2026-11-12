@@ -3118,7 +3118,7 @@ func appendUnique(values []string, additions ...string) []string {
 
 func cleanupCloudServersByID(ctx context.Context, cloudClient cloud.Client, instanceIDs []string) {
 	for _, instanceID := range instanceIDs {
-		if err := server.NewClient(cloudClient).DeleteByID(ctx, instanceID); err != nil && !shared.IsNotFound(err) {
+		if err := server.NewClient(cloudClient).DeleteByID(ctx, instanceID); err != nil {
 			_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup warning for %s: %v\n", instanceID, err)
 			continue
 		}

@@ -91,7 +91,7 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	})
 	lbClient := loadbalancer.NewClient(client)
 	t.Cleanup(func() {
-		if err := lbClient.DeleteByID(context.Background(), lbID); err != nil && !shared.IsNotFound(err) {
+		if err := lbClient.DeleteByID(context.Background(), lbID); err != nil {
 			t.Logf("DeleteByID() cleanup error = %v", err)
 		}
 	})
@@ -218,7 +218,6 @@ func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string
 	}
 	t.Cleanup(func() {
 		if err := loadbalancer.NewClient(client).DeleteByID(context.Background(), lbID); err != nil &&
-			!shared.IsNotFound(err) &&
 			!errors.Is(err, shared.ErrInvalidInput) {
 			t.Logf("DeleteByID() cleanup error = %v", err)
 		}

@@ -248,7 +248,7 @@ func (c *Client) detachSecurityGroupFromServers(ctx context.Context, securityGro
 	if len(spec.ServerSelector) == 0 {
 		return nil
 	}
-	serverIDs, err := c.listServerIDsByTags(ctx, spec.ServerSelector)
+	serverIDs, err := server.NewClient(c).ListIDsByTags(ctx, spec.ServerSelector)
 	if err != nil {
 		return err
 	}
@@ -265,20 +265,6 @@ func (c *Client) detachServers(ctx context.Context, securityGroupID string, serv
 		}
 	}
 	return nil
-}
-
-func (c *Client) listServerIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
-	servers, err := server.NewClient(c).ListByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	var serverIDs []string
-	for _, srv := range servers {
-		if srv.ID != "" {
-			serverIDs = append(serverIDs, srv.ID)
-		}
-	}
-	return serverIDs, nil
 }
 
 func (s SecurityGroupSpec) validate() error {

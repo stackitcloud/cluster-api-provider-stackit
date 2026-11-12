@@ -628,3 +628,27 @@ func TestServiceDelete(t *testing.T) {
 		}
 	})
 }
+
+func TestListIDsByTags(t *testing.T) {
+	svc := newTestService(t, server.ServerSpec{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers") {
+			if got := r.URL.Query().Get("details"); got != "false" {
+				t.Fatalf("details = %q, want false", got)
+			}
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
+				map[string]any{"id": testOtherServerID, "name": "node-1", "machineType": "c2i.2", "labels": map[string]any{"cluster": "other"}},
+			}})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}))
+
+	ids, err := svc.ListIDsByTags(context.Background(), map[string]string{"cluster": "test"})
+	if err != nil {
+		t.Fatalf("ListIDsByTags() error = %v", err)
+	}
+	if len(ids) != 1 || ids[0] != testServerID {
+		t.Fatalf("ListIDsByTags() = %v, want [%s]", ids, testServerID)
+	}
+}

@@ -51,7 +51,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		// the status keeps the tag-based cleanup to once per cluster.
 		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
-			if err := r.deleteBastionResources(ctx, clusterScope, false); err != nil {
+			if err := r.deleteBastionResources(ctx, clusterScope); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			clusterScope.ClearBastionStatus()
@@ -93,7 +93,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	clusterScope.SetBastionCloudInit(cloudInit, bastionCloudInitHash(cloudInit))
 
 	if bastionNeedsRecreate(stackitCluster, cloudInit) {
-		if err := r.deleteBastionResources(ctx, clusterScope, true); err != nil {
+		if err := r.deleteBastionResources(ctx, clusterScope); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		clusterScope.ClearBastionStatus()
@@ -184,24 +184,14 @@ func hasBastionStatus(status infrav1.StackitBastionStatus) bool {
 func (r *StackitClusterReconciler) deleteBastionResources(
 	ctx context.Context,
 	clusterScope *scope.ClusterScope,
-	ignoreNotFound bool,
 ) error {
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !shared.IsNotFound(err) {
-			return err
-		}
+		return err
 	}
 	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !shared.IsNotFound(err) {
-			return err
-		}
+		return err
 	}
-	if err := server.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !shared.IsNotFound(err) {
-			return err
-		}
-	}
-	return nil
+	return server.New(clusterScope).Delete(ctx)
 }
 
 func bastionNeedsRecreate(stackitCluster *infrav1.StackitCluster, cloudInit []byte) bool {
