@@ -37,11 +37,10 @@ func IsTargetPoolUpdateError(err error) bool {
 
 // LoadBalancer describes an API-server load balancer.
 type LoadBalancer struct {
-	ID      string
-	Name    string
-	IP      string
-	DNSName string
-	Port    int32
+	ID   string
+	Name string
+	IP   string
+	Port int32
 }
 
 // Target describes a VM target in the API-server load balancer target pool.

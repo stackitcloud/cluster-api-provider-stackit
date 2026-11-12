@@ -154,14 +154,4 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 		}
 	})
-
-	t.Run("Delete is a no-op", func(t *testing.T) {
-		svc := newTestService(t, network.NetworkSpec{}, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}))
-
-		if err := svc.Delete(context.Background()); err != nil {
-			t.Fatalf("Delete() error = %v, want nil", err)
-		}
-	})
 }

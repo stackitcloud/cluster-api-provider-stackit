@@ -16,7 +16,7 @@ import (
 )
 
 func TestNewProviderID(t *testing.T) {
-	got := NewProviderID("project-id", "eu01", "server-id")
+	got := NewProviderID("server-id")
 	want := "stackit://server-id"
 	if got != want {
 		t.Fatalf("NewProviderID() = %q, want %q", got, want)
@@ -54,9 +54,9 @@ func TestParseProviderIDInvalid(t *testing.T) {
 }
 
 func TestProviderIDRoundTrip(t *testing.T) {
-	wantProjectID, wantRegion, wantServerID := "project-id", "eu01", "server-id"
+	wantServerID := "server-id"
 
-	gotProjectID, gotRegion, gotServerID, err := ParseProviderID(NewProviderID(wantProjectID, wantRegion, wantServerID))
+	gotProjectID, gotRegion, gotServerID, err := ParseProviderID(NewProviderID(wantServerID))
 	if err != nil {
 		t.Fatalf("ParseProviderID(NewProviderID()) error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestProviderIDRoundTrip(t *testing.T) {
 
 func TestProviderIDMatchesCloudProviderStackitFormat(t *testing.T) {
 	serverID := "321a8b81-3660-43e5-bab8-6470b65ee4e8"
-	providerID := NewProviderID("project-id", "eu01", serverID)
+	providerID := NewProviderID(serverID)
 
 	// Verified against the local cloud-provider-stackit repository:
 	// pkg/ccm/instances.go uses fmt.Sprintf("%s://%s", ProviderName, server.GetId()).

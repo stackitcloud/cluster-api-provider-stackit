@@ -17,12 +17,6 @@ import (
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
-// Reconciler is a generic interface used by components offering a type of service.
-type Reconciler interface {
-	Reconcile(ctx context.Context) error
-	Delete(ctx context.Context) error
-}
-
 // Client is the abstraction over STACKIT cloud APIs used by the controllers.
 //
 // Implementations must:

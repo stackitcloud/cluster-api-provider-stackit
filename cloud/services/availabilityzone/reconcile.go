@@ -33,10 +33,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) Delete(_ context.Context) error {
-	return nil
-}
-
 // List retrieves the availability zones for the configured region.
 func (c *Client) List(ctx context.Context) ([]string, error) {
 	if c.region == "" {

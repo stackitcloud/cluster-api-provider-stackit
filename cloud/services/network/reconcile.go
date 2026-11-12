@@ -37,10 +37,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) Delete(_ context.Context) error {
-	return nil
-}
-
 // Get retrieves a STACKIT network by ID.
 func (c *Client) Get(ctx context.Context, id string) (*Network, error) {
 	if id == "" {

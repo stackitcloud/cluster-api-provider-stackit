@@ -31,7 +31,6 @@ type Server struct {
 	Name             string
 	State            string
 	PowerStatus      string
-	ProviderID       string
 	AvailabilityZone string
 	Addresses        []Address
 }

@@ -33,7 +33,7 @@ var ErrInvalidProviderID = errors.New("invalid providerID")
 // cloud-provider-stackit controller gets project and region from its own
 // configuration and then resolves Node.spec.providerID via GetServer(projectID,
 // region, serverID).
-func NewProviderID(projectID, region, serverID string) string {
+func NewProviderID(serverID string) string {
 	return fmt.Sprintf("%s%s", providerIDScheme, serverID)
 }
 
