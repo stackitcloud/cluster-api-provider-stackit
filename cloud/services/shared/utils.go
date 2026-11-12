@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package shared
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -53,6 +54,21 @@ func (c IaaSScope) Region() string {
 
 func (c IaaSScope) IaaSClient() *iaas.APIClient {
 	return c.iaasClient
+}
+
+// FindByTags lists resources by tags and returns the single matching item, or ErrNotFound if empty, or ErrConflict if more than one.
+func FindByTags[T any](
+	ctx context.Context,
+	tags map[string]string,
+	listByTags func(context.Context, map[string]string) ([]T, error),
+	singular, plural string,
+) (T, error) {
+	var zero T
+	matched, err := listByTags(ctx, tags)
+	if err != nil {
+		return zero, err
+	}
+	return FindSingle(matched, singular, plural)
 }
 
 // FindSingle returns the single item in matched, or ErrNotFound if empty, or ErrConflict if more than one.

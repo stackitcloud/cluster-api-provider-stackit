@@ -58,12 +58,9 @@ type SecurityGroupSpec struct {
 	SetID          func(string)
 }
 
-// ClientScope is an interface that provides the IaaS client and target scope for security group operations.
-type ClientScope = shared.IaaSClientScope
-
 // Scope is an interface that provides scope data needed for security group reconciliation.
 type Scope interface {
-	ClientScope
+	shared.IaaSClientScope
 	SecurityGroupSpecs() []SecurityGroupSpec
 }
 
@@ -73,7 +70,7 @@ type Client struct {
 }
 
 // NewClient returns a Client for the given scope.
-func NewClient(scope ClientScope) *Client {
+func NewClient(scope shared.IaaSClientScope) *Client {
 	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
 }
 

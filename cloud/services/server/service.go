@@ -66,12 +66,9 @@ type ServerSpec struct {
 	ClearServer      func()
 }
 
-// ClientScope is an interface that provides the IaaS client and target scope for server operations.
-type ClientScope = shared.IaaSClientScope
-
 // Scope is an interface that provides scope data needed for server reconciliation.
 type Scope interface {
-	ClientScope
+	shared.IaaSClientScope
 	ServerSpec() ServerSpec
 }
 
@@ -81,7 +78,7 @@ type Client struct {
 }
 
 // NewClient returns a Client for the given scope.
-func NewClient(scope ClientScope) *Client {
+func NewClient(scope shared.IaaSClientScope) *Client {
 	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
 }
 

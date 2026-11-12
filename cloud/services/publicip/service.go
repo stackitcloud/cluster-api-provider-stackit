@@ -28,12 +28,9 @@ type PublicIPSpec struct {
 	SetPublicIP    func(id, ip string)
 }
 
-// ClientScope is an interface that provides the IaaS client and target scope for public IP operations.
-type ClientScope = shared.IaaSClientScope
-
 // Scope is an interface that provides scope data needed for public IP reconciliation.
 type Scope interface {
-	ClientScope
+	shared.IaaSClientScope
 	PublicIPSpec() PublicIPSpec
 }
 
@@ -43,7 +40,7 @@ type Client struct {
 }
 
 // NewClient returns a Client for the given scope.
-func NewClient(scope ClientScope) *Client {
+func NewClient(scope shared.IaaSClientScope) *Client {
 	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
 }
 

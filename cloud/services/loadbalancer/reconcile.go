@@ -79,11 +79,7 @@ func (s *Service) Delete(ctx context.Context) error {
 
 // FindByTags finds a single STACKIT load balancer matching the given tag selector.
 func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
-	matched, err := c.ListByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	return shared.FindSingle(matched, "load balancer", "load balancers")
+	return shared.FindByTags(ctx, tags, c.ListByTags, "load balancer", "load balancers")
 }
 
 // ListByTags lists STACKIT load balancers matching the given tag selector.

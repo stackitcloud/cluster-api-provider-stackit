@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package shared
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -77,6 +78,50 @@ func TestFindSingle(t *testing.T) {
 		}
 		if got != "a" {
 			t.Fatalf("FindSingle() = %q, want %q", got, "a")
+		}
+	})
+}
+
+func TestFindByTags(t *testing.T) {
+	ctx := context.Background()
+	tags := map[string]string{"cluster": "test"}
+
+	t.Run("propagates error from listByTags", func(t *testing.T) {
+		_, err := FindByTags(ctx, tags, func(context.Context, map[string]string) ([]string, error) {
+			return nil, ErrTransient
+		}, "server", "servers")
+		if !IsTransient(err) {
+			t.Fatalf("FindByTags() error = %v, want ErrTransient", err)
+		}
+	})
+
+	t.Run("returns ErrNotFound when empty", func(t *testing.T) {
+		_, err := FindByTags(ctx, tags, func(context.Context, map[string]string) ([]string, error) {
+			return nil, nil
+		}, "server", "servers")
+		if !IsNotFound(err) {
+			t.Fatalf("FindByTags() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("returns ErrConflict when multiple", func(t *testing.T) {
+		_, err := FindByTags(ctx, tags, func(context.Context, map[string]string) ([]string, error) {
+			return []string{"a", "b"}, nil
+		}, "server", "servers")
+		if !IsConflict(err) {
+			t.Fatalf("FindByTags() error = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("returns single element", func(t *testing.T) {
+		got, err := FindByTags(ctx, tags, func(context.Context, map[string]string) ([]string, error) {
+			return []string{"a"}, nil
+		}, "server", "servers")
+		if err != nil {
+			t.Fatalf("FindByTags() error = %v", err)
+		}
+		if got != "a" {
+			t.Fatalf("FindByTags() = %q, want %q", got, "a")
 		}
 	})
 }

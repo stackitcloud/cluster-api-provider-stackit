@@ -46,11 +46,7 @@ func (s *Service) Delete(ctx context.Context) error {
 
 // FindByTags finds a single STACKIT security group matching the given tag selector.
 func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
-	matched, err := c.ListByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	return shared.FindSingle(matched, "security group", "security groups")
+	return shared.FindByTags(ctx, tags, c.ListByTags, "security group", "security groups")
 }
 
 // ListByTags lists STACKIT security groups matching the given tag selector.

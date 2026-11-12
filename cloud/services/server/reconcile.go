@@ -73,11 +73,7 @@ func (c *Client) Get(ctx context.Context, id string) (*Server, error) {
 
 // FindByTags finds a single STACKIT server matching the given tag selector.
 func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Server, error) {
-	matched, err := c.ListByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	return shared.FindSingle(matched, "server", "servers")
+	return shared.FindByTags(ctx, tags, c.ListByTags, "server", "servers")
 }
 
 // ListByTags lists STACKIT servers matching the given tag selector.
