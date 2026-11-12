@@ -246,6 +246,80 @@ func TestServiceReconcile(t *testing.T) {
 }
 
 func TestServiceReconcileReuseAndErrors(t *testing.T) {
+	t.Run("reuses existing load balancer found by ID without listing by tags", func(t *testing.T) {
+		var recordedID string
+		spec := loadbalancer.LoadBalancerSpec{
+			ID:        testLBName,
+			Name:      testLBName,
+			NetworkID: testNetworkID,
+			Port:      loadbalancer.DefaultAPIServerPort,
+			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
+			SetID: func(id string) {
+				recordedID = id
+			},
+		}
+
+		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName) {
+				writeJSON(t, w, sdkLoadBalancerJSON(testLBName, nil, nil))
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}))
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if recordedID != testLBName {
+			t.Fatalf("recordedID = %q, want %q", recordedID, testLBName)
+		}
+	})
+
+	t.Run("falls back to tag lookup when recorded ID is not found during reconcile", func(t *testing.T) {
+		var (
+			getByIDCalled bool
+			recordedID    string
+		)
+		spec := loadbalancer.LoadBalancerSpec{
+			ID:        "stale-lb",
+			Name:      testLBName,
+			NetworkID: testNetworkID,
+			Port:      loadbalancer.DefaultAPIServerPort,
+			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
+			SetID: func(id string) {
+				recordedID = id
+			},
+		}
+
+		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers/stale-lb"):
+				getByIDCalled = true
+				w.WriteHeader(http.StatusNotFound)
+				writeJSON(t, w, map[string]any{"message": "not found"})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):
+				writeJSON(t, w, map[string]any{"loadBalancers": []any{
+					sdkLoadBalancerJSON(testLBName, map[string]any{
+						"cluster.x-k8s.io.cluster-name": "test",
+					}, nil),
+				}})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if !getByIDCalled {
+			t.Fatal("expected GET by spec.ID before falling back to tag lookup")
+		}
+		if recordedID != testLBName {
+			t.Fatalf("recordedID = %q, want %q", recordedID, testLBName)
+		}
+	})
+
 	t.Run("reuses existing load balancer found by tags without creating duplicate", func(t *testing.T) {
 		var recordedID string
 		spec := loadbalancer.LoadBalancerSpec{

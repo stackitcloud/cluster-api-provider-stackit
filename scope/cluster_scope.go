@@ -255,7 +255,7 @@ func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 func (s *ClusterScope) AvailabilityZoneSpec() availabilityzone.AvailabilityZoneSpec {
 	return availabilityzone.AvailabilityZoneSpec{
 		SetZones: func(zones []string) {
-			s.SetFailureDomains(failureDomainsFromZones(s.StackitCluster.Spec.Region, zones))
+			s.SetFailureDomains(failureDomainsFromZones(s.Region(), zones))
 		},
 	}
 }

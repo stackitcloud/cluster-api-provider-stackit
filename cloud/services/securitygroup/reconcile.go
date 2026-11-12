@@ -44,6 +44,18 @@ func (s *Service) Delete(ctx context.Context) error {
 	return nil
 }
 
+// Get retrieves a STACKIT security group by ID.
+func (c *Client) Get(ctx context.Context, id string) (*SecurityGroup, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
+	}
+	securityGroup, err := c.IaaSClient().DefaultAPI.GetSecurityGroup(ctx, c.ProjectID(), c.Region(), id).Execute()
+	if err != nil {
+		return nil, shared.ClassifySDKError("get security group", err)
+	}
+	return securityGroupFromSDK(securityGroup), nil
+}
+
 // FindByTags finds a single STACKIT security group matching the given tag selector.
 func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
 	return shared.FindByTags(ctx, tags, c.ListByTags, "security group", "security groups")
@@ -199,6 +211,15 @@ func (c *Client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.
 }
 
 func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec) (*SecurityGroup, error) {
+	if spec.ID != "" {
+		securityGroup, err := c.Get(ctx, spec.ID)
+		if err == nil {
+			return securityGroup, nil
+		}
+		if !shared.IsNotFound(err) {
+			return nil, err
+		}
+	}
 	if existing, err := c.FindByTags(ctx, spec.Tags); err == nil {
 		return existing, nil
 	} else if !shared.IsNotFound(err) {

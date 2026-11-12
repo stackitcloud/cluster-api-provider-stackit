@@ -682,14 +682,29 @@ func (c *Client) getLoadBalancerItem(id string) (map[string]any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := consume(&c.FailNextSetTargets); err != nil {
-		return nil, err
-	}
 	entry, ok := c.loadBalancers[id]
 	if !ok {
 		return nil, fmt.Errorf("load balancer %q: %w", id, shared.ErrNotFound)
 	}
-	return fakeLoadBalancerMap(entry), nil
+	item := fakeLoadBalancerMap(entry)
+	// Force SetTargets to see a target diff and issue UpdateTargetPool so
+	// FailNextSetTargets is consumed on the target update call rather than Get.
+	if c.FailNextSetTargets != nil {
+		bootstrap := loadbalancer.BootstrapTarget("")
+		item["targetPools"] = []any{
+			map[string]any{
+				"name":       "apiserver",
+				"targetPort": entry.lb.Port,
+				"targets": []any{
+					map[string]any{
+						"displayName": bootstrap.Name,
+						"ip":          bootstrap.IP,
+					},
+				},
+			},
+		}
+	}
+	return item, nil
 }
 
 func (c *Client) createLoadBalancer(name string, port int32, labels map[string]string, targets []loadbalancer.Target) (map[string]any, error) {
@@ -948,6 +963,16 @@ func (c *Client) handleSecurityGroupRequest(rec *httptest.ResponseRecorder, r *h
 		sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
 		parts := strings.SplitN(sub, "/rules/", 2)
 		writeFakeStatus(rec, c.deleteSecurityGroupRule(parts[0], parts[1]))
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/security-groups/"):
+		id := path[strings.LastIndex(path, "/security-groups/")+len("/security-groups/"):]
+		got, err := c.getSecurityGroupItem(id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
 		return true
 
 	case r.Method == http.MethodDelete && strings.Contains(path, "/security-groups/"):
@@ -1312,6 +1337,20 @@ func (c *Client) createSecurityGroupEntry(name, description string, tags map[str
 	}
 	c.securityGroups[id] = entry
 	return entry, nil
+}
+
+func (c *Client) getSecurityGroupItem(id string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if id == "" {
+		return nil, fmt.Errorf("security group ID is empty: %w", shared.ErrInvalidInput)
+	}
+	entry, ok := c.securityGroups[id]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", id, shared.ErrNotFound)
+	}
+	return fakeSecurityGroupMap(entry), nil
 }
 
 func (c *Client) listSecurityGroupItems(tags map[string]string) ([]map[string]any, error) {

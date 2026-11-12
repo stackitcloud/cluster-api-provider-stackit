@@ -16,6 +16,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 )
 
 func TestDefaultAvailabilityZone(t *testing.T) {
@@ -64,5 +65,22 @@ func TestDefaultAvailabilityZone(t *testing.T) {
 				t.Fatalf("ServerSpec().AvailabilityZone = %q, want %q", got, test.wantAZ)
 			}
 		})
+	}
+}
+
+func TestAvailabilityZoneSpecUsesResolvedRegion(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+		CloudClient:    cloudfake.New(),
+	}
+
+	clusterScope.AvailabilityZoneSpec().SetZones([]string{"eu01-1"})
+
+	if len(clusterScope.StackitCluster.Status.FailureDomains) != 1 {
+		t.Fatalf("FailureDomains = %#v, want 1 entry", clusterScope.StackitCluster.Status.FailureDomains)
+	}
+	gotRegion := clusterScope.StackitCluster.Status.FailureDomains[0].Attributes["region"]
+	if gotRegion != "eu01" {
+		t.Fatalf("FailureDomains[0].Attributes[region] = %q, want %q", gotRegion, "eu01")
 	}
 }

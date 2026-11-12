@@ -77,6 +77,18 @@ func (s *Service) Delete(ctx context.Context) error {
 	return nil
 }
 
+// Get retrieves a STACKIT load balancer by ID.
+func (c *Client) Get(ctx context.Context, id string) (*LoadBalancer, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
+	}
+	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, id).Execute()
+	if err != nil {
+		return nil, shared.ClassifySDKError("get load balancer", err)
+	}
+	return loadBalancerFromSDK(loadBalancer), nil
+}
+
 // FindByTags finds a single STACKIT load balancer matching the given tag selector.
 func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
 	return shared.FindByTags(ctx, tags, c.ListByTags, "load balancer", "load balancers")
@@ -121,6 +133,15 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 }
 
 func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
+	if spec.ID != "" {
+		loadBalancer, err := c.Get(ctx, spec.ID)
+		if err == nil {
+			return loadBalancer, nil
+		}
+		if !shared.IsNotFound(err) && !isLoadBalancerServiceNotEnabled(err) {
+			return nil, err
+		}
+	}
 	if existing, err := c.FindByTags(ctx, spec.Tags); err == nil {
 		return existing, nil
 	} else if !shared.IsNotFound(err) && !isLoadBalancerServiceNotEnabled(err) {
@@ -160,9 +181,8 @@ func (c *Client) resolveLoadBalancerForDelete(ctx context.Context, spec LoadBala
 }
 
 func (c *Client) loadBalancerExists(ctx context.Context, id string) (bool, error) {
-	_, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, id).Execute()
+	_, err := c.Get(ctx, id)
 	if err != nil {
-		err := shared.ClassifySDKError("get load balancer", err)
 		if shared.IsNotFound(err) {
 			return false, nil
 		}

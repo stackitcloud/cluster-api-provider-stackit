@@ -177,6 +177,90 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("second rule payload = %#v", createdRulePayloads[1])
 		}
 	})
+}
+
+func TestServiceReconcileReuseAndErrors(t *testing.T) {
+	t.Run("reuses existing security group found by ID without listing by tags", func(t *testing.T) {
+		var recordedID string
+		specs := []securitygroup.SecurityGroupSpec{{
+			ID:   testSecurityGroupID,
+			Name: "cluster-sg",
+			Tags: map[string]string{"cluster": "test"},
+			SetID: func(id string) {
+				recordedID = id
+			},
+		}}
+
+		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
+				writeJSON(t, w, map[string]any{
+					"id":   testSecurityGroupID,
+					"name": "cluster-sg",
+				})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if recordedID != testSecurityGroupID {
+			t.Fatalf("recordedID = %q, want %q", recordedID, testSecurityGroupID)
+		}
+	})
+
+	t.Run("falls back to tag lookup when recorded ID is not found during reconcile", func(t *testing.T) {
+		var (
+			getByIDCalled bool
+			recordedID    string
+		)
+		staleID := "99999999-9999-4999-8999-999999999999"
+		specs := []securitygroup.SecurityGroupSpec{{
+			ID:   staleID,
+			Name: "cluster-sg",
+			Tags: map[string]string{"cluster": "test"},
+			SetID: func(id string) {
+				recordedID = id
+			},
+		}}
+
+		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+staleID):
+				getByIDCalled = true
+				w.WriteHeader(http.StatusNotFound)
+				writeJSON(t, w, map[string]any{"message": "not found"})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+				writeJSON(t, w, map[string]any{"items": []any{
+					map[string]any{
+						"id":     testSecurityGroupID,
+						"name":   "cluster-sg",
+						"labels": map[string]any{"cluster": "test"},
+					},
+				}})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if !getByIDCalled {
+			t.Fatal("expected GET by spec.ID before falling back to tag lookup")
+		}
+		if recordedID != testSecurityGroupID {
+			t.Fatalf("recordedID = %q, want %q", recordedID, testSecurityGroupID)
+		}
+	})
 
 	t.Run("reuses existing security group found by tags without creating duplicate", func(t *testing.T) {
 		specs := []securitygroup.SecurityGroupSpec{{
