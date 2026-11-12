@@ -17,6 +17,7 @@ import (
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -160,14 +161,14 @@ func (s *Service) resolveServerID(ctx context.Context) (string, error) {
 	if id := s.scope.BastionStatus().ServerID; id != "" {
 		return id, nil
 	}
-	server, err := s.client.FindServerByTags(ctx, s.scope.BastionTags())
+	srv, err := server.NewClient(s.scope).FindByTags(ctx, s.scope.BastionTags())
 	if err != nil {
 		if shared.IsNotFound(err) {
 			return "", nil
 		}
 		return "", err
 	}
-	return server.ID, nil
+	return srv.ID, nil
 }
 
 // ListByTags lists STACKIT public IPs matching the given tag selector.

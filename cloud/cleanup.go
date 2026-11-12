@@ -19,6 +19,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
@@ -30,10 +31,13 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 	}
 
 	var errs []string
+	srvClient := server.NewClient(client)
+	sgClient := securitygroup.NewClient(client)
+
 	bastionTags := make(map[string]string, len(tags)+1)
 	maps.Copy(bastionTags, tags)
 	bastionTags["cluster-api-provider-stackit/resource-role"] = "bastion"
-	bastionServers, err := client.ListServersByTags(ctx, bastionTags)
+	bastionServers, err := srvClient.ListByTags(ctx, bastionTags)
 	if err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -42,18 +46,15 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		errs = append(errs, err.Error())
 	} else {
 		for _, pubIP := range publicIPs {
-			for _, server := range bastionServers {
-				if err := publicip.DetachFromServer(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), server.ID, pubIP.ID); err != nil {
-					errs = append(errs, fmt.Sprintf("detach public IP %q from server %q: %v", pubIP.ID, server.ID, err))
+			for _, srv := range bastionServers {
+				if err := publicip.DetachFromServer(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), srv.ID, pubIP.ID); err != nil {
+					errs = append(errs, fmt.Sprintf("detach public IP %q from server %q: %v", pubIP.ID, srv.ID, err))
 				}
 			}
 			if err := publicip.DeleteByID(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), pubIP.ID); err != nil {
 				errs = append(errs, fmt.Sprintf("delete public IP %q: %v", pubIP.ID, err))
 			}
 		}
-	}
-	if err := client.DeleteBastion(ctx, BastionInput{Tags: bastionTags}, Bastion{}); err != nil && !IsNotFound(err) {
-		errs = append(errs, fmt.Sprintf("delete bastion resources: %v", err))
 	}
 
 	lbClient := loadbalancer.NewClient(client)
@@ -68,26 +69,33 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		}
 	}
 
-	servers, err := client.ListServersByTags(ctx, tags)
+	servers, err := srvClient.ListByTags(ctx, tags)
 	if err != nil {
 		errs = append(errs, err.Error())
-	} else {
-		for _, server := range servers {
-			if err := client.DeleteServer(ctx, server.ID); err != nil && !IsNotFound(err) {
-				errs = append(errs, fmt.Sprintf("delete server %q: %v", server.ID, err))
-			}
-		}
 	}
 
-	sgClient := securitygroup.NewClient(client)
 	securityGroups, err := sgClient.ListByTags(ctx, tags)
 	if err != nil {
 		errs = append(errs, err.Error())
 	} else {
 		for _, sg := range securityGroups {
-			if err := sgClient.DeleteByID(ctx, sg.ID); err != nil {
-				errs = append(errs, fmt.Sprintf("delete security group %q: %v", sg.ID, err))
+			for _, srv := range servers {
+				if err := sgClient.DetachFromServer(ctx, srv.ID, sg.ID); err != nil {
+					errs = append(errs, fmt.Sprintf("detach security group %q from server %q: %v", sg.ID, srv.ID, err))
+				}
 			}
+		}
+	}
+
+	for _, srv := range servers {
+		if err := srvClient.DeleteByID(ctx, srv.ID); err != nil {
+			errs = append(errs, fmt.Sprintf("delete server %q: %v", srv.ID, err))
+		}
+	}
+
+	for _, sg := range securityGroups {
+		if err := sgClient.DeleteByID(ctx, sg.ID); err != nil {
+			errs = append(errs, fmt.Sprintf("delete security group %q: %v", sg.ID, err))
 		}
 	}
 

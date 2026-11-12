@@ -20,94 +20,11 @@ import (
 )
 
 const (
-	testSDKProjectID     = "00000000-0000-0000-0000-000000000000"
-	testSDKRegion        = "eu01"
-	testSDKServerID      = "33333333-3333-4333-8333-333333333333"
-	testSDKNetworkID     = "11111111-1111-4111-8111-111111111111"
-	testSDKImageID       = "22222222-2222-4222-8222-222222222222"
-	testSDKSecurityGroup = "44444444-4444-4444-8444-444444444444"
-	testBoolTrue         = "true"
+	testSDKProjectID = "00000000-0000-0000-0000-000000000000"
+	testSDKRegion    = "eu01"
+	testSDKNetworkID = "11111111-1111-4111-8111-111111111111"
+	testBoolTrue     = "true"
 )
-
-func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
-	var createPayload map[string]any
-	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
-			if got := r.URL.Query().Get("label_selector"); got != "cluster=test" {
-				t.Fatalf("label_selector = %q, want cluster=test", got)
-			}
-			if got := r.URL.Query().Get("details"); got != testBoolTrue {
-				t.Fatalf("details = %q, want true", got)
-			}
-			writeJSON(t, w, map[string]any{"items": []any{}})
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/servers"):
-			createPayload = readJSON(t, r)
-			writeJSON(t, w, map[string]any{
-				"id":          testSDKServerID,
-				"machineType": "c2i.2",
-				"name":        "node-0",
-				"status":      "ACTIVE",
-			})
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers/"+testSDKServerID+"/nics"):
-			writeJSON(t, w, map[string]any{
-				"items": []any{
-					map[string]any{"ipv4": "10.0.0.10", "ipv6": "fd00::10"},
-				},
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}
-	}))
-
-	client := newTestSDKClient(t, server.URL)
-	created, err := client.CreateServer(context.Background(), CreateServerInput{
-		Name:             "node-0",
-		MachineType:      "c2i.2",
-		ImageID:          testSDKImageID,
-		AvailabilityZone: "eu01-1",
-		SSHKeyName:       "default",
-		NetworkID:        testSDKNetworkID,
-		SecurityGroups:   []string{testSDKSecurityGroup},
-		UserData:         []byte("#cloud-config\n"),
-		RootVolume: RootVolumeInput{
-			SizeGiB:             50,
-			PerformanceClass:    "storage_premium_perf6",
-			DeleteOnTermination: true,
-		},
-		Tags: map[string]string{"cluster": "test"},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer() error = %v", err)
-	}
-	if created.ID != testSDKServerID || created.Name != "node-0" || created.State != "ACTIVE" {
-		t.Fatalf("CreateServer() = %#v", created)
-	}
-	if len(created.Addresses) != 2 {
-		t.Fatalf("CreateServer() addresses = %#v, want two internal addresses", created.Addresses)
-	}
-
-	assertStringField(t, createPayload, "name", "node-0")
-	assertStringField(t, createPayload, "machineType", "c2i.2")
-	assertFieldAbsent(t, createPayload, "imageId")
-	assertStringField(t, createPayload, "availabilityZone", "eu01-1")
-	assertStringField(t, createPayload, "keypairName", "default")
-	assertStringField(t, createPayload, "userData", "I2Nsb3VkLWNvbmZpZwo=")
-	assertBoolField(t, createPayload, "configDrive", true)
-	assertNestedStringField(t, createPayload, []string{"labels", "cluster"}, "test")
-	assertNestedStringField(t, createPayload, []string{"networking", "networkId"}, testSDKNetworkID)
-	assertNestedStringField(t, createPayload, []string{"bootVolume", "performanceClass"}, "storage_premium_perf6")
-	assertNestedStringField(t, createPayload, []string{"bootVolume", "source", "id"}, testSDKImageID)
-	assertNestedStringField(t, createPayload, []string{"bootVolume", "source", "type"}, "image")
-	assertNestedNumberField(t, createPayload, []string{"bootVolume", "size"}, 50)
-}
-
-func assertFieldAbsent(t *testing.T, payload map[string]any, key string) {
-	t.Helper()
-	if _, ok := payload[key]; ok {
-		t.Fatalf("%s present in payload, want absent: %#v", key, payload[key])
-	}
-}
 
 func TestSDKClientClassifiesHTTPStatusCodes(t *testing.T) {
 	tests := []struct {
@@ -130,12 +47,12 @@ func TestSDKClientClassifiesHTTPStatusCodes(t *testing.T) {
 			}))
 			client := newTestSDKClient(t, server.URL)
 
-			_, err := client.GetServer(context.Background(), testSDKServerID)
+			_, err := client.GetNetwork(context.Background(), testSDKNetworkID)
 			if err == nil {
-				t.Fatal("GetServer() error = nil")
+				t.Fatal("GetNetwork() error = nil")
 			}
 			if !tt.check(err) {
-				t.Fatalf("GetServer() error = %v, did not match expected classifier", err)
+				t.Fatalf("GetNetwork() error = %v, did not match expected classifier", err)
 			}
 		})
 	}
@@ -170,201 +87,12 @@ func newTestSDKClient(t *testing.T, endpoint string) *SDKClient {
 	return sdkClient
 }
 
-func readJSON(t *testing.T, r *http.Request) map[string]any {
-	t.Helper()
-
-	var out map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
-		t.Fatalf("decode request body: %v", err)
-	}
-	return out
-}
-
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		t.Fatalf("encode response body: %v", err)
-	}
-}
-
-func assertStringField(t *testing.T, m map[string]any, key, want string) {
-	t.Helper()
-	if got := lookup(m, key); got != want {
-		t.Fatalf("%s = %#v, want %q in %#v", key, got, want, m)
-	}
-}
-
-func assertBoolField(t *testing.T, m map[string]any, key string, want bool) {
-	t.Helper()
-	if got := lookup(m, key); got != want {
-		t.Fatalf("%s = %#v, want %t in %#v", key, got, want, m)
-	}
-}
-
-func assertNestedStringField(t *testing.T, m map[string]any, path []string, want string) {
-	t.Helper()
-	if got := nestedValue(t, m, path); got != want {
-		t.Fatalf("%s = %#v, want %q in %#v", strings.Join(path, "."), got, want, m)
-	}
-}
-
-func assertNestedNumberField(t *testing.T, m map[string]any, path []string, want float64) {
-	t.Helper()
-	if got := nestedValue(t, m, path); got != want {
-		t.Fatalf("%s = %#v, want %v in %#v", strings.Join(path, "."), got, want, m)
-	}
-}
-
-func nestedValue(t *testing.T, m map[string]any, path []string) any {
-	t.Helper()
-
-	var current any = m
-	for _, part := range path {
-		switch typed := current.(type) {
-		case map[string]any:
-			current = lookup(typed, part)
-		case []any:
-			if len(part) != 1 || part[0] < '0' || part[0] > '9' {
-				t.Fatalf("path element %q cannot index %#v", part, typed)
-			}
-			index := int(part[0] - '0')
-			if index >= len(typed) {
-				t.Fatalf("path element %q out of range for %#v", part, typed)
-			}
-			current = typed[index]
-		default:
-			t.Fatalf("path element %q cannot descend into %#v", part, typed)
-		}
-	}
-	return current
-}
-
-func lookup(m map[string]any, key string) any {
-	for _, candidate := range []string{
-		key,
-		strings.ToUpper(key[:1]) + key[1:],
-	} {
-		if value, ok := m[candidate]; ok {
-			return value
-		}
-	}
-	return nil
-}
-
-// TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach guards the
-// idempotency of the security-group attach. The group is already in the create
-// payload, so the attach usually hits a duplicate ("400 Duplicate items in the
-// list") or a server without a port yet ("404 ... as device id on any ports").
-// Neither may abort EnsureBastion — that used to leave the public IP unassigned
-// for a full reconcile cycle. The attach itself is kept because CreateServer
-// short-circuits on an existing server, making this the only re-attach path.
-func TestSDKClientEnsureBastionToleratesDuplicateSecurityGroupAttach(t *testing.T) {
-	var (
-		createPayload   map[string]any
-		attachCallCount int
-	)
-	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
-			writeJSON(t, w, map[string]any{"items": []any{
-				map[string]any{
-					"id": testSDKSecurityGroup, "name": "bastion-ssh",
-					"labels": map[string]any{"cluster": "test"},
-				},
-			}})
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
-			writeJSON(t, w, map[string]any{"items": []any{}})
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/servers"):
-			createPayload = readJSON(t, r)
-			writeJSON(t, w, map[string]any{
-				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
-			})
-		case strings.Contains(path, "/security-groups/") && strings.Contains(path, "/servers/"):
-			// Answer the way the real API does for an already-attached group.
-			attachCallCount++
-			w.WriteHeader(http.StatusBadRequest)
-			writeJSON(t, w, map[string]any{
-				"code": 400,
-				"msg":  "request invalid: Invalid input for security_groups. Reason: Duplicate items in the list.",
-			})
-		case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
-			writeJSON(t, w, map[string]any{
-				"id": testSDKServerID, "name": "bastion", "status": "ACTIVE", "machineType": "c2i.1",
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}
-	}))
-
-	client := newTestSDKClient(t, server.URL)
-	bastion, err := client.EnsureBastion(context.Background(), BastionInput{
-		Name:             "bastion",
-		ProjectID:        testSDKProjectID,
-		Region:           testSDKRegion,
-		NetworkID:        testSDKNetworkID,
-		ImageID:          testSDKImageID,
-		MachineType:      "c2i.1",
-		AvailabilityZone: "eu01-1",
-		SSHKeyName:       "default",
-		AllowedCIDRs:     []string{"203.0.113.0/24"},
-		Tags:             map[string]string{"cluster": "test"},
-	})
-	if err != nil {
-		t.Fatalf("EnsureBastion() error = %v", err)
-	}
-
-	if attachCallCount != 1 {
-		t.Fatalf("attach attempted %d time(s), want exactly 1 (the idempotent re-attach)", attachCallCount)
-	}
-	assertStringField(t, createPayload, "availabilityZone", "eu01-1")
-	groups, _ := createPayload["securityGroups"].([]any)
-	if len(groups) != 1 || groups[0] != testSDKSecurityGroup {
-		t.Fatalf("create payload securityGroups = %v, want [%s]", createPayload["securityGroups"], testSDKSecurityGroup)
-	}
-	if bastion.ServerID != testSDKServerID {
-		t.Fatalf("bastion.ServerID = %q, want %s", bastion.ServerID, testSDKServerID)
-	}
-}
-
-func TestSDKClientDeleteBastionDetachesSecurityGroupWithoutDeletingIt(t *testing.T) {
-	var (
-		detachedServerID string
-		detachedSGID     string
-		deletedServerID  string
-	)
-	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		switch {
-		case r.Method == http.MethodDelete && strings.Contains(path, "/servers/") && strings.Contains(path, "/security-groups/"):
-			parts := strings.Split(path, "/servers/")
-			sub := strings.Split(parts[1], "/security-groups/")
-			detachedServerID, detachedSGID = sub[0], sub[1]
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testSDKServerID):
-			deletedServerID = testSDKServerID
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}
-	}))
-
-	client := newTestSDKClient(t, server.URL)
-	err := client.DeleteBastion(
-		context.Background(),
-		BastionInput{Tags: map[string]string{"cluster": "test"}},
-		Bastion{ServerID: testSDKServerID, SecurityGroupID: testSDKSecurityGroup},
-	)
-	if err != nil {
-		t.Fatalf("DeleteBastion() error = %v", err)
-	}
-	if detachedServerID != testSDKServerID || detachedSGID != testSDKSecurityGroup {
-		t.Fatalf("detached (%q, %q), want (%q, %q)", detachedServerID, detachedSGID, testSDKServerID, testSDKSecurityGroup)
-	}
-	if deletedServerID != testSDKServerID {
-		t.Fatalf("deletedServerID = %q, want %q", deletedServerID, testSDKServerID)
 	}
 }
 

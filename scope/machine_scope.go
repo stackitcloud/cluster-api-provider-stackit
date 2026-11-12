@@ -22,6 +22,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
@@ -34,6 +35,10 @@ type MachineScope struct {
 	StackitCluster *infrav1.StackitCluster
 	StackitMachine *infrav1.StackitMachine
 	CloudClient    cloud.Client
+
+	bootstrapData       []byte
+	instancePowerStatus string
+	instanceCreated     bool
 
 	patchHelper *patch.Helper
 }
@@ -96,11 +101,11 @@ func (s *MachineScope) Tags() map[string]string {
 	)
 }
 
-func (s *MachineScope) SetInstance(server *cloud.Server) string {
-	providerID := cloud.NewProviderID(s.StackitCluster.Spec.ProjectID, s.StackitCluster.Spec.Region, server.ID)
-	s.StackitMachine.Status.InstanceID = server.ID
-	s.StackitMachine.Status.InstanceState = server.State
-	s.StackitMachine.Status.AvailabilityZone = server.AvailabilityZone
+func (s *MachineScope) SetInstance(srv *cloud.Server) string {
+	providerID := cloud.NewProviderID(s.StackitCluster.Spec.ProjectID, s.StackitCluster.Spec.Region, srv.ID)
+	s.StackitMachine.Status.InstanceID = srv.ID
+	s.StackitMachine.Status.InstanceState = srv.State
+	s.StackitMachine.Status.AvailabilityZone = srv.AvailabilityZone
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
@@ -155,6 +160,42 @@ func (s *MachineScope) IaaSClient() *iaas.APIClient {
 	return s.CloudClient.IaaSClient()
 }
 
+func (s *MachineScope) SetBootstrapData(data []byte) {
+	s.bootstrapData = data
+}
+
+func (s *MachineScope) InstancePowerStatus() string {
+	return s.instancePowerStatus
+}
+
+func (s *MachineScope) InstanceCreated() bool {
+	return s.instanceCreated
+}
+
+func (s *MachineScope) ServerSpec() server.ServerSpec {
+	return server.ServerSpec{
+		ID:               s.StackitMachine.Status.InstanceID,
+		Name:             s.StackitMachine.Name,
+		ImageID:          s.StackitMachine.Spec.ImageID,
+		MachineType:      s.StackitMachine.Spec.MachineType,
+		AvailabilityZone: s.AvailabilityZone(),
+		SSHKeyName:       s.StackitMachine.Spec.SSHKeyName,
+		NetworkID:        s.StackitMachine.Spec.Network.ID,
+		SecurityGroups:   s.StackitMachine.Spec.SecurityGroups,
+		UserData:         s.bootstrapData,
+		Tags:             s.Tags(),
+		RootVolume:       rootVolumeFromSpec(s.StackitMachine.Spec.RootVolume),
+		DisallowRecreate: s.StackitMachine.Status.Initialization.Provisioned,
+		SetServer: func(srv *server.Server, created bool) {
+			s.instanceCreated = created
+			s.instancePowerStatus = srv.PowerStatus
+			s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
+			s.SetInstance(srv)
+		},
+		ClearServer: s.ClearInstance,
+	}
+}
+
 func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	return []securitygroup.SecurityGroupSpec{
 		nodeSSHSecurityGroupSpec(
@@ -163,4 +204,19 @@ func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 			s.StackitMachine.Status.InstanceID,
 		),
 	}
+}
+
+func machineAddressesFromServer(in []server.Address) []clusterv1.MachineAddress {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]clusterv1.MachineAddress, len(in))
+	for i, address := range in {
+		out[i] = clusterv1.MachineAddress{
+			Type:    clusterv1.MachineAddressType(address.Type),
+			Address: address.Address,
+		}
+	}
+	return out
 }

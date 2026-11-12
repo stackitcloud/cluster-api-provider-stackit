@@ -17,14 +17,17 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
 // Server describes a STACKIT compute instance in provider-neutral terms.
-type Server = shared.Server
+type Server = server.Server
 
 // Address is an IP or DNS endpoint of a Server.
-type Address = shared.Address
+type Address = server.Address
+
+// RootVolume describes the root disk of a VM.
+type RootVolume = server.RootVolume
 
 // Network is an existing STACKIT virtual network referenced by the provider.
 type Network struct {
@@ -41,54 +44,6 @@ type PublicIP = publicip.PublicIP
 
 // SecurityGroup describes a STACKIT security group.
 type SecurityGroup = securitygroup.SecurityGroup
-
-// Bastion describes the provider-managed SSH bastion resources.
-type Bastion struct {
-	ServerID          string
-	ServerState       string
-	ServerPowerStatus string
-	SecurityGroupID   string
-}
-
-// CreateServerInput holds all parameters required to create a new VM.
-type CreateServerInput struct {
-	Name             string
-	ProjectID        string
-	Region           string
-	ImageID          string
-	MachineType      string
-	AvailabilityZone string
-	SSHKeyName       string
-	NetworkID        string
-	SecurityGroups   []string
-	UserData         []byte
-	Tags             map[string]string
-	RootVolume       RootVolumeInput
-}
-
-// BastionInput holds all parameters required to ensure a bastion host.
-type BastionInput struct {
-	Name             string
-	ProjectID        string
-	Region           string
-	NetworkID        string
-	ImageID          string
-	MachineType      string
-	AvailabilityZone string
-	SSHKeyName       string
-	AllowedCIDRs     []string
-	SecurityGroupID  string
-	Tags             map[string]string
-	RootVolume       RootVolumeInput
-	CloudInit        []byte
-}
-
-// RootVolumeInput describes the root disk of a VM.
-type RootVolumeInput struct {
-	SizeGiB             int
-	PerformanceClass    string
-	DeleteOnTermination bool
-}
 
 // LoadBalancerTargetInput describes a VM target in the API-server load
 // balancer target pool.

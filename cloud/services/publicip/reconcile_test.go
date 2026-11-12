@@ -24,6 +24,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
@@ -99,7 +100,7 @@ func TestServiceReconcile(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})
@@ -137,7 +138,7 @@ func TestServiceReconcile(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})
@@ -171,7 +172,7 @@ func TestServiceReconcile(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})
@@ -203,7 +204,7 @@ func TestServiceReconcile(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})
@@ -261,7 +262,7 @@ func TestServiceDelete(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})
@@ -300,7 +301,7 @@ func TestServiceDelete(t *testing.T) {
 		fakeCloud := cloudfake.New()
 		clusterScope := newTestClusterScope(t, true, fakeCloud)
 
-		server, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		server, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name: "test-cluster-bastion",
 			Tags: clusterScope.BastionTags(),
 		})

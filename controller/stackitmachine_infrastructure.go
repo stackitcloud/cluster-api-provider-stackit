@@ -30,11 +30,10 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
-
-var errInstanceGone = errors.New("instance gone")
 
 func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineScope *scope.MachineScope) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -94,8 +93,9 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	machineScope.SetCloudClient(cloudClient)
 	machineScope.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
-	server, created, err := r.ensureServer(ctx, cloudClient, machineScope, bootstrapData)
-	if errors.Is(err, errInstanceGone) {
+	machineScope.SetBootstrapData(bootstrapData)
+	err = server.New(machineScope).Reconcile(ctx)
+	if server.IsServerGone(err) {
 		machineScope.SetNotReady(
 			"InstanceNotFound",
 			err.Error(),
@@ -138,17 +138,13 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 			infrav1.MachineReadyCondition,
 		)
 	}
-	if created {
+	if machineScope.InstanceCreated() {
 		record.Eventf(
-			stackitMachine, "InstanceCreated", "Created instance %s", server.ID,
+			stackitMachine, "InstanceCreated", "Created instance %s", stackitMachine.Status.InstanceID,
 		)
 	}
 
-	stackitMachine.Status.InstanceState = server.State
-	stackitMachine.Status.Addresses = machineAddressesFromCloud(server.Addresses)
-	providerID := machineScope.SetInstance(server)
-
-	if ready, reason, message, warn := serverStateCondition(server.State, server.PowerStatus); !ready {
+	if ready, reason, message, warn := serverStateCondition(stackitMachine.Status.InstanceState, machineScope.InstancePowerStatus()); !ready {
 		previousReason := ""
 		if previous := meta.FindStatusCondition(stackitMachine.Status.Conditions, infrav1.MachineInstanceReadyCondition); previous != nil {
 			previousReason = previous.Reason
@@ -156,16 +152,16 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		machineScope.SetNotReady(reason, message, infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
 		// Only warn on entering the state, not on every requeue.
 		if warn && previousReason != reason {
-			record.Warnf(stackitMachine, reason, "Server %s: %s", server.ID, message)
+			record.Warnf(stackitMachine, reason, "Server %s: %s", stackitMachine.Status.InstanceID, message)
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err := r.reconcileBastionNodeSSHAccess(ctx, machineScope, server); err != nil {
+	if err := r.reconcileBastionNodeSSHAccess(ctx, machineScope); err != nil {
 		log.Error(err, "Failed to configure bastion SSH access for node", "machine", stackitMachine.Name)
 		record.Warnf(
 			stackitMachine, "FailedNodeSSHAccess",
-			"Failed to configure bastion SSH access for server %s: %v", server.ID, err,
+			"Failed to configure bastion SSH access for server %s: %v", stackitMachine.Status.InstanceID, err,
 		)
 		machineScope.SetNotReady("BastionSSHAccessError", err.Error(), infrav1.MachineReadyCondition)
 		return util.CloudFailureResult(
@@ -180,7 +176,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	}
 
 	machineScope.SetReady()
-	log.V(1).Info("StackitMachine ready", "providerID", providerID)
+	log.V(1).Info("StackitMachine ready", "providerID", stackitMachine.Status.ProviderID)
 	return ctrl.Result{}, nil
 }
 
@@ -242,49 +238,21 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 		return resultErr
 	}
 
-	instanceID, err := r.resolveServerForDeletion(ctx, cloudClient, machineScope)
-	if err != nil {
-		log.Error(err, "Failed to resolve server for deletion", "machine", stackitMachine.Name)
-		record.Warnf(stackitMachine, "FailedResolveInstance",
-			"Failed to resolve server for deletion: %v", err)
+	machineScope.SetCloudClient(cloudClient)
+	instanceID := stackitMachine.Status.InstanceID
+	if err := server.New(machineScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+		log.Error(err, "Failed to delete server", "machine", stackitMachine.Name, "instanceID", instanceID)
+		record.Warnf(stackitMachine, "FailedDeleteInstance",
+			"Failed to delete server %s: %v", instanceID, err)
 		return err
 	}
 	if instanceID != "" {
-		if err := cloudClient.DeleteServer(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
-			log.Error(err, "Failed to delete server", "machine", stackitMachine.Name, "instanceID", instanceID)
-			record.Warnf(stackitMachine, "FailedDeleteInstance",
-				"Failed to delete server %s: %v", instanceID, err)
-			return err
-		}
-		machineScope.ClearInstance()
 		record.Eventf(
 			stackitMachine, "InstanceDeleted", "Deleted instance %s", instanceID,
 		)
 	}
 	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
 	return nil
-}
-
-// resolveServerForDeletion reports the ID of the server backing this machine, or
-// an empty string once the cloud confirms none exists. It falls back to the tags,
-// which carry the Machine UID, because a lost status patch can leave a running
-// server that status.instanceID no longer names.
-func (r *StackitMachineReconciler) resolveServerForDeletion(
-	ctx context.Context,
-	cloudClient cloud.Client,
-	machineScope *scope.MachineScope,
-) (string, error) {
-	if instanceID := machineScope.StackitMachine.Status.InstanceID; instanceID != "" {
-		return instanceID, nil
-	}
-	server, err := cloudClient.FindServerByTags(ctx, machineScope.Tags())
-	if err != nil {
-		if cloud.IsNotFound(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	return server.ID, nil
 }
 
 func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machine *clusterv1.Machine) ([]byte, metav1.ConditionStatus, string, string) {
@@ -306,67 +274,9 @@ func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machi
 	return data, metav1.ConditionTrue, "Available", ""
 }
 
-func (r *StackitMachineReconciler) ensureServer(
-	ctx context.Context,
-	cloudClient cloud.Client,
-	machineScope *scope.MachineScope,
-	userData []byte,
-) (*cloud.Server, bool, error) {
-	stackitMachine := machineScope.StackitMachine
-	tags := machineScope.Tags()
-	if stackitMachine.Status.InstanceID != "" {
-		server, err := cloudClient.GetServer(ctx, stackitMachine.Status.InstanceID)
-		if err == nil {
-			return server, false, nil
-		}
-		if !cloud.IsNotFound(err) {
-			return nil, false, err
-		}
-	}
-	if server, err := cloudClient.FindServerByTags(ctx, tags); err == nil {
-		return server, false, nil
-	} else if !cloud.IsNotFound(err) {
-		return nil, false, err
-	}
-
-	// Recreating the server would replay bootstrap data pinned to the previous
-	// identity, so surface the loss and let Cluster API replace the Machine.
-	if stackitMachine.Status.Initialization.Provisioned {
-		return nil, false, fmt.Errorf(
-			"%w: server %s; the Machine must be replaced",
-			errInstanceGone, stackitMachine.Status.InstanceID,
-		)
-	}
-
-	deleteOnTermination := true
-	if stackitMachine.Spec.RootVolume.DeleteOnTermination != nil {
-		deleteOnTermination = *stackitMachine.Spec.RootVolume.DeleteOnTermination
-	}
-	server, err := cloudClient.CreateServer(ctx, cloud.CreateServerInput{
-		Name:             stackitMachine.Name,
-		ProjectID:        machineScope.StackitCluster.Spec.ProjectID,
-		Region:           machineScope.StackitCluster.Spec.Region,
-		ImageID:          stackitMachine.Spec.ImageID,
-		MachineType:      stackitMachine.Spec.MachineType,
-		AvailabilityZone: machineScope.AvailabilityZone(),
-		SSHKeyName:       stackitMachine.Spec.SSHKeyName,
-		NetworkID:        stackitMachine.Spec.Network.ID,
-		SecurityGroups:   stackitMachine.Spec.SecurityGroups,
-		UserData:         userData,
-		Tags:             tags,
-		RootVolume: cloud.RootVolumeInput{
-			SizeGiB:             stackitMachine.Spec.RootVolume.SizeGiB,
-			PerformanceClass:    stackitMachine.Spec.RootVolume.PerformanceClass,
-			DeleteOnTermination: deleteOnTermination,
-		},
-	})
-	return server, true, err
-}
-
 func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	ctx context.Context,
 	machineScope *scope.MachineScope,
-	server *cloud.Server,
 ) error {
 	if !machineScope.StackitCluster.Spec.Bastion.Enabled {
 		return nil
@@ -374,7 +284,7 @@ func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 	if machineScope.StackitCluster.Status.Bastion.SecurityGroupID == "" {
 		return fmt.Errorf("%w: bastion security group ID is empty", cloud.ErrTransient)
 	}
-	if server == nil || server.ID == "" {
+	if machineScope.StackitMachine.Status.InstanceID == "" {
 		return fmt.Errorf("%w: server ID is empty", cloud.ErrTransient)
 	}
 	return securitygroup.New(machineScope).Reconcile(ctx)
@@ -393,19 +303,4 @@ func (r *StackitMachineReconciler) getStackitCluster(ctx context.Context, cluste
 		return nil, fmt.Errorf("get StackitCluster %s: %w", key, err)
 	}
 	return stackitCluster, nil
-}
-
-func machineAddressesFromCloud(in []cloud.Address) []clusterv1.MachineAddress {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make([]clusterv1.MachineAddress, len(in))
-	for i, address := range in {
-		out[i] = clusterv1.MachineAddress{
-			Type:    clusterv1.MachineAddressType(address.Type),
-			Address: address.Address,
-		}
-	}
-	return out
 }

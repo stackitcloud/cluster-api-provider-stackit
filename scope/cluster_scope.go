@@ -27,6 +27,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
@@ -43,6 +44,11 @@ type ClusterScope struct {
 
 	loadBalancerTargets     []loadbalancer.Target
 	loadBalancerSeedTargets []loadbalancer.Target
+
+	bastionCloudInit         []byte
+	bastionCloudInitHash     string
+	bastionServerState       string
+	bastionServerPowerStatus string
 
 	patchHelper *patch.Helper
 }
@@ -97,12 +103,50 @@ func (s *ClusterScope) SetAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {
 	s.StackitCluster.Status.APIServerEndpoint = endpoint
 }
 
-func (s *ClusterScope) SetBastionStatus(bastion *cloud.Bastion, cloudInitHash string) {
-	s.StackitCluster.Status.Bastion.ServerID = bastion.ServerID
-	if bastion.SecurityGroupID != "" {
-		s.StackitCluster.Status.Bastion.SecurityGroupID = bastion.SecurityGroupID
+func (s *ClusterScope) SetBastionCloudInit(cloudInit []byte, cloudInitHash string) {
+	s.bastionCloudInit = cloudInit
+	s.bastionCloudInitHash = cloudInitHash
+}
+
+func (s *ClusterScope) BastionServerState() (state, powerStatus string) {
+	return s.bastionServerState, s.bastionServerPowerStatus
+}
+
+func (s *ClusterScope) ServerSpec() server.ServerSpec {
+	return server.ServerSpec{
+		ID:               s.StackitCluster.Status.Bastion.ServerID,
+		Name:             s.StackitCluster.Name + "-bastion",
+		ImageID:          s.StackitCluster.Spec.Bastion.ImageID,
+		MachineType:      s.StackitCluster.Spec.Bastion.MachineType,
+		AvailabilityZone: DefaultAvailabilityZone(s.StackitCluster),
+		SSHKeyName:       s.StackitCluster.Spec.Bastion.SSHKeyName,
+		NetworkID:        s.StackitCluster.Spec.Network.ID,
+		UserData:         s.bastionCloudInit,
+		Tags:             s.BastionTags(),
+		RootVolume:       rootVolumeFromSpec(s.StackitCluster.Spec.Bastion.RootVolume),
+		SetServer: func(srv *server.Server, _ bool) {
+			s.bastionServerState = srv.State
+			s.bastionServerPowerStatus = srv.PowerStatus
+			s.StackitCluster.Status.Bastion.ServerID = srv.ID
+			s.StackitCluster.Status.Bastion.CloudInitHash = s.bastionCloudInitHash
+		},
+		ClearServer: func() {
+			s.StackitCluster.Status.Bastion.ServerID = ""
+			s.StackitCluster.Status.Bastion.CloudInitHash = ""
+		},
 	}
-	s.StackitCluster.Status.Bastion.CloudInitHash = cloudInitHash
+}
+
+func rootVolumeFromSpec(in infrav1.StackitRootVolumeSpec) server.RootVolume {
+	deleteOnTermination := true
+	if in.DeleteOnTermination != nil {
+		deleteOnTermination = *in.DeleteOnTermination
+	}
+	return server.RootVolume{
+		SizeGiB:             in.SizeGiB,
+		PerformanceClass:    in.PerformanceClass,
+		DeleteOnTermination: deleteOnTermination,
+	}
 }
 
 func (s *ClusterScope) SetBastionSecurityGroupID(id string) {
@@ -137,10 +181,6 @@ func DefaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
 		return stackitCluster.Spec.Region + "-1"
 	}
 	return ""
-}
-
-func (s *ClusterScope) Cloud() cloud.Client {
-	return s.CloudClient
 }
 
 func (s *ClusterScope) SetCloudClient(cloudClient cloud.Client) {
@@ -253,12 +293,14 @@ func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	})
 	return []securitygroup.SecurityGroupSpec{
 		{
-			ID:          s.StackitCluster.Status.Bastion.SecurityGroupID,
-			Name:        s.StackitCluster.Name + "-bastion-ssh",
-			Description: "Cluster API Provider STACKIT bastion SSH access",
-			Tags:        s.BastionTags(),
-			Rules:       rules,
-			SetID:       s.SetBastionSecurityGroupID,
+			ID:             s.StackitCluster.Status.Bastion.SecurityGroupID,
+			Name:           s.StackitCluster.Name + "-bastion-ssh",
+			Description:    "Cluster API Provider STACKIT bastion SSH access",
+			Tags:           s.BastionTags(),
+			Rules:          rules,
+			ServerIDs:      []string{s.StackitCluster.Status.Bastion.ServerID},
+			ServerSelector: s.BastionTags(),
+			SetID:          s.SetBastionSecurityGroupID,
 		},
 		nodeSSHSecurityGroupSpec(s.StackitCluster, ""),
 	}

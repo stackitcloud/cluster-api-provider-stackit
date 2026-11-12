@@ -11,12 +11,9 @@ You may obtain a copy of the License at
 package publicip
 
 import (
-	"context"
-
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 // PublicIP describes a STACKIT public IP resource.
@@ -26,18 +23,8 @@ type PublicIP struct {
 	NetworkInterfaceID string
 }
 
-// Client defines the cloud API operations required by the public IP service.
-type Client interface {
-	FindServerByTags(ctx context.Context, tags map[string]string) (*shared.Server, error)
-}
-
 // Scope is an interface that provides cluster scope data needed for public IP reconciliation.
-type Scope[C Client] interface {
-	scopeData
-	Cloud() C
-}
-
-type scopeData interface {
+type Scope interface {
 	ProjectID() string
 	Region() string
 	IaaSClient() *iaas.APIClient
@@ -49,16 +36,14 @@ type scopeData interface {
 
 // Service implements public IPs reconciler.
 type Service struct {
-	scope      scopeData
-	client     Client
+	scope      Scope
 	iaasClient *iaas.APIClient
 }
 
 // New returns Service from given scope.
-func New[C Client](scope Scope[C]) *Service {
+func New(scope Scope) *Service {
 	return &Service{
 		scope:      scope,
-		client:     scope.Cloud(),
 		iaasClient: scope.IaaSClient(),
 	}
 }

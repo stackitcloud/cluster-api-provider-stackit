@@ -8,7 +8,7 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-package bastion
+package scope
 
 import (
 	"testing"
@@ -18,7 +18,7 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 )
 
-func TestInputAvailabilityZone(t *testing.T) {
+func TestDefaultAvailabilityZone(t *testing.T) {
 	tests := []struct {
 		name           string
 		region         string
@@ -59,9 +59,9 @@ func TestInputAvailabilityZone(t *testing.T) {
 					FailureDomains: test.failureDomains,
 				},
 			}
-			input := Input(cluster, nil)
-			if input.AvailabilityZone != test.wantAZ {
-				t.Fatalf("Input().AvailabilityZone = %q, want %q", input.AvailabilityZone, test.wantAZ)
+			clusterScope := &ClusterScope{StackitCluster: cluster}
+			if got := clusterScope.ServerSpec().AvailabilityZone; got != test.wantAZ {
+				t.Fatalf("ServerSpec().AvailabilityZone = %q, want %q", got, test.wantAZ)
 			}
 		})
 	}

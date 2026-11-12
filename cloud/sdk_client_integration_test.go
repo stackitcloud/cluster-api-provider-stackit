@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
 const (
@@ -36,16 +37,16 @@ const (
 func TestSDKClientCredentialsIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 
-	_, err := client.FindServerByTags(context.Background(), map[string]string{
+	_, err := server.NewClient(client).FindByTags(context.Background(), map[string]string{
 		"capistackit-test": "credential-check",
 	})
 	if IsNotFound(err) {
 		return
 	}
 	if err != nil {
-		t.Fatalf("FindServerByTags() error = %v", err)
+		t.Fatalf("FindByTags() error = %v", err)
 	}
-	t.Fatal("FindServerByTags() unexpectedly found a server matching integration-test tags")
+	t.Fatal("FindByTags() unexpectedly found a server matching integration-test tags")
 }
 
 func TestSDKClientListNetworksIntegration(t *testing.T) {

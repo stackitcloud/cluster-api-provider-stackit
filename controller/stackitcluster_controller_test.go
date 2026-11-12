@@ -29,6 +29,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -202,7 +203,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		nodeSGs, err := fakeCloud.ListSecurityGroupsByTags(ctx, scope.NodeSSHTags(got))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(nodeSGs).To(HaveLen(1))
-		workerServer, err := fakeCloud.CreateServer(ctx, cloud.CreateServerInput{
+		workerServer, err := fakeCloud.CreateServer(ctx, server.ServerSpec{
 			Name:           got.Name + "-worker-0",
 			Tags:           util.MachineTags(got.Name, got.Namespace, "worker-0", "uid-1", nil),
 			SecurityGroups: []string{nodeSGs[0].ID},
@@ -537,7 +538,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		got.Spec.Bastion = validBastionSpec()
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
-		fakeCloud.FailNextEnsureBastion = fmt.Errorf("bastion creation rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextCreateServer = fmt.Errorf("bastion creation rejected: %w", cloud.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -1018,7 +1019,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(reconcile.Result{}))
 
-		Expect(fakeCloud.LastEnsureBastionInput.AvailabilityZone).To(Equal("eu01-2"))
+		Expect(fakeCloud.LastCreateServerInput.AvailabilityZone).To(Equal("eu01-2"))
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		server, err := fakeCloud.GetServer(ctx, got.Status.Bastion.ServerID)
 		Expect(err).NotTo(HaveOccurred())

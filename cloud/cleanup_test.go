@@ -16,6 +16,7 @@ import (
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
 func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
@@ -30,10 +31,10 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 		"cluster-api-provider-stackit/test-id": "test-2",
 	}
 
-	if _, err := client.CreateServer(ctx, cloud.CreateServerInput{Name: "matched", Tags: tags}); err != nil {
+	if _, err := client.CreateServer(ctx, server.ServerSpec{Name: "matched", Tags: tags}); err != nil {
 		t.Fatalf("CreateServer() error = %v", err)
 	}
-	if _, err := client.CreateServer(ctx, cloud.CreateServerInput{Name: "other", Tags: otherTags}); err != nil {
+	if _, err := client.CreateServer(ctx, server.ServerSpec{Name: "other", Tags: otherTags}); err != nil {
 		t.Fatalf("CreateServer() error = %v", err)
 	}
 	if _, err := client.CreatePublicIP(ctx, tags); err != nil {
