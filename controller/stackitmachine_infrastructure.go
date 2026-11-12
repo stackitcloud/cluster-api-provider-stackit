@@ -28,9 +28,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -240,7 +240,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 
 	machineScope.SetCloudClient(cloudClient)
 	instanceID := stackitMachine.Status.InstanceID
-	if err := server.New(machineScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+	if err := server.New(machineScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
 		log.Error(err, "Failed to delete server", "machine", stackitMachine.Name, "instanceID", instanceID)
 		record.Warnf(stackitMachine, "FailedDeleteInstance",
 			"Failed to delete server %s: %v", instanceID, err)
@@ -282,10 +282,10 @@ func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
 		return nil
 	}
 	if machineScope.StackitCluster.Status.Bastion.SecurityGroupID == "" {
-		return fmt.Errorf("%w: bastion security group ID is empty", cloud.ErrTransient)
+		return fmt.Errorf("%w: bastion security group ID is empty", shared.ErrTransient)
 	}
 	if machineScope.StackitMachine.Status.InstanceID == "" {
-		return fmt.Errorf("%w: server ID is empty", cloud.ErrTransient)
+		return fmt.Errorf("%w: server ID is empty", shared.ErrTransient)
 	}
 	return securitygroup.New(machineScope).Reconcile(ctx)
 }

@@ -94,7 +94,7 @@ func (c *Client) Get(ctx context.Context, id string) (*PublicIP, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
 	}
-	publicIP, err := c.iaasClient.DefaultAPI.GetPublicIP(ctx, c.projectID, c.region, id).Execute()
+	publicIP, err := c.IaaSClient().DefaultAPI.GetPublicIP(ctx, c.ProjectID(), c.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get public IP", err)
 	}
@@ -107,13 +107,7 @@ func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Publi
 	if err != nil {
 		return nil, err
 	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no public IP matching tags", shared.ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple public IPs matching tags", shared.ErrConflict)
-	}
-	return matched[0], nil
+	return shared.FindSingle(matched, "public IP", "public IPs")
 }
 
 // ListByTags lists STACKIT public IPs matching the given tag selector.
@@ -121,7 +115,7 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Pub
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.iaasClient.DefaultAPI.ListPublicIPs(ctx, c.projectID, c.region).
+	resp, err := c.IaaSClient().DefaultAPI.ListPublicIPs(ctx, c.ProjectID(), c.Region()).
 		LabelSelector(shared.LabelSelector(tags)).
 		Execute()
 	if err != nil {
@@ -142,8 +136,8 @@ func (c *Client) AttachToServer(ctx context.Context, serverID, publicIPID string
 	if serverID == "" || publicIPID == "" {
 		return fmt.Errorf("%w: server ID and public IP ID are required", shared.ErrInvalidInput)
 	}
-	if err := c.iaasClient.DefaultAPI.
-		AddPublicIpToServer(ctx, c.projectID, c.region, serverID, publicIPID).
+	if err := c.IaaSClient().DefaultAPI.
+		AddPublicIpToServer(ctx, c.ProjectID(), c.Region(), serverID, publicIPID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("add public IP to server", err)
 		if !shared.IsConflict(err) {
@@ -159,8 +153,8 @@ func (c *Client) DetachFromServer(ctx context.Context, serverID, publicIPID stri
 	if serverID == "" || publicIPID == "" {
 		return fmt.Errorf("%w: server ID and public IP ID are required", shared.ErrInvalidInput)
 	}
-	if err := c.iaasClient.DefaultAPI.
-		RemovePublicIpFromServer(ctx, c.projectID, c.region, serverID, publicIPID).
+	if err := c.IaaSClient().DefaultAPI.
+		RemovePublicIpFromServer(ctx, c.ProjectID(), c.Region(), serverID, publicIPID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("remove public IP from server", err)
 		if !shared.IsNotFound(err) && !shared.IsConflict(err) {
@@ -176,7 +170,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
 	}
-	if err := c.iaasClient.DefaultAPI.DeletePublicIP(ctx, c.projectID, c.region, id).Execute(); err != nil {
+	if err := c.IaaSClient().DefaultAPI.DeletePublicIP(ctx, c.ProjectID(), c.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete public IP", err)
 		if !shared.IsNotFound(err) {
 			return err
@@ -198,8 +192,8 @@ func (c *Client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*Public
 	if len(spec.Tags) > 0 {
 		payload.SetLabels(shared.TagsToSDKLabels(spec.Tags))
 	}
-	created, err := c.iaasClient.DefaultAPI.
-		CreatePublicIP(ctx, c.projectID, c.region).
+	created, err := c.IaaSClient().DefaultAPI.
+		CreatePublicIP(ctx, c.ProjectID(), c.Region()).
 		CreatePublicIPPayload(*payload).
 		Execute()
 	if err != nil {
@@ -233,14 +227,14 @@ func (c *Client) resolvePublicIP(ctx context.Context, spec PublicIPSpec) (*Publi
 	return publicIP, nil
 }
 
-func (s *Service) resolveServerID(ctx context.Context, spec PublicIPSpec) (string, error) {
+func (c *Client) resolveServerID(ctx context.Context, spec PublicIPSpec) (string, error) {
 	if spec.ServerID != "" {
 		return spec.ServerID, nil
 	}
 	if len(spec.ServerSelector) == 0 {
 		return "", nil
 	}
-	srv, err := server.NewClient(s.scope).FindByTags(ctx, spec.ServerSelector)
+	srv, err := server.NewClient(c).FindByTags(ctx, spec.ServerSelector)
 	if err != nil {
 		if shared.IsNotFound(err) {
 			return "", nil

@@ -83,13 +83,7 @@ func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*LoadB
 	if err != nil {
 		return nil, err
 	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no load balancer matching tags", shared.ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple load balancers matching tags", shared.ErrConflict)
-	}
-	return matched[0], nil
+	return shared.FindSingle(matched, "load balancer", "load balancers")
 }
 
 // ListByTags lists STACKIT load balancers matching the given tag selector.

@@ -20,6 +20,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
@@ -27,7 +28,7 @@ import (
 // server deletion is not blocked by target attachments.
 func CleanupByTags(ctx context.Context, client Client, tags map[string]string) error {
 	if len(tags) == 0 {
-		return fmt.Errorf("%w: empty cleanup tag selector", ErrInvalidInput)
+		return fmt.Errorf("%w: empty cleanup tag selector", shared.ErrInvalidInput)
 	}
 
 	var errs []string
@@ -101,7 +102,7 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("%w: %s", ErrTransient, strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %s", shared.ErrTransient, strings.Join(errs, "; "))
 	}
 	return nil
 }

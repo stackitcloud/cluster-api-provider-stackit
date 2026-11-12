@@ -10,7 +10,7 @@ You may obtain a copy of the License at
 
 package securitygroup
 
-import iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+import "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 
 // Direction specifies the traffic direction of a security group rule.
 type Direction string
@@ -59,11 +59,7 @@ type SecurityGroupSpec struct {
 }
 
 // ClientScope is an interface that provides the IaaS client and target scope for security group operations.
-type ClientScope interface {
-	ProjectID() string
-	Region() string
-	IaaSClient() *iaas.APIClient
-}
+type ClientScope = shared.IaaSClientScope
 
 // Scope is an interface that provides scope data needed for security group reconciliation.
 type Scope interface {
@@ -73,18 +69,12 @@ type Scope interface {
 
 // Client provides direct security group operations against the STACKIT IaaS API.
 type Client struct {
-	iaasClient *iaas.APIClient
-	projectID  string
-	region     string
+	shared.IaaSScope
 }
 
 // NewClient returns a Client for the given scope.
 func NewClient(scope ClientScope) *Client {
-	return &Client{
-		iaasClient: scope.IaaSClient(),
-		projectID:  scope.ProjectID(),
-		region:     scope.Region(),
-	}
+	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
 }
 
 // Service implements security groups reconciler.

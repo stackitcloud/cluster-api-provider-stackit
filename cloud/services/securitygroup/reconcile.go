@@ -18,6 +18,7 @@ import (
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -49,13 +50,7 @@ func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Secur
 	if err != nil {
 		return nil, err
 	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no security group matching tags", shared.ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple security groups matching tags", shared.ErrConflict)
-	}
-	return matched[0], nil
+	return shared.FindSingle(matched, "security group", "security groups")
 }
 
 // ListByTags lists STACKIT security groups matching the given tag selector.
@@ -63,7 +58,7 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Sec
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroups(ctx, c.projectID, c.region).
+	resp, err := c.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, c.ProjectID(), c.Region()).
 		LabelSelector(shared.LabelSelector(tags)).
 		Execute()
 	if err != nil {
@@ -97,8 +92,8 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 //   - invalid input: duplicate item in security_groups list
 //   - not found: server has no network port yet
 func (c *Client) AttachToServer(ctx context.Context, serverID, securityGroupID string) error {
-	if err := c.iaasClient.DefaultAPI.
-		AddSecurityGroupToServer(ctx, c.projectID, c.region, serverID, securityGroupID).
+	if err := c.IaaSClient().DefaultAPI.
+		AddSecurityGroupToServer(ctx, c.ProjectID(), c.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("add security group to server", err)
 		if !shared.IsConflict(err) && !shared.IsInvalidInput(err) && !shared.IsNotFound(err) {
@@ -111,8 +106,8 @@ func (c *Client) AttachToServer(ctx context.Context, serverID, securityGroupID s
 
 // DetachFromServer detaches a security group from a server, ignoring NotFound and Conflict errors.
 func (c *Client) DetachFromServer(ctx context.Context, serverID, securityGroupID string) error {
-	if err := c.iaasClient.DefaultAPI.
-		RemoveSecurityGroupFromServer(ctx, c.projectID, c.region, serverID, securityGroupID).
+	if err := c.IaaSClient().DefaultAPI.
+		RemoveSecurityGroupFromServer(ctx, c.ProjectID(), c.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("remove security group from server", err)
 		if !shared.IsNotFound(err) && !shared.IsConflict(err) {
@@ -213,7 +208,7 @@ func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec
 	} else if !shared.IsNotFound(err) {
 		return nil, err
 	}
-	securityGroup, err := c.iaasClient.DefaultAPI.CreateSecurityGroup(ctx, c.projectID, c.region).
+	securityGroup, err := c.IaaSClient().DefaultAPI.CreateSecurityGroup(ctx, c.ProjectID(), c.Region()).
 		CreateSecurityGroupPayload(spec.toCreatePayload()).
 		Execute()
 	if err != nil {
@@ -235,8 +230,8 @@ func (c *Client) deleteSecurityGroupWithRules(
 			return err
 		}
 	}
-	if err := c.iaasClient.DefaultAPI.
-		DeleteSecurityGroup(ctx, c.projectID, c.region, id).
+	if err := c.IaaSClient().DefaultAPI.
+		DeleteSecurityGroup(ctx, c.ProjectID(), c.Region(), id).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("delete security group", err)
 		if !shared.IsNotFound(err) {
@@ -273,16 +268,14 @@ func (c *Client) detachServers(ctx context.Context, securityGroupID string, serv
 }
 
 func (c *Client) listServerIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
-	resp, err := c.iaasClient.DefaultAPI.ListServers(ctx, c.projectID, c.region).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
+	servers, err := server.NewClient(c).ListByTags(ctx, tags)
 	if err != nil {
-		return nil, shared.ClassifySDKError("list servers", err)
+		return nil, err
 	}
 	var serverIDs []string
-	for _, server := range resp.GetItems() {
-		if shared.LabelsContainTags(server.GetLabels(), tags) && server.GetId() != "" {
-			serverIDs = append(serverIDs, server.GetId())
+	for _, srv := range servers {
+		if srv.ID != "" {
+			serverIDs = append(serverIDs, srv.ID)
 		}
 	}
 	return serverIDs, nil

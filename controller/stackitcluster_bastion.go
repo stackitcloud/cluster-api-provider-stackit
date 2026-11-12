@@ -27,10 +27,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
@@ -158,20 +158,20 @@ func (r *StackitClusterReconciler) reconcileBastion(
 
 func validateBastionSpec(spec infrav1.StackitBastionSpec) error {
 	if spec.ImageID == "" {
-		return fmt.Errorf("%w: bastion.imageID is required", cloud.ErrInvalidInput)
+		return fmt.Errorf("%w: bastion.imageID is required", shared.ErrInvalidInput)
 	}
 	if spec.MachineType == "" {
-		return fmt.Errorf("%w: bastion.machineType is required", cloud.ErrInvalidInput)
+		return fmt.Errorf("%w: bastion.machineType is required", shared.ErrInvalidInput)
 	}
 	if spec.SSHKeyName == "" {
-		return fmt.Errorf("%w: bastion.sshKeyName is required", cloud.ErrInvalidInput)
+		return fmt.Errorf("%w: bastion.sshKeyName is required", shared.ErrInvalidInput)
 	}
 	if len(spec.AllowedCIDRs) == 0 {
-		return fmt.Errorf("%w: bastion.allowedCIDRs is required", cloud.ErrInvalidInput)
+		return fmt.Errorf("%w: bastion.allowedCIDRs is required", shared.ErrInvalidInput)
 	}
 	for _, cidr := range spec.AllowedCIDRs {
 		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("%w: bastion.allowedCIDRs contains invalid CIDR %q", cloud.ErrInvalidInput, cidr)
+			return fmt.Errorf("%w: bastion.allowedCIDRs contains invalid CIDR %q", shared.ErrInvalidInput, cidr)
 		}
 	}
 	return nil
@@ -187,17 +187,17 @@ func (r *StackitClusterReconciler) deleteBastionResources(
 	ignoreNotFound bool,
 ) error {
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !cloud.IsNotFound(err) {
+		if !ignoreNotFound || !shared.IsNotFound(err) {
 			return err
 		}
 	}
 	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !cloud.IsNotFound(err) {
+		if !ignoreNotFound || !shared.IsNotFound(err) {
 			return err
 		}
 	}
 	if err := server.New(clusterScope).Delete(ctx); err != nil {
-		if !ignoreNotFound || !cloud.IsNotFound(err) {
+		if !ignoreNotFound || !shared.IsNotFound(err) {
 			return err
 		}
 	}

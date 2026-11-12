@@ -46,7 +46,7 @@ func (c *Client) Get(ctx context.Context, id string) (*Network, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: network ID is empty", shared.ErrInvalidInput)
 	}
-	net, err := c.iaasClient.DefaultAPI.GetNetwork(ctx, c.projectID, c.region, id).Execute()
+	net, err := c.IaaSClient().DefaultAPI.GetNetwork(ctx, c.ProjectID(), c.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get network", err)
 	}

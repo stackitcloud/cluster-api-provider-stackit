@@ -14,7 +14,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -93,7 +93,7 @@ func CredentialFailureResult(
 	conditionTypes ...string,
 ) (ctrl.Result, error) {
 	SetConditions(conditions, generation, metav1.ConditionFalse, "CredentialsInvalid", err.Error(), conditionTypes...)
-	if cloud.IsUnauthorized(err) || cloud.IsInvalidInput(err) || errors.Is(err, ErrCredentialsInvalid) {
+	if shared.IsUnauthorized(err) || shared.IsInvalidInput(err) || errors.Is(err, ErrCredentialsInvalid) {
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, err
@@ -109,7 +109,7 @@ func CloudFailureResult(
 	conditionTypes ...string,
 ) (ctrl.Result, error) {
 	SetConditions(conditions, generation, metav1.ConditionFalse, reason, err.Error(), conditionTypes...)
-	if cloud.IsRetryable(err) {
+	if shared.IsRetryable(err) {
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	if returnError {

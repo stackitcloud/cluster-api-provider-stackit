@@ -13,7 +13,7 @@ package server
 import (
 	"errors"
 
-	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 // ErrServerGone indicates that an already-provisioned server is missing in
@@ -68,11 +68,7 @@ type ServerSpec struct {
 }
 
 // ClientScope is an interface that provides the IaaS client and target scope for server operations.
-type ClientScope interface {
-	ProjectID() string
-	Region() string
-	IaaSClient() *iaas.APIClient
-}
+type ClientScope = shared.IaaSClientScope
 
 // Scope is an interface that provides scope data needed for server reconciliation.
 type Scope interface {
@@ -82,18 +78,12 @@ type Scope interface {
 
 // Client provides direct server operations against the STACKIT IaaS API.
 type Client struct {
-	iaasClient *iaas.APIClient
-	projectID  string
-	region     string
+	shared.IaaSScope
 }
 
 // NewClient returns a Client for the given scope.
 func NewClient(scope ClientScope) *Client {
-	return &Client{
-		iaasClient: scope.IaaSClient(),
-		projectID:  scope.ProjectID(),
-		region:     scope.Region(),
-	}
+	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
 }
 
 // Service implements server reconciler.

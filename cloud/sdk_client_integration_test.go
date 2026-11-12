@@ -23,6 +23,7 @@ import (
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 const (
@@ -40,7 +41,7 @@ func TestSDKClientCredentialsIntegration(t *testing.T) {
 	_, err := server.NewClient(client).FindByTags(context.Background(), map[string]string{
 		"capistackit-test": "credential-check",
 	})
-	if IsNotFound(err) {
+	if shared.IsNotFound(err) {
 		return
 	}
 	if err != nil {
@@ -90,7 +91,7 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	})
 	lbClient := loadbalancer.NewClient(client)
 	t.Cleanup(func() {
-		if err := lbClient.DeleteByID(context.Background(), lbID); err != nil && !IsNotFound(err) {
+		if err := lbClient.DeleteByID(context.Background(), lbID); err != nil && !shared.IsNotFound(err) {
 			t.Logf("DeleteByID() cleanup error = %v", err)
 		}
 	})
@@ -217,8 +218,8 @@ func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string
 	}
 	t.Cleanup(func() {
 		if err := loadbalancer.NewClient(client).DeleteByID(context.Background(), lbID); err != nil &&
-			!IsNotFound(err) &&
-			!errors.Is(err, ErrInvalidInput) {
+			!shared.IsNotFound(err) &&
+			!errors.Is(err, shared.ErrInvalidInput) {
 			t.Logf("DeleteByID() cleanup error = %v", err)
 		}
 	})

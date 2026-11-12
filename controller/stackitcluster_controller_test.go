@@ -28,8 +28,10 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -54,7 +56,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		credentials = "stackit-credentials-" + clusterName
 		stackitKey = types.NamespacedName{Namespace: namespace, Name: clusterName}
 		request = reconcile.Request{NamespacedName: stackitKey}
-		fakeCloud = cloudfake.New(cloud.Network{ID: testNetworkID, Name: "network"})
+		fakeCloud = cloudfake.New(network.Network{ID: testNetworkID, Name: "network"})
 		reconciler = &StackitClusterReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
@@ -520,7 +522,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("marks conditions not ready when API server load balancer creation fails", func() {
-		fakeCloud.FailNextEnsureLB = fmt.Errorf("load balancer creation rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextEnsureLB = fmt.Errorf("load balancer creation rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -538,7 +540,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		got.Spec.Bastion = validBastionSpec()
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
-		fakeCloud.FailNextCreateServer = fmt.Errorf("bastion creation rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextCreateServer = fmt.Errorf("bastion creation rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -550,7 +552,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("requeues when network lookup returns a transient error", func() {
-		fakeCloud.FailNextGetNetwork = fmt.Errorf("temporary network lookup failure: %w", cloud.ErrTransient)
+		fakeCloud.FailNextGetNetwork = fmt.Errorf("temporary network lookup failure: %w", shared.ErrTransient)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -566,7 +568,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	// enqueues the cluster once the credentials are rejected.
 	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
+			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 		}
 
 		result, err := reconciler.Reconcile(ctx, request)
@@ -669,7 +671,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
-		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer timeout: %w", cloud.ErrTransient)
+		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer timeout: %w", shared.ErrTransient)
 
 		_, err = reconciler.Reconcile(ctx, request)
 		Expect(err).To(HaveOccurred())
@@ -760,7 +762,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.APIServerLoadBalancerID).NotTo(BeEmpty())
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
-		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer: %w", cloud.ErrTransient)
+		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer: %w", shared.ErrTransient)
 
 		_, err = reconciler.Reconcile(ctx, request)
 		Expect(err).To(HaveOccurred())
@@ -877,7 +879,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Ready).To(BeTrue())
 
-		fakeCloud.FailNextSetTargets = fmt.Errorf("update target pool timeout: %w", cloud.ErrTransient)
+		fakeCloud.FailNextSetTargets = fmt.Errorf("update target pool timeout: %w", shared.ErrTransient)
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
@@ -893,7 +895,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	It("requeues when the first target pool update fails permanently", func() {
 		// Without the requeue nothing would drive another reconcile.
 		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "10.0.0.11")
-		fakeCloud.FailNextSetTargets = fmt.Errorf("target pool rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextSetTargets = fmt.Errorf("target pool rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -1027,7 +1029,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("reports an error condition when listing availability zones fails", func() {
-		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", cloud.ErrTransient)
+		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", shared.ErrTransient)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())

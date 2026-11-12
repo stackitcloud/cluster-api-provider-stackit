@@ -54,3 +54,29 @@ func TestIsRetryable(t *testing.T) {
 		})
 	}
 }
+
+func TestFindSingle(t *testing.T) {
+	t.Run("returns ErrNotFound when empty", func(t *testing.T) {
+		_, err := FindSingle([]string{}, "server", "servers")
+		if !IsNotFound(err) {
+			t.Fatalf("FindSingle() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("returns ErrConflict when multiple", func(t *testing.T) {
+		_, err := FindSingle([]string{"a", "b"}, "server", "servers")
+		if !IsConflict(err) {
+			t.Fatalf("FindSingle() error = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("returns single element", func(t *testing.T) {
+		got, err := FindSingle([]string{"a"}, "server", "servers")
+		if err != nil {
+			t.Fatalf("FindSingle() error = %v", err)
+		}
+		if got != "a" {
+			t.Fatalf("FindSingle() = %q, want %q", got, "a")
+		}
+	})
+}

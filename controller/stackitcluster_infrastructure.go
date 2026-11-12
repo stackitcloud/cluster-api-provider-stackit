@@ -26,13 +26,13 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/availabilityzone"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -160,7 +160,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			)
 		}
 		if loadbalancer.IsTargetPoolUpdateError(err) {
-			if !cloud.IsRetryable(err) {
+			if !shared.IsRetryable(err) {
 				record.Warnf(
 					stackitCluster, "LoadBalancerTargetError",
 					"Cannot update API server load balancer target pool: %v", err,
@@ -326,7 +326,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 	}
 	clusterScope.SetCloudClient(cloudClient)
 	loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
-	if err := loadbalancer.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+	if err := loadbalancer.New(clusterScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
 		log.Error(err, "Failed to delete API server load balancer", "cluster", stackitCluster.Name, "loadBalancerID", loadBalancerID)
 		record.Warnf(stackitCluster, "FailedDeleteLoadBalancer",
 			"Failed to delete API server load balancer %s: %v", loadBalancerID, err)
@@ -339,19 +339,19 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		)
 	}
 	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-	if err := publicip.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+	if err := publicip.New(clusterScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
 		log.Error(err, "Failed to delete bastion public IP", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion public IP: %v", err)
 		return ctrl.Result{}, err
 	}
-	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
 		log.Error(err, "Failed to delete bastion security groups", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion security groups: %v", err)
 		return ctrl.Result{}, err
 	}
-	if err := server.New(clusterScope).Delete(ctx); err != nil && !cloud.IsNotFound(err) {
+	if err := server.New(clusterScope).Delete(ctx); err != nil && !shared.IsNotFound(err) {
 		log.Error(err, "Failed to delete bastion", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion: %v", err)

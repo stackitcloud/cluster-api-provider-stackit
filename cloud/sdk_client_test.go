@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 const (
@@ -28,8 +30,8 @@ func TestNewClientValidation(t *testing.T) {
 			Region:             testSDKRegion,
 			ServiceAccountJSON: []byte(`{}`),
 		})
-		if !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
+		if !errors.Is(err, shared.ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want shared.ErrInvalidInput", err)
 		}
 	})
 
@@ -38,8 +40,8 @@ func TestNewClientValidation(t *testing.T) {
 			ProjectID:          testSDKProjectID,
 			ServiceAccountJSON: []byte(`{}`),
 		})
-		if !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
+		if !errors.Is(err, shared.ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want shared.ErrInvalidInput", err)
 		}
 	})
 
@@ -49,8 +51,8 @@ func TestNewClientValidation(t *testing.T) {
 			ProjectID: testSDKProjectID,
 			Region:    testSDKRegion,
 		})
-		if !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
+		if !errors.Is(err, shared.ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want shared.ErrInvalidInput", err)
 		}
 	})
 

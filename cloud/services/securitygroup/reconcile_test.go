@@ -662,6 +662,8 @@ func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
 					"labels":      map[string]any{"cluster": "test"},
 				},
 			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers/"+testServerID+"/nics"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
 		case r.Method == http.MethodDelete && strings.Contains(path, "/servers/") && strings.Contains(path, "/security-groups/"):
 			parts := strings.Split(path, "/servers/")
 			sub := strings.Split(parts[1], "/security-groups/")

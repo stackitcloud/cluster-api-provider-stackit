@@ -38,6 +38,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -439,7 +440,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the VM was deleted from STACKIT")
 			Eventually(func(g Gomega) {
 				_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-				g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+				g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
@@ -836,7 +837,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -850,7 +851,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1006,7 +1007,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1114,7 +1115,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the old worker VM was deleted from STACKIT")
 			Eventually(func(g Gomega) {
 				_, err := server.NewClient(cloudClient).Get(ctx, initialInstanceIDs[0])
-				g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", initialInstanceIDs[0], err)
+				g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", initialInstanceIDs[0], err)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("deleting the upgraded workload Cluster")
@@ -1130,7 +1131,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1264,7 +1265,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1389,7 +1390,7 @@ var _ = Describe("Manager", Ordered, func() {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
 					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(cloud.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
+					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -3117,14 +3118,14 @@ func appendUnique(values []string, additions ...string) []string {
 
 func cleanupCloudServersByID(ctx context.Context, cloudClient cloud.Client, instanceIDs []string) {
 	for _, instanceID := range instanceIDs {
-		if err := server.NewClient(cloudClient).DeleteByID(ctx, instanceID); err != nil && !cloud.IsNotFound(err) {
+		if err := server.NewClient(cloudClient).DeleteByID(ctx, instanceID); err != nil && !shared.IsNotFound(err) {
 			_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup warning for %s: %v\n", instanceID, err)
 			continue
 		}
 		deadline := time.Now().Add(10 * time.Minute)
 		for time.Now().Before(deadline) {
 			_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-			if cloud.IsNotFound(err) {
+			if shared.IsNotFound(err) {
 				break
 			}
 			if err != nil {

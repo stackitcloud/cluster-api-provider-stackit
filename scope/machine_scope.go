@@ -101,7 +101,7 @@ func (s *MachineScope) Tags() map[string]string {
 	)
 }
 
-func (s *MachineScope) SetInstance(srv *cloud.Server) string {
+func (s *MachineScope) SetInstance(srv *server.Server) string {
 	providerID := cloud.NewProviderID(s.StackitCluster.Spec.ProjectID, s.StackitCluster.Spec.Region, srv.ID)
 	s.StackitMachine.Status.InstanceID = srv.ID
 	s.StackitMachine.Status.InstanceState = srv.State

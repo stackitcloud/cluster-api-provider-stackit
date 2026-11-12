@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
@@ -43,22 +44,22 @@ type SDKClient struct {
 // service-account key flow.
 func NewClient(_ context.Context, creds Credentials) (Client, error) {
 	if creds.ProjectID == "" {
-		return nil, fmt.Errorf("%w: project ID is empty", ErrInvalidInput)
+		return nil, fmt.Errorf("%w: project ID is empty", shared.ErrInvalidInput)
 	}
 	if creds.Region == "" {
-		return nil, fmt.Errorf("%w: region is empty", ErrInvalidInput)
+		return nil, fmt.Errorf("%w: region is empty", shared.ErrInvalidInput)
 	}
 	if len(creds.ServiceAccountJSON) == 0 && os.Getenv(stackitNoAuthEnv) != "true" {
-		return nil, fmt.Errorf("%w: service account JSON is empty", ErrInvalidInput)
+		return nil, fmt.Errorf("%w: service account JSON is empty", shared.ErrInvalidInput)
 	}
 
 	iaasClient, err := iaas.NewAPIClient(stackitOptions(creds, os.Getenv(stackitIAASEndpointEnv))...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create IAAS SDK client: %v", ErrInvalidInput, err)
+		return nil, fmt.Errorf("%w: create IAAS SDK client: %v", shared.ErrInvalidInput, err)
 	}
 	lbClient, err := lb.NewAPIClient(stackitOptions(creds, os.Getenv(stackitLBEndpointEnv))...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create load balancer SDK client: %v", ErrInvalidInput, err)
+		return nil, fmt.Errorf("%w: create load balancer SDK client: %v", shared.ErrInvalidInput, err)
 	}
 
 	return &SDKClient{

@@ -72,7 +72,7 @@ func (c *Client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 }
 
 func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
-	if _, err := c.iaasClient.DefaultAPI.CreateSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID).
+	if _, err := c.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, c.ProjectID(), c.Region(), securityGroupID).
 		CreateSecurityGroupRulePayload(rule.toCreatePayload()).
 		Execute(); err != nil {
 		return shared.ClassifySDKError("create security group rule", err)
@@ -81,7 +81,7 @@ func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID st
 }
 
 func (c *Client) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
-	resp, err := c.iaasClient.DefaultAPI.ListSecurityGroupRules(ctx, c.projectID, c.region, securityGroupID).Execute()
+	resp, err := c.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, c.ProjectID(), c.Region(), securityGroupID).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list security group rules", err)
 	}
@@ -92,8 +92,8 @@ func (c *Client) deleteSecurityGroupRule(ctx context.Context, securityGroupID, r
 	if ruleID == "" {
 		return nil
 	}
-	if err := c.iaasClient.DefaultAPI.
-		DeleteSecurityGroupRule(ctx, c.projectID, c.region, securityGroupID, ruleID).
+	if err := c.IaaSClient().DefaultAPI.
+		DeleteSecurityGroupRule(ctx, c.ProjectID(), c.Region(), securityGroupID, ruleID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("delete security group rule", err)
 		if !shared.IsNotFound(err) {

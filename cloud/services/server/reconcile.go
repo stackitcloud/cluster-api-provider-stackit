@@ -64,7 +64,7 @@ func (c *Client) Get(ctx context.Context, id string) (*Server, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
-	srv, err := c.iaasClient.DefaultAPI.GetServer(ctx, c.projectID, c.region, id).Execute()
+	srv, err := c.IaaSClient().DefaultAPI.GetServer(ctx, c.ProjectID(), c.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get server", err)
 	}
@@ -77,13 +77,7 @@ func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Serve
 	if err != nil {
 		return nil, err
 	}
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no server matching tags", shared.ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple servers matching tags", shared.ErrConflict)
-	}
-	return matched[0], nil
+	return shared.FindSingle(matched, "server", "servers")
 }
 
 // ListByTags lists STACKIT servers matching the given tag selector.
@@ -91,7 +85,7 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Ser
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.iaasClient.DefaultAPI.ListServers(ctx, c.projectID, c.region).
+	resp, err := c.IaaSClient().DefaultAPI.ListServers(ctx, c.ProjectID(), c.Region()).
 		LabelSelector(shared.LabelSelector(tags)).
 		Details(true).
 		Execute()
@@ -113,7 +107,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
-	if err := c.iaasClient.DefaultAPI.DeleteServer(ctx, c.projectID, c.region, id).Execute(); err != nil {
+	if err := c.IaaSClient().DefaultAPI.DeleteServer(ctx, c.ProjectID(), c.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete server", err)
 		if !shared.IsNotFound(err) {
 			return err
@@ -149,7 +143,7 @@ func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 	}
 
 	payload := spec.toCreatePayload()
-	created, err := c.iaasClient.DefaultAPI.CreateServer(ctx, c.projectID, c.region).
+	created, err := c.IaaSClient().DefaultAPI.CreateServer(ctx, c.ProjectID(), c.Region()).
 		CreateServerPayload(payload).
 		Execute()
 	if err != nil {
@@ -162,7 +156,7 @@ func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 
 func (c *Client) deleteBySpec(ctx context.Context, spec ServerSpec) (string, error) {
 	if spec.ID != "" {
-		err := c.iaasClient.DefaultAPI.DeleteServer(ctx, c.projectID, c.region, spec.ID).Execute()
+		err := c.IaaSClient().DefaultAPI.DeleteServer(ctx, c.ProjectID(), c.Region(), spec.ID).Execute()
 		if err == nil {
 			return spec.ID, nil
 		}
@@ -263,7 +257,7 @@ func (c *Client) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
 		PowerStatus:      srv.GetPowerStatus(),
 		AvailabilityZone: srv.GetAvailabilityZone(),
 	}
-	nics, err := c.iaasClient.DefaultAPI.ListServerNICs(ctx, c.projectID, c.region, out.ID).Execute()
+	nics, err := c.IaaSClient().DefaultAPI.ListServerNICs(ctx, c.ProjectID(), c.Region(), out.ID).Execute()
 	if err == nil {
 		for _, nic := range nics.GetItems() {
 			if ipv4 := nic.GetIpv4(); ipv4 != "" {
