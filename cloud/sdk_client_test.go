@@ -12,107 +12,62 @@ package cloud
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"errors"
 	"testing"
 )
 
 const (
 	testSDKProjectID = "00000000-0000-0000-0000-000000000000"
 	testSDKRegion    = "eu01"
-	testSDKNetworkID = "11111111-1111-4111-8111-111111111111"
 	testBoolTrue     = "true"
 )
 
-func TestSDKClientClassifiesHTTPStatusCodes(t *testing.T) {
-	tests := []struct {
-		name   string
-		status int
-		check  func(error) bool
-	}{
-		{name: "not found", status: http.StatusNotFound, check: IsNotFound},
-		{name: "unauthorized", status: http.StatusUnauthorized, check: IsUnauthorized},
-		{name: "conflict", status: http.StatusConflict, check: IsConflict},
-		{name: "invalid input", status: http.StatusBadRequest, check: IsInvalidInput},
-		{name: "rate limited", status: http.StatusTooManyRequests, check: IsTransient},
-		{name: "server error", status: http.StatusInternalServerError, check: IsTransient},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				http.Error(w, http.StatusText(tt.status), tt.status)
-			}))
-			client := newTestSDKClient(t, server.URL)
-
-			_, err := client.GetNetwork(context.Background(), testSDKNetworkID)
-			if err == nil {
-				t.Fatal("GetNetwork() error = nil")
-			}
-			if !tt.check(err) {
-				t.Fatalf("GetNetwork() error = %v, did not match expected classifier", err)
-			}
+func TestNewClientValidation(t *testing.T) {
+	t.Run("rejects empty project ID", func(t *testing.T) {
+		_, err := NewClient(context.Background(), Credentials{
+			Region:             testSDKRegion,
+			ServiceAccountJSON: []byte(`{}`),
 		})
-	}
-}
-
-func newSDKTestServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	return server
-}
-
-func newTestSDKClient(t *testing.T, endpoint string) *SDKClient {
-	t.Helper()
-
-	t.Setenv(stackitNoAuthEnv, testBoolTrue)
-	t.Setenv(stackitIAASEndpointEnv, endpoint)
-	t.Setenv(stackitLBEndpointEnv, endpoint)
-
-	client, err := NewClient(context.Background(), Credentials{
-		ProjectID: testSDKProjectID,
-		Region:    testSDKRegion,
-	})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	sdkClient, ok := client.(*SDKClient)
-	if !ok {
-		t.Fatalf("NewClient() = %T, want *SDKClient", client)
-	}
-	return sdkClient
-}
-
-func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
-	t.Helper()
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		t.Fatalf("encode response body: %v", err)
-	}
-}
-
-func TestSDKClientListAvailabilityZones(t *testing.T) {
-	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/availability-zones") {
-			writeJSON(t, w, map[string]any{
-				"items": []any{"eu01-1", "eu01-2", "eu01-3"},
-			})
-			return
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
 		}
-		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-	}))
+	})
 
-	client := newTestSDKClient(t, server.URL)
-	zones, err := client.ListAvailabilityZones(context.Background())
-	if err != nil {
-		t.Fatalf("ListAvailabilityZones() error = %v", err)
-	}
-	if len(zones) != 3 || zones[0] != "eu01-1" || zones[1] != "eu01-2" || zones[2] != "eu01-3" {
-		t.Fatalf("ListAvailabilityZones() = %v, want [eu01-1 eu01-2 eu01-3]", zones)
-	}
+	t.Run("rejects empty region", func(t *testing.T) {
+		_, err := NewClient(context.Background(), Credentials{
+			ProjectID:          testSDKProjectID,
+			ServiceAccountJSON: []byte(`{}`),
+		})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("rejects empty service account JSON when STACKIT_NO_AUTH is not true", func(t *testing.T) {
+		t.Setenv(stackitNoAuthEnv, "false")
+		_, err := NewClient(context.Background(), Credentials{
+			ProjectID: testSDKProjectID,
+			Region:    testSDKRegion,
+		})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("NewClient() error = %v, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("creates SDKClient when STACKIT_NO_AUTH is true", func(t *testing.T) {
+		t.Setenv(stackitNoAuthEnv, testBoolTrue)
+		client, err := NewClient(context.Background(), Credentials{
+			ProjectID: testSDKProjectID,
+			Region:    testSDKRegion,
+		})
+		if err != nil {
+			t.Fatalf("NewClient() error = %v", err)
+		}
+		if client.ProjectID() != testSDKProjectID || client.Region() != testSDKRegion {
+			t.Fatalf("client ProjectID=%q Region=%q", client.ProjectID(), client.Region())
+		}
+		if client.IaaSClient() == nil || client.LoadBalancerClient() == nil {
+			t.Fatal("expected non-nil IaaSClient and LoadBalancerClient")
+		}
+	})
 }

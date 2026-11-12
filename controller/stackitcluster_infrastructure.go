@@ -14,15 +14,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
-	"slices"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,7 +27,9 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/availabilityzone"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
@@ -52,7 +50,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			return ctrl.Result{}, fmt.Errorf("persist finalizer: %w", err)
 		}
 	}
-	clusterScope.SetFailureDomains(stackitFailureDomains(stackitCluster.Spec.Region))
+	clusterScope.SetFailureDomains(scope.DefaultFailureDomains(stackitCluster.Spec.Region))
 
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
@@ -76,8 +74,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		infrav1.ClusterCredentialsReadyCondition,
 	)
 
-	zones, err := cloudClient.ListAvailabilityZones(ctx)
-	if err != nil {
+	if err := availabilityzone.New(clusterScope).Reconcile(ctx); err != nil {
 		stackitCluster.Status.Ready = false
 		return util.CloudFailureResult(
 			&stackitCluster.Status.Conditions,
@@ -89,10 +86,8 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			infrav1.ClusterReadyCondition,
 		)
 	}
-	clusterScope.SetFailureDomains(failureDomainsFromZones(stackitCluster.Spec.Region, zones))
 
-	network, err := cloudClient.GetNetwork(ctx, stackitCluster.Spec.Network.ID)
-	if err != nil {
+	if err := network.New(clusterScope).Reconcile(ctx); err != nil {
 		log.Error(err, "Failed to get network",
 			"networkID", stackitCluster.Spec.Network.ID,
 			"region", stackitCluster.Spec.Region,
@@ -149,7 +144,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		// come back with the control plane behind it.
 		seed := targets
 		if len(seed) == 0 {
-			seed = []loadbalancer.Target{loadbalancer.BootstrapTarget(bootstrapTargetIP(network))}
+			seed = []loadbalancer.Target{loadbalancer.BootstrapTarget(clusterScope.BootstrapTargetIP())}
 		}
 		clusterScope.SetAPIServerLoadBalancerTargets(targets, seed)
 
@@ -275,78 +270,6 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	clusterScope.SetReady()
 	log.V(1).Info("StackitCluster ready", "endpoint", stackitCluster.Status.APIServerEndpoint)
 	return ctrl.Result{}, nil
-}
-
-func failureDomainsFromZones(region string, zones []string) []clusterv1.FailureDomain {
-	controlPlane := true
-	failureDomains := make([]clusterv1.FailureDomain, 0, len(zones))
-	for _, zone := range zones {
-		// Filter out virtual/metro zones (such as eu01-m or any zone with suffix -m)
-		if strings.HasSuffix(zone, "-m") {
-			continue
-		}
-		failureDomains = append(failureDomains, clusterv1.FailureDomain{
-			Name:         zone,
-			ControlPlane: &controlPlane,
-			Attributes: map[string]string{
-				"region": region,
-			},
-		})
-	}
-	if len(failureDomains) == 0 {
-		return stackitFailureDomains(region)
-	}
-	slices.SortFunc(failureDomains, func(a, b clusterv1.FailureDomain) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	return failureDomains
-}
-
-func stackitFailureDomains(region string) []clusterv1.FailureDomain {
-	controlPlane := true
-	return []clusterv1.FailureDomain{
-		{
-			Name:         region + "-1",
-			ControlPlane: &controlPlane,
-			Attributes: map[string]string{
-				"region": region,
-			},
-		},
-		{
-			Name:         region + "-2",
-			ControlPlane: &controlPlane,
-			Attributes: map[string]string{
-				"region": region,
-			},
-		},
-		{
-			Name:         region + "-3",
-			ControlPlane: &controlPlane,
-			Attributes: map[string]string{
-				"region": region,
-			},
-		},
-	}
-}
-
-func bootstrapTargetIP(network *cloud.Network) string {
-	if network == nil {
-		return "10.0.0.1"
-	}
-	for _, prefixValue := range network.IPv4Prefixes {
-		prefix, err := netip.ParsePrefix(prefixValue)
-		if err != nil || !prefix.Addr().Is4() {
-			continue
-		}
-		address := prefix.Masked().Addr()
-		for range 10 {
-			address = address.Next()
-		}
-		if prefix.Contains(address) {
-			return address.String()
-		}
-	}
-	return "10.0.0.1"
 }
 
 func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterScope *scope.ClusterScope) (ctrl.Result, error) {

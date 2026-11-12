@@ -201,24 +201,6 @@ func (c *Client) GetServer(_ context.Context, id string) (*cloud.Server, error) 
 	return cloneServer(entry.server), nil
 }
 
-func (c *Client) FindServerByTags(_ context.Context, tags map[string]string) (*cloud.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextFindServer); err != nil {
-		return nil, err
-	}
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrNotFound)
-	}
-	for _, entry := range c.servers {
-		if mapContains(entry.tags, tags) {
-			return cloneServer(entry.server), nil
-		}
-	}
-	return nil, fmt.Errorf("no server matching tags: %w", cloud.ErrNotFound)
-}
-
 func (c *Client) ListServersByTags(_ context.Context, tags map[string]string) ([]*cloud.Server, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -299,11 +281,13 @@ func (c *Client) DeleteServer(_ context.Context, id string) error {
 
 func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error) {
 	c.mu.Lock()
+	if c.BeforeGetNetwork != nil {
+		c.mu.Unlock()
+		c.BeforeGetNetwork()
+		c.mu.Lock()
+	}
 	defer c.mu.Unlock()
 
-	if c.BeforeGetNetwork != nil {
-		c.BeforeGetNetwork()
-	}
 	if err := consume(&c.FailNextGetNetwork); err != nil {
 		return nil, err
 	}
@@ -315,7 +299,7 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error
 	return &out, nil
 }
 
-func (c *Client) GetPublicIP(_ context.Context, id string) (*cloud.PublicIP, error) {
+func (c *Client) getPublicIP(_ context.Context, id string) (*cloud.PublicIP, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -373,7 +357,7 @@ func (c *Client) CreatePublicIP(_ context.Context, tags map[string]string) (*clo
 	return &out, nil
 }
 
-func (c *Client) DeletePublicIP(_ context.Context, id string) error {
+func (c *Client) deletePublicIP(_ context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -390,7 +374,7 @@ func (c *Client) DeletePublicIP(_ context.Context, id string) error {
 	return nil
 }
 
-func (c *Client) AddPublicIPToServer(_ context.Context, serverID, publicIPID string) error {
+func (c *Client) addPublicIPToServer(_ context.Context, serverID, publicIPID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -411,7 +395,7 @@ func (c *Client) AddPublicIPToServer(_ context.Context, serverID, publicIPID str
 	return nil
 }
 
-func (c *Client) RemovePublicIPFromServer(_ context.Context, serverID, publicIPID string) error {
+func (c *Client) removePublicIPFromServer(_ context.Context, serverID, publicIPID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -676,13 +660,55 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("Content-Type", "application/json")
 
-	if c.handlePublicIPRequest(rec, r) || c.handleSecurityGroupRequest(rec, r) || c.handleServerRequest(rec, r) {
+	if c.handlePublicIPRequest(rec, r) ||
+		c.handleSecurityGroupRequest(rec, r) ||
+		c.handleServerRequest(rec, r) ||
+		c.handleNetworkRequest(rec, r) ||
+		c.handleAvailabilityZoneRequest(rec, r) {
 		return rec.Result(), nil
 	}
 
 	rec.WriteHeader(http.StatusNotFound)
 	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
 	return rec.Result(), nil
+}
+
+func (c *Client) handleNetworkRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/networks/") {
+		return false
+	}
+	id := r.URL.Path[strings.LastIndex(r.URL.Path, "/networks/")+len("/networks/"):]
+	n, err := c.GetNetwork(r.Context(), id)
+	if err != nil {
+		writeFakeError(rec, err)
+		return true
+	}
+	m := map[string]any{
+		"id":     n.ID,
+		"name":   n.Name,
+		"status": "CREATED",
+		"routed": true,
+	}
+	if len(n.IPv4Prefixes) > 0 {
+		m["ipv4"] = map[string]any{
+			"prefixes": slices.Clone(n.IPv4Prefixes),
+		}
+	}
+	_ = json.NewEncoder(rec).Encode(m)
+	return true
+}
+
+func (c *Client) handleAvailabilityZoneRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/availability-zones") {
+		return false
+	}
+	zones, err := c.ListAvailabilityZones(r.Context())
+	if err != nil {
+		writeFakeError(rec, err)
+		return true
+	}
+	_ = json.NewEncoder(rec).Encode(map[string]any{"items": zones})
+	return true
 }
 
 func (c *Client) roundTripLB(r *http.Request) (*http.Response, error) {
@@ -960,9 +986,9 @@ func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.R
 		var err error
 		switch r.Method {
 		case http.MethodPut:
-			err = c.AddPublicIPToServer(r.Context(), serverID, publicIPID)
+			err = c.addPublicIPToServer(r.Context(), serverID, publicIPID)
 		case http.MethodDelete:
-			err = c.RemovePublicIPFromServer(r.Context(), serverID, publicIPID)
+			err = c.removePublicIPFromServer(r.Context(), serverID, publicIPID)
 		default:
 			err = cloud.ErrInvalidInput
 		}
@@ -996,7 +1022,7 @@ func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.R
 
 	case r.Method == http.MethodGet && strings.Contains(path, "/public-ips/"):
 		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
-		got, err := c.GetPublicIP(r.Context(), id)
+		got, err := c.getPublicIP(r.Context(), id)
 		if err != nil {
 			writeFakeError(rec, err)
 		} else {
@@ -1006,7 +1032,7 @@ func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.R
 
 	case r.Method == http.MethodDelete && strings.Contains(path, "/public-ips/"):
 		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
-		writeFakeStatus(rec, c.DeletePublicIP(r.Context(), id))
+		writeFakeStatus(rec, c.deletePublicIP(r.Context(), id))
 		return true
 
 	default:

@@ -33,6 +33,7 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 	var errs []string
 	srvClient := server.NewClient(client)
 	sgClient := securitygroup.NewClient(client)
+	pubIPClient := publicip.NewClient(client)
 
 	bastionTags := make(map[string]string, len(tags)+1)
 	maps.Copy(bastionTags, tags)
@@ -41,17 +42,17 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 	if err != nil {
 		errs = append(errs, err.Error())
 	}
-	publicIPs, err := publicip.ListByTags(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), tags)
+	publicIPs, err := pubIPClient.ListByTags(ctx, tags)
 	if err != nil {
 		errs = append(errs, err.Error())
 	} else {
 		for _, pubIP := range publicIPs {
 			for _, srv := range bastionServers {
-				if err := publicip.DetachFromServer(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), srv.ID, pubIP.ID); err != nil {
+				if err := pubIPClient.DetachFromServer(ctx, srv.ID, pubIP.ID); err != nil {
 					errs = append(errs, fmt.Sprintf("detach public IP %q from server %q: %v", pubIP.ID, srv.ID, err))
 				}
 			}
-			if err := publicip.DeleteByID(ctx, client.IaaSClient(), client.ProjectID(), client.Region(), pubIP.ID); err != nil {
+			if err := pubIPClient.DeleteByID(ctx, pubIP.ID); err != nil {
 				errs = append(errs, fmt.Sprintf("delete public IP %q: %v", pubIP.ID, err))
 			}
 		}

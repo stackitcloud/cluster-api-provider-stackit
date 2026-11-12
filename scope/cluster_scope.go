@@ -15,7 +15,9 @@ package scope
 
 import (
 	"context"
+	"net/netip"
 	"slices"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,7 +27,10 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/availabilityzone"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
@@ -41,6 +46,8 @@ type ClusterScope struct {
 	Cluster        *clusterv1.Cluster
 	StackitCluster *infrav1.StackitCluster
 	CloudClient    cloud.Client
+
+	network *network.Network
 
 	loadBalancerTargets     []loadbalancer.Target
 	loadBalancerSeedTargets []loadbalancer.Target
@@ -245,16 +252,107 @@ func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	}
 }
 
-func (s *ClusterScope) BastionSpec() infrav1.StackitBastionSpec {
-	return s.StackitCluster.Spec.Bastion
+func (s *ClusterScope) AvailabilityZoneSpec() availabilityzone.AvailabilityZoneSpec {
+	return availabilityzone.AvailabilityZoneSpec{
+		SetZones: func(zones []string) {
+			s.SetFailureDomains(failureDomainsFromZones(s.StackitCluster.Spec.Region, zones))
+		},
+	}
 }
 
-func (s *ClusterScope) BastionStatus() infrav1.StackitBastionStatus {
-	return s.StackitCluster.Status.Bastion
+func (s *ClusterScope) NetworkSpec() network.NetworkSpec {
+	return network.NetworkSpec{
+		ID: s.StackitCluster.Spec.Network.ID,
+		SetNetwork: func(net *network.Network) {
+			s.network = net
+		},
+	}
+}
+
+func (s *ClusterScope) BootstrapTargetIP() string {
+	if s.network == nil {
+		return "10.0.0.1"
+	}
+	for _, prefixValue := range s.network.IPv4Prefixes {
+		prefix, err := netip.ParsePrefix(prefixValue)
+		if err != nil || !prefix.Addr().Is4() {
+			continue
+		}
+		address := prefix.Masked().Addr()
+		for range 10 {
+			address = address.Next()
+		}
+		if prefix.Contains(address) {
+			return address.String()
+		}
+	}
+	return "10.0.0.1"
+}
+
+func (s *ClusterScope) PublicIPSpec() publicip.PublicIPSpec {
+	return publicip.PublicIPSpec{
+		ID:             s.StackitCluster.Status.Bastion.PublicIPID,
+		Tags:           s.BastionTags(),
+		ServerID:       s.StackitCluster.Status.Bastion.ServerID,
+		ServerSelector: s.BastionTags(),
+		SetPublicIP:    s.SetBastionPublicIP,
+	}
 }
 
 func (s *ClusterScope) BastionTags() map[string]string {
 	return bastionTags(s.StackitCluster)
+}
+
+func DefaultFailureDomains(region string) []clusterv1.FailureDomain {
+	controlPlane := true
+	return []clusterv1.FailureDomain{
+		{
+			Name:         region + "-1",
+			ControlPlane: &controlPlane,
+			Attributes: map[string]string{
+				"region": region,
+			},
+		},
+		{
+			Name:         region + "-2",
+			ControlPlane: &controlPlane,
+			Attributes: map[string]string{
+				"region": region,
+			},
+		},
+		{
+			Name:         region + "-3",
+			ControlPlane: &controlPlane,
+			Attributes: map[string]string{
+				"region": region,
+			},
+		},
+	}
+}
+
+func failureDomainsFromZones(region string, zones []string) []clusterv1.FailureDomain {
+	controlPlane := true
+	failureDomains := make([]clusterv1.FailureDomain, 0, len(zones))
+	for _, zone := range zones {
+		// Filter out virtual/metro zones (such as eu01-m or any zone with suffix -m)
+		if strings.HasSuffix(zone, "-m") {
+			continue
+		}
+		failureDomains = append(failureDomains, clusterv1.FailureDomain{
+			Name:         zone,
+			ControlPlane: &controlPlane,
+			Attributes: map[string]string{
+				"region": region,
+			},
+		})
+	}
+	if len(failureDomains) == 0 {
+		return DefaultFailureDomains(region)
+	}
+	slices.SortFunc(failureDomains, func(a, b clusterv1.FailureDomain) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return failureDomains
 }
 
 func bastionTags(stackitCluster *infrav1.StackitCluster) map[string]string {

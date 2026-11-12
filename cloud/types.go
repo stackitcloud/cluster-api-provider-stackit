@@ -15,6 +15,7 @@ package cloud
 
 import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
@@ -26,15 +27,8 @@ type Server = server.Server
 // Address is an IP or DNS endpoint of a Server.
 type Address = server.Address
 
-// RootVolume describes the root disk of a VM.
-type RootVolume = server.RootVolume
-
 // Network is an existing STACKIT virtual network referenced by the provider.
-type Network struct {
-	ID           string
-	Name         string
-	IPv4Prefixes []string
-}
+type Network = network.Network
 
 // LoadBalancer describes an API-server load balancer.
 type LoadBalancer = loadbalancer.LoadBalancer
@@ -44,7 +38,3 @@ type PublicIP = publicip.PublicIP
 
 // SecurityGroup describes a STACKIT security group.
 type SecurityGroup = securitygroup.SecurityGroup
-
-// LoadBalancerTargetInput describes a VM target in the API-server load
-// balancer target pool.
-type LoadBalancerTargetInput = loadbalancer.Target

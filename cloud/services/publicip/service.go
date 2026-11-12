@@ -10,11 +10,7 @@ You may obtain a copy of the License at
 
 package publicip
 
-import (
-	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
-
-	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-)
+import iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 
 // PublicIP describes a STACKIT public IP resource.
 type PublicIP struct {
@@ -23,27 +19,54 @@ type PublicIP struct {
 	NetworkInterfaceID string
 }
 
-// Scope is an interface that provides cluster scope data needed for public IP reconciliation.
-type Scope interface {
+// PublicIPSpec describes the desired state of a STACKIT public IP.
+type PublicIPSpec struct {
+	ID             string
+	Tags           map[string]string
+	ServerID       string
+	ServerSelector map[string]string
+	SetPublicIP    func(id, ip string)
+}
+
+// ClientScope is an interface that provides the IaaS client and target scope for public IP operations.
+type ClientScope interface {
 	ProjectID() string
 	Region() string
 	IaaSClient() *iaas.APIClient
-	BastionSpec() infrav1.StackitBastionSpec
-	BastionStatus() infrav1.StackitBastionStatus
-	BastionTags() map[string]string
-	SetBastionPublicIP(id, ip string)
+}
+
+// Scope is an interface that provides scope data needed for public IP reconciliation.
+type Scope interface {
+	ClientScope
+	PublicIPSpec() PublicIPSpec
+}
+
+// Client provides direct public IP operations against the STACKIT IaaS API.
+type Client struct {
+	iaasClient *iaas.APIClient
+	projectID  string
+	region     string
+}
+
+// NewClient returns a Client for the given scope.
+func NewClient(scope ClientScope) *Client {
+	return &Client{
+		iaasClient: scope.IaaSClient(),
+		projectID:  scope.ProjectID(),
+		region:     scope.Region(),
+	}
 }
 
 // Service implements public IPs reconciler.
 type Service struct {
-	scope      Scope
-	iaasClient *iaas.APIClient
+	scope Scope
+	*Client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
-		scope:      scope,
-		iaasClient: scope.IaaSClient(),
+		scope:  scope,
+		Client: NewClient(scope),
 	}
 }

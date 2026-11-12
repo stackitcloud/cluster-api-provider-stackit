@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
@@ -102,28 +101,4 @@ func stackitOptions(creds Credentials, endpoint string) []config.ConfigurationOp
 		opts = append(opts, config.WithTokenEndpoint(tokenEndpoint))
 	}
 	return opts
-}
-
-func (c *SDKClient) ListAvailabilityZones(ctx context.Context) ([]string, error) {
-	resp, err := c.iaasClient.DefaultAPI.ListAvailabilityZones(ctx, c.region).Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("list availability zones", err)
-	}
-	if resp == nil || resp.Items == nil {
-		return nil, nil
-	}
-	return resp.GetItems(), nil
-}
-
-func (c *SDKClient) GetNetwork(ctx context.Context, id string) (*Network, error) {
-	network, err := c.iaasClient.DefaultAPI.GetNetwork(ctx, c.projectID, c.region, id).Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("get network", err)
-	}
-	ipv4 := network.GetIpv4()
-	return &Network{
-		ID:           network.GetId(),
-		Name:         network.GetName(),
-		IPv4Prefixes: ipv4.GetPrefixes(),
-	}, nil
 }

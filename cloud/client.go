@@ -39,10 +39,6 @@ type Client interface {
 	IaaSClient() *iaas.APIClient
 
 	LoadBalancerClient() *lb.APIClient
-
-	GetNetwork(ctx context.Context, id string) (*Network, error)
-
-	ListAvailabilityZones(ctx context.Context) ([]string, error)
 }
 
 // Factory builds a Client from credentials (raw bytes from the configured

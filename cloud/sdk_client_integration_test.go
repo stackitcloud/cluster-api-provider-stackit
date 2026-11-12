@@ -69,7 +69,7 @@ func TestSDKClientLoadBalancerCreateDeleteIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
-	lbID := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
+	lbID := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   targetIP,
 	})
@@ -84,7 +84,7 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
 	initialIP := integrationInitialTargetIP(targetIP)
-	lbID := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
+	lbID := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   initialIP,
 	})
@@ -95,7 +95,7 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 		}
 	})
 
-	targets := []LoadBalancerTargetInput{
+	targets := []loadbalancer.Target{
 		{Name: "capistackit-initial-target", IP: initialIP},
 		{Name: "capistackit-integration-target", IP: targetIP},
 	}
@@ -188,7 +188,7 @@ func (s *integrationLBScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return s.spec
 }
 
-func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target LoadBalancerTargetInput) string {
+func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target loadbalancer.Target) string {
 	t.Helper()
 
 	name := fmt.Sprintf("capistackit-it-%d", time.Now().UnixNano())
@@ -199,7 +199,7 @@ func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string
 			Name:        name,
 			NetworkID:   networkID,
 			Port:        6443,
-			SeedTargets: []LoadBalancerTargetInput{target},
+			SeedTargets: []loadbalancer.Target{target},
 			Tags: map[string]string{
 				"capistackit-test": "true",
 				"capistackit-name": name,
