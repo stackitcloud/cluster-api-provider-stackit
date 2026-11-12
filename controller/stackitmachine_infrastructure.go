@@ -176,7 +176,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	}
 
 	machineScope.SetReady()
-	log.V(1).Info("StackitMachine ready", "providerID", stackitMachine.Status.ProviderID)
+	log.V(1).Info("Reconciled StackitMachine", "providerID", stackitMachine.Status.ProviderID)
 	return ctrl.Result{}, nil
 }
 

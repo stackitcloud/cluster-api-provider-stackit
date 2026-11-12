@@ -265,7 +265,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 
 	clusterScope.SetReady()
-	log.V(1).Info("StackitCluster ready", "endpoint", stackitCluster.Status.APIServerEndpoint)
+	log.V(1).Info("Reconciled StackitCluster", "endpoint", stackitCluster.Status.APIServerEndpoint)
 	return ctrl.Result{}, nil
 }
 
