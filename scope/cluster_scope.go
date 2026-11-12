@@ -42,10 +42,9 @@ const bastionSSHPort = 22
 
 // ClusterScope holds the per-reconcile state for a StackitCluster.
 type ClusterScope struct {
-	Client         client.Client
 	Cluster        *clusterv1.Cluster
 	StackitCluster *infrav1.StackitCluster
-	CloudClient    cloud.Client
+	cloudClient    cloud.Client
 
 	network *network.Network
 
@@ -72,7 +71,6 @@ func NewClusterScope(
 		return nil, err
 	}
 	return &ClusterScope{
-		Client:         k8sClient,
 		Cluster:        cluster,
 		StackitCluster: stackitCluster,
 		patchHelper:    patchHelper,
@@ -105,7 +103,7 @@ func (s *ClusterScope) SetNotReady(reason, message string, conditionTypes ...str
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
 }
 
-func (s *ClusterScope) SetAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {
+func (s *ClusterScope) setAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {
 	s.StackitCluster.Spec.ControlPlaneEndpoint = endpoint
 	s.StackitCluster.Status.APIServerEndpoint = endpoint
 }
@@ -125,11 +123,11 @@ func (s *ClusterScope) ServerSpec() server.ServerSpec {
 		Name:             s.StackitCluster.Name + "-bastion",
 		ImageID:          s.StackitCluster.Spec.Bastion.ImageID,
 		MachineType:      s.StackitCluster.Spec.Bastion.MachineType,
-		AvailabilityZone: DefaultAvailabilityZone(s.StackitCluster),
+		AvailabilityZone: defaultAvailabilityZone(s.StackitCluster),
 		SSHKeyName:       s.StackitCluster.Spec.Bastion.SSHKeyName,
 		NetworkID:        s.StackitCluster.Spec.Network.ID,
 		UserData:         s.bastionCloudInit,
-		Tags:             s.BastionTags(),
+		Tags:             s.bastionTags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitCluster.Spec.Bastion.RootVolume),
 		SetServer: func(srv *server.Server, _ bool) {
 			s.bastionServerState = srv.State
@@ -156,7 +154,7 @@ func rootVolumeFromSpec(in infrav1.StackitRootVolumeSpec) server.RootVolume {
 	}
 }
 
-func (s *ClusterScope) SetBastionSecurityGroupID(id string) {
+func (s *ClusterScope) setBastionSecurityGroupID(id string) {
 	s.StackitCluster.Status.Bastion.SecurityGroupID = id
 }
 
@@ -168,11 +166,11 @@ func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomai
 	s.StackitCluster.Status.FailureDomains = failureDomains
 }
 
-// DefaultAvailabilityZone returns the default single availability zone for a
+// defaultAvailabilityZone returns the default single availability zone for a
 // StackitCluster (the alphabetically first published failure domain, falling
 // back to <region>-1). This prevents the STACKIT IaaS API from defaulting to
 // the expensive metro zone (<region>-m).
-func DefaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
+func defaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
 	if stackitCluster == nil {
 		return ""
 	}
@@ -191,36 +189,36 @@ func DefaultAvailabilityZone(stackitCluster *infrav1.StackitCluster) string {
 }
 
 func (s *ClusterScope) SetCloudClient(cloudClient cloud.Client) {
-	s.CloudClient = cloudClient
+	s.cloudClient = cloudClient
 }
 
 func (s *ClusterScope) ProjectID() string {
 	if s.StackitCluster.Spec.ProjectID != "" {
 		return s.StackitCluster.Spec.ProjectID
 	}
-	return s.CloudClient.ProjectID()
+	return s.cloudClient.ProjectID()
 }
 
 func (s *ClusterScope) Region() string {
 	if s.StackitCluster.Spec.Region != "" {
 		return s.StackitCluster.Spec.Region
 	}
-	return s.CloudClient.Region()
+	return s.cloudClient.Region()
 }
 
 func (s *ClusterScope) IaaSClient() *iaas.APIClient {
-	return s.CloudClient.IaaSClient()
+	return s.cloudClient.IaaSClient()
 }
 
 func (s *ClusterScope) LoadBalancerClient() *lb.APIClient {
-	return s.CloudClient.LoadBalancerClient()
+	return s.cloudClient.LoadBalancerClient()
 }
 
-func (s *ClusterScope) APIServerLoadBalancerTags() map[string]string {
+func (s *ClusterScope) apiServerLoadBalancerTags() map[string]string {
 	return util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels)
 }
 
-func (s *ClusterScope) SetAPIServerLoadBalancerID(id string) {
+func (s *ClusterScope) setAPIServerLoadBalancerID(id string) {
 	s.StackitCluster.Status.APIServerLoadBalancerID = id
 }
 
@@ -235,16 +233,16 @@ func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 		Name:        s.StackitCluster.Name + "-apiserver",
 		NetworkID:   s.StackitCluster.Spec.Network.ID,
 		Port:        loadbalancer.DefaultAPIServerPort,
-		Tags:        s.APIServerLoadBalancerTags(),
+		Tags:        s.apiServerLoadBalancerTags(),
 		Targets:     s.loadBalancerTargets,
 		SeedTargets: s.loadBalancerSeedTargets,
-		SetID:       s.SetAPIServerLoadBalancerID,
+		SetID:       s.setAPIServerLoadBalancerID,
 		SetAddress: func(ip string, port int32) {
 			if ip == "" {
 				s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
 				return
 			}
-			s.SetAPIServerEndpoint(clusterv1.APIEndpoint{
+			s.setAPIServerEndpoint(clusterv1.APIEndpoint{
 				Host: ip,
 				Port: port,
 			})
@@ -292,14 +290,14 @@ func (s *ClusterScope) BootstrapTargetIP() string {
 func (s *ClusterScope) PublicIPSpec() publicip.PublicIPSpec {
 	return publicip.PublicIPSpec{
 		ID:             s.StackitCluster.Status.Bastion.PublicIPID,
-		Tags:           s.BastionTags(),
+		Tags:           s.bastionTags(),
 		ServerID:       s.StackitCluster.Status.Bastion.ServerID,
-		ServerSelector: s.BastionTags(),
-		SetPublicIP:    s.SetBastionPublicIP,
+		ServerSelector: s.bastionTags(),
+		SetPublicIP:    s.setBastionPublicIP,
 	}
 }
 
-func (s *ClusterScope) BastionTags() map[string]string {
+func (s *ClusterScope) bastionTags() map[string]string {
 	return bastionTags(s.StackitCluster)
 }
 
@@ -367,7 +365,7 @@ func NodeSSHTags(stackitCluster *infrav1.StackitCluster) map[string]string {
 	return tags
 }
 
-func (s *ClusterScope) SetBastionPublicIP(id, ip string) {
+func (s *ClusterScope) setBastionPublicIP(id, ip string) {
 	s.StackitCluster.Status.Bastion.PublicIPID = id
 	s.StackitCluster.Status.Bastion.PublicIP = ip
 }
@@ -394,11 +392,11 @@ func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 			ID:             s.StackitCluster.Status.Bastion.SecurityGroupID,
 			Name:           s.StackitCluster.Name + "-bastion-ssh",
 			Description:    "Cluster API Provider STACKIT bastion SSH access",
-			Tags:           s.BastionTags(),
+			Tags:           s.bastionTags(),
 			Rules:          rules,
 			ServerIDs:      []string{s.StackitCluster.Status.Bastion.ServerID},
-			ServerSelector: s.BastionTags(),
-			SetID:          s.SetBastionSecurityGroupID,
+			ServerSelector: s.bastionTags(),
+			SetID:          s.setBastionSecurityGroupID,
 		},
 		nodeSSHSecurityGroupSpec(s.StackitCluster, ""),
 	}

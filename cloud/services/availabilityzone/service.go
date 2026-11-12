@@ -17,27 +17,27 @@ type AvailabilityZoneSpec struct {
 	SetZones func(zones []string)
 }
 
-// ClientScope is an interface that provides the IaaS client and target region for availability zone operations.
-type ClientScope interface {
+// clientScope is an interface that provides the IaaS client and target region for availability zone operations.
+type clientScope interface {
 	Region() string
 	IaaSClient() *iaas.APIClient
 }
 
 // Scope is an interface that provides scope data needed for availability zone reconciliation.
 type Scope interface {
-	ClientScope
+	clientScope
 	AvailabilityZoneSpec() AvailabilityZoneSpec
 }
 
-// Client provides direct availability zone operations against the STACKIT IaaS API.
-type Client struct {
+// client provides direct availability zone operations against the STACKIT IaaS API.
+type client struct {
 	iaasClient *iaas.APIClient
 	region     string
 }
 
-// NewClient returns a Client for the given scope.
-func NewClient(scope ClientScope) *Client {
-	return &Client{
+// newClient returns a client for the given scope.
+func newClient(scope clientScope) *client {
+	return &client{
 		iaasClient: scope.IaaSClient(),
 		region:     scope.Region(),
 	}
@@ -45,14 +45,14 @@ func NewClient(scope ClientScope) *Client {
 
 // Service implements availability zones reconciler.
 type Service struct {
-	scope Scope
-	*Client
+	scope  Scope
+	client *client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		Client: NewClient(scope),
+		client: newClient(scope),
 	}
 }

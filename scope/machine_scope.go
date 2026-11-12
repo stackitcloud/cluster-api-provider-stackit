@@ -29,12 +29,11 @@ import (
 
 // MachineScope holds the per-reconcile state for a StackitMachine.
 type MachineScope struct {
-	Client         client.Client
-	Cluster        *clusterv1.Cluster
 	Machine        *clusterv1.Machine
 	StackitCluster *infrav1.StackitCluster
 	StackitMachine *infrav1.StackitMachine
-	CloudClient    cloud.Client
+	cluster        *clusterv1.Cluster
+	cloudClient    cloud.Client
 
 	bootstrapData       []byte
 	instancePowerStatus string
@@ -57,11 +56,10 @@ func NewMachineScope(
 		return nil, err
 	}
 	return &MachineScope{
-		Client:         k8sClient,
-		Cluster:        cluster,
 		Machine:        machine,
 		StackitCluster: stackitCluster,
 		StackitMachine: stackitMachine,
+		cluster:        cluster,
 		patchHelper:    patchHelper,
 	}, nil
 }
@@ -91,17 +89,17 @@ func (s *MachineScope) SetNotReady(reason, message string, conditionTypes ...str
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
 }
 
-func (s *MachineScope) Tags() map[string]string {
+func (s *MachineScope) tags() map[string]string {
 	return util.MachineTags(
-		s.Cluster.Name,
-		s.Cluster.Namespace,
+		s.cluster.Name,
+		s.cluster.Namespace,
 		s.Machine.Name,
 		string(s.Machine.UID),
 		s.StackitMachine.Spec.AdditionalLabels,
 	)
 }
 
-func (s *MachineScope) SetInstance(srv *server.Server) string {
+func (s *MachineScope) setInstance(srv *server.Server) {
 	providerID := cloud.NewProviderID(srv.ID)
 	s.StackitMachine.Status.InstanceID = srv.ID
 	s.StackitMachine.Status.InstanceState = srv.State
@@ -109,16 +107,15 @@ func (s *MachineScope) SetInstance(srv *server.Server) string {
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
-	return providerID
 }
 
-func (s *MachineScope) ClearInstance() {
+func (s *MachineScope) clearInstance() {
 	s.StackitMachine.Status.InstanceID = ""
 	s.StackitMachine.Status.InstanceState = ""
 	s.StackitMachine.Status.AvailabilityZone = ""
 }
 
-// AvailabilityZone returns the resolved availability zone for the machine.
+// availabilityZone returns the resolved availability zone for the machine.
 // Following Cluster API conventions:
 //  1. If Machine.Spec.FailureDomain is set (e.g. by KCP spreading control plane nodes or MachineDeployment),
 //     it is used.
@@ -126,7 +123,7 @@ func (s *MachineScope) ClearInstance() {
 //  3. Otherwise, if neither is set, it defaults to the first available failure domain
 //     from StackitCluster.Status.FailureDomains (sorted alphabetically). This prevents the STACKIT IaaS
 //     API from defaulting to the expensive metro zone (eu01-m).
-func (s *MachineScope) AvailabilityZone() string {
+func (s *MachineScope) availabilityZone() string {
 	if s.Machine != nil && s.Machine.Spec.FailureDomain != "" {
 		return s.Machine.Spec.FailureDomain
 	}
@@ -135,29 +132,29 @@ func (s *MachineScope) AvailabilityZone() string {
 		return s.StackitMachine.Spec.AvailabilityZone
 	}
 
-	return DefaultAvailabilityZone(s.StackitCluster)
+	return defaultAvailabilityZone(s.StackitCluster)
 }
 
 func (s *MachineScope) SetCloudClient(cloudClient cloud.Client) {
-	s.CloudClient = cloudClient
+	s.cloudClient = cloudClient
 }
 
 func (s *MachineScope) ProjectID() string {
 	if s.StackitCluster.Spec.ProjectID != "" {
 		return s.StackitCluster.Spec.ProjectID
 	}
-	return s.CloudClient.ProjectID()
+	return s.cloudClient.ProjectID()
 }
 
 func (s *MachineScope) Region() string {
 	if s.StackitCluster.Spec.Region != "" {
 		return s.StackitCluster.Spec.Region
 	}
-	return s.CloudClient.Region()
+	return s.cloudClient.Region()
 }
 
 func (s *MachineScope) IaaSClient() *iaas.APIClient {
-	return s.CloudClient.IaaSClient()
+	return s.cloudClient.IaaSClient()
 }
 
 func (s *MachineScope) SetBootstrapData(data []byte) {
@@ -178,21 +175,21 @@ func (s *MachineScope) ServerSpec() server.ServerSpec {
 		Name:             s.StackitMachine.Name,
 		ImageID:          s.StackitMachine.Spec.ImageID,
 		MachineType:      s.StackitMachine.Spec.MachineType,
-		AvailabilityZone: s.AvailabilityZone(),
+		AvailabilityZone: s.availabilityZone(),
 		SSHKeyName:       s.StackitMachine.Spec.SSHKeyName,
 		NetworkID:        s.StackitMachine.Spec.Network.ID,
 		SecurityGroups:   s.StackitMachine.Spec.SecurityGroups,
 		UserData:         s.bootstrapData,
-		Tags:             s.Tags(),
+		Tags:             s.tags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitMachine.Spec.RootVolume),
 		DisallowRecreate: s.StackitMachine.Status.Initialization.Provisioned,
 		SetServer: func(srv *server.Server, created bool) {
 			s.instanceCreated = created
 			s.instancePowerStatus = srv.PowerStatus
 			s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
-			s.SetInstance(srv)
+			s.setInstance(srv)
 		},
-		ClearServer: s.ClearInstance,
+		ClearServer: s.clearInstance,
 	}
 }
 

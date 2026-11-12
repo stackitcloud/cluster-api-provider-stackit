@@ -429,63 +429,78 @@ func TestSetTargets(t *testing.T) {
 	}
 	var updatePayloads []map[string]any
 
-	svc := newTestService(t, loadbalancer.LoadBalancerSpec{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
+	scope := &testScope{
+		projectID: testProjectID,
+		region:    testRegion,
+		lbClient: newTestLBClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
 
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName):
-			writeJSON(t, w, sdkLoadBalancerJSON(testLBName, nil, []any{
-				map[string]any{"name": "apiserver", "targetPort": 6443, "targets": targets},
-			}))
-		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName+"/target-pools/apiserver"):
-			payload := readJSON(t, r)
-			updatePayloads = append(updatePayloads, payload)
-			next, ok := payload["targets"].([]any)
-			if !ok {
-				t.Fatalf("update target payload missing targets: %#v", payload)
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName):
+				writeJSON(t, w, sdkLoadBalancerJSON(testLBName, nil, []any{
+					map[string]any{"name": "apiserver", "targetPort": 6443, "targets": targets},
+				}))
+			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName+"/target-pools/apiserver"):
+				payload := readJSON(t, r)
+				updatePayloads = append(updatePayloads, payload)
+				next, ok := payload["targets"].([]any)
+				if !ok {
+					t.Fatalf("update target payload missing targets: %#v", payload)
+				}
+				targets = next
+				writeJSON(t, w, map[string]any{
+					"name":       "apiserver",
+					"targetPort": 6443,
+					"targets":    targets,
+				})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 			}
-			targets = next
-			writeJSON(t, w, map[string]any{
-				"name":       "apiserver",
-				"targetPort": 6443,
-				"targets":    targets,
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}
-	}))
+		})),
+		spec: loadbalancer.LoadBalancerSpec{
+			ID:        testLBName,
+			Name:      testLBName,
+			NetworkID: testNetworkID,
+			Port:      6443,
+			Tags:      map[string]string{"cluster": "test"},
+		},
+	}
+	svc := loadbalancer.New(scope)
 
 	desired := []loadbalancer.Target{
 		{Name: "cp-0", IP: "10.0.0.10"},
 		{Name: "cp-1", IP: "10.0.0.11"},
 	}
-	if err := svc.SetTargets(context.Background(), testLBName, 6443, desired); err != nil {
-		t.Fatalf("SetTargets() error = %v", err)
+	scope.spec.Targets = desired
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if len(updatePayloads) != 1 {
 		t.Fatalf("got %d update payloads, want 1", len(updatePayloads))
 	}
 
 	// Unchanged pool must not trigger another write.
-	if err := svc.SetTargets(context.Background(), testLBName, 6443, desired); err != nil {
-		t.Fatalf("SetTargets() repeat error = %v", err)
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() repeat error = %v", err)
 	}
 	if len(updatePayloads) != 1 {
 		t.Fatalf("got %d update payloads after unchanged set, want 1", len(updatePayloads))
 	}
 
 	// Shrinking pool updates targets.
-	if err := svc.SetTargets(context.Background(), testLBName, 6443, desired[:1]); err != nil {
-		t.Fatalf("SetTargets() shrink error = %v", err)
+	scope.spec.Targets = desired[:1]
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() shrink error = %v", err)
 	}
 	if len(updatePayloads) != 2 {
 		t.Fatalf("got %d update payloads, want 2", len(updatePayloads))
 	}
 
-	// Empty pool is rejected.
-	if err := svc.SetTargets(context.Background(), testLBName, 6443, nil); !errors.Is(err, shared.ErrInvalidInput) {
-		t.Fatalf("SetTargets(nil) error = %v, want ErrInvalidInput", err)
+	// Target missing name or IP is rejected.
+	scope.spec.Targets = []loadbalancer.Target{{Name: "", IP: "10.0.0.10"}}
+	if err := svc.Reconcile(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+		t.Fatalf("Reconcile(invalid target) error = %v, want ErrInvalidInput", err)
 	}
 }
 

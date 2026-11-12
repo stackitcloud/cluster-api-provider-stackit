@@ -28,7 +28,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	loadBalancer, err := s.ensureLoadBalancer(ctx, spec)
+	loadBalancer, err := s.client.ensureLoadBalancer(ctx, spec)
 	if err != nil {
 		return err
 	}
@@ -45,8 +45,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// An empty set never overwrites a populated pool: cluster deletion filters
 	// out every machine while the API server is still needed for drain.
 	if len(spec.Targets) > 0 {
-		if err := s.SetTargets(ctx, loadBalancer.ID, spec.Port, spec.Targets); err != nil {
-			return fmt.Errorf("%w: %w", ErrTargetPoolUpdate, err)
+		if err := s.client.setTargets(ctx, loadBalancer.ID, spec.Port, spec.Targets); err != nil {
+			return fmt.Errorf("%w: %w", errTargetPoolUpdate, err)
 		}
 		log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(spec.Targets))
 	}
@@ -61,12 +61,12 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: load balancer ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	loadBalancerID, err := s.resolveLoadBalancerForDelete(ctx, spec)
+	loadBalancerID, err := s.client.resolveLoadBalancerForDelete(ctx, spec)
 	if err != nil {
 		return err
 	}
 	if loadBalancerID != "" {
-		if err := s.DeleteByID(ctx, loadBalancerID); err != nil {
+		if err := s.client.DeleteByID(ctx, loadBalancerID); err != nil {
 			return err
 		}
 		log.V(1).Info("Deleted load balancer", "loadBalancerID", loadBalancerID)
@@ -77,8 +77,8 @@ func (s *Service) Delete(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a STACKIT load balancer by ID.
-func (c *Client) Get(ctx context.Context, id string) (*LoadBalancer, error) {
+// get retrieves a STACKIT load balancer by ID.
+func (c *Client) get(ctx context.Context, id string) (*LoadBalancer, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
 	}
@@ -89,8 +89,8 @@ func (c *Client) Get(ctx context.Context, id string) (*LoadBalancer, error) {
 	return loadBalancerFromSDK(loadBalancer), nil
 }
 
-// FindByTags finds a single STACKIT load balancer matching the given tag selector.
-func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
+// findByTags finds a single STACKIT load balancer matching the given tag selector.
+func (c *Client) findByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
 	return shared.FindByTags(ctx, tags, c.ListByTags, "load balancer", "load balancers")
 }
 
@@ -134,7 +134,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 
 func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
 	if spec.ID != "" {
-		loadBalancer, err := c.Get(ctx, spec.ID)
+		loadBalancer, err := c.get(ctx, spec.ID)
 		if err == nil {
 			return loadBalancer, nil
 		}
@@ -142,7 +142,7 @@ func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) 
 			return nil, err
 		}
 	}
-	if existing, err := c.FindByTags(ctx, spec.Tags); err == nil {
+	if existing, err := c.findByTags(ctx, spec.Tags); err == nil {
 		return existing, nil
 	} else if !shared.IsNotFound(err) && !isLoadBalancerServiceNotEnabled(err) {
 		return nil, err
@@ -170,7 +170,7 @@ func (c *Client) resolveLoadBalancerForDelete(ctx context.Context, spec LoadBala
 	if len(spec.Tags) == 0 {
 		return "", nil
 	}
-	loadBalancer, err := c.FindByTags(ctx, spec.Tags)
+	loadBalancer, err := c.findByTags(ctx, spec.Tags)
 	if shared.IsNotFound(err) {
 		return "", nil
 	}
@@ -181,7 +181,7 @@ func (c *Client) resolveLoadBalancerForDelete(ctx context.Context, spec LoadBala
 }
 
 func (c *Client) loadBalancerExists(ctx context.Context, id string) (bool, error) {
-	_, err := c.Get(ctx, id)
+	_, err := c.get(ctx, id)
 	if err != nil {
 		if shared.IsNotFound(err) {
 			return false, nil

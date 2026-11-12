@@ -33,7 +33,6 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
-	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
 var _ = Describe("StackitCluster Controller", func() {
@@ -205,13 +204,20 @@ var _ = Describe("StackitCluster Controller", func() {
 		nodeSGs, err := securitygroup.NewClient(fakeCloud).ListByTags(ctx, scope.NodeSSHTags(got))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(nodeSGs).To(HaveLen(1))
-		workerServer, err := server.NewClient(fakeCloud).Create(ctx, server.ServerSpec{
-			Name:           got.Name + "-worker-0",
-			Tags:           util.MachineTags(got.Name, got.Namespace, "worker-0", "uid-1", nil),
-			SecurityGroups: []string{nodeSGs[0].ID},
-		})
+		stackitMachine := newStackitMachine(got.Name+"-worker-0", got.Namespace, "worker-0")
+		stackitMachine.Spec.SecurityGroups = []string{nodeSGs[0].ID}
+		machineScope, err := scope.NewMachineScope(
+			k8sClient,
+			&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: got.Namespace}},
+			&clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: "worker-0", UID: "uid-1"}},
+			got,
+			stackitMachine,
+		)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(fakeCloud.ServerHasSecurityGroup(workerServer.ID, nodeSGs[0].ID)).To(BeTrue())
+		machineScope.SetCloudClient(fakeCloud)
+		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		workerServerID := stackitMachine.Status.InstanceID
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSGs[0].ID)).To(BeTrue())
 
 		got.Spec.Bastion.Enabled = false
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
@@ -222,7 +228,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
-		Expect(fakeCloud.ServerHasSecurityGroup(workerServer.ID, nodeSGs[0].ID)).To(BeFalse())
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSGs[0].ID)).To(BeFalse())
 		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))

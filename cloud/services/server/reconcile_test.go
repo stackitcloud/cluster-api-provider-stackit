@@ -76,6 +76,16 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
+func newTestClient(t *testing.T, handler http.Handler) *server.Client {
+	t.Helper()
+
+	return server.NewClient(&testScope{
+		projectID:  testProjectID,
+		region:     testRegion,
+		iaasClient: newTestIaaSClient(t, handler),
+	})
+}
+
 func newTestService(t *testing.T, spec server.ServerSpec, handler http.Handler) *server.Service {
 	t.Helper()
 
@@ -630,7 +640,7 @@ func TestServiceDelete(t *testing.T) {
 }
 
 func TestListIDsByTags(t *testing.T) {
-	svc := newTestService(t, server.ServerSpec{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers") {
 			if got := r.URL.Query().Get("details"); got != "false" {
 				t.Fatalf("details = %q, want false", got)
@@ -644,7 +654,7 @@ func TestListIDsByTags(t *testing.T) {
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 	}))
 
-	ids, err := svc.ListIDsByTags(context.Background(), map[string]string{"cluster": "test"})
+	ids, err := client.ListIDsByTags(context.Background(), map[string]string{"cluster": "test"})
 	if err != nil {
 		t.Fatalf("ListIDsByTags() error = %v", err)
 	}

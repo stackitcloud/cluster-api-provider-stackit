@@ -16,13 +16,13 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-// ErrServerGone indicates that an already-provisioned server is missing in
+// errServerGone indicates that an already-provisioned server is missing in
 // STACKIT and must not be recreated with stale bootstrap data.
-var ErrServerGone = errors.New("server gone")
+var errServerGone = errors.New("server gone")
 
-// IsServerGone reports whether err wraps ErrServerGone.
+// IsServerGone reports whether err wraps errServerGone.
 func IsServerGone(err error) bool {
-	return errors.Is(err, ErrServerGone)
+	return errors.Is(err, errServerGone)
 }
 
 // Server describes a STACKIT compute instance in provider-neutral terms.
@@ -74,24 +74,24 @@ type Scope interface {
 
 // Client provides direct server operations against the STACKIT IaaS API.
 type Client struct {
-	shared.IaaSScope
+	scope shared.IaaSScope
 }
 
 // NewClient returns a Client for the given scope.
 func NewClient(scope shared.IaaSClientScope) *Client {
-	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
+	return &Client{scope: shared.NewIaaSScope(scope)}
 }
 
 // Service implements server reconciler.
 type Service struct {
-	scope Scope
-	*Client
+	scope  Scope
+	client *Client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		Client: NewClient(scope),
+		client: NewClient(scope),
 	}
 }

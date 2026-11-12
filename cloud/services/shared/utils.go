@@ -68,11 +68,11 @@ func FindByTags[T any](
 	if err != nil {
 		return zero, err
 	}
-	return FindSingle(matched, singular, plural)
+	return findSingle(matched, singular, plural)
 }
 
-// FindSingle returns the single item in matched, or ErrNotFound if empty, or ErrConflict if more than one.
-func FindSingle[T any](matched []T, singular, plural string) (T, error) {
+// findSingle returns the single item in matched, or ErrNotFound if empty, or ErrConflict if more than one.
+func findSingle[T any](matched []T, singular, plural string) (T, error) {
 	var zero T
 	if len(matched) == 0 {
 		return zero, fmt.Errorf("%w: no %s matching tags", ErrNotFound, singular)

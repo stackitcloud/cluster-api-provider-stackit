@@ -76,6 +76,16 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
+func newTestClient(t *testing.T, handler http.Handler) *securitygroup.Client {
+	t.Helper()
+
+	return securitygroup.NewClient(&testScope{
+		projectID:  testProjectID,
+		region:     testRegion,
+		iaasClient: newTestIaaSClient(t, handler),
+	})
+}
+
 func newTestService(t *testing.T, specs []securitygroup.SecurityGroupSpec, handler http.Handler) *securitygroup.Service {
 	t.Helper()
 
@@ -773,20 +783,20 @@ func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
 	}
 }
 
-func TestFindByTagsAndDeleteByID(t *testing.T) {
-	t.Run("FindByTags returns matching security group", func(t *testing.T) {
-		svc := newTestService(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestListByTagsAndDeleteByID(t *testing.T) {
+	t.Run("ListByTags returns matching security groups", func(t *testing.T) {
+		client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(t, w, map[string]any{"items": []any{
 				map[string]any{"id": testSecurityGroupID, "name": "bastion-ssh", "labels": map[string]any{"cluster": "test"}},
 			}})
 		}))
 
-		got, err := svc.FindByTags(context.Background(), map[string]string{"cluster": "test"})
+		got, err := client.ListByTags(context.Background(), map[string]string{"cluster": "test"})
 		if err != nil {
-			t.Fatalf("FindByTags() error = %v", err)
+			t.Fatalf("ListByTags() error = %v", err)
 		}
-		if got.ID != testSecurityGroupID {
-			t.Fatalf("FindByTags().ID = %q, want %q", got.ID, testSecurityGroupID)
+		if len(got) != 1 || got[0].ID != testSecurityGroupID {
+			t.Fatalf("ListByTags() = %#v, want [%s]", got, testSecurityGroupID)
 		}
 	})
 
@@ -795,7 +805,7 @@ func TestFindByTagsAndDeleteByID(t *testing.T) {
 			deletedRules []string
 			deletedSGID  string
 		)
-		svc := newTestService(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
@@ -814,7 +824,7 @@ func TestFindByTagsAndDeleteByID(t *testing.T) {
 			}
 		}))
 
-		if err := svc.DeleteByID(context.Background(), testSecurityGroupID); err != nil {
+		if err := client.DeleteByID(context.Background(), testSecurityGroupID); err != nil {
 			t.Fatalf("DeleteByID() error = %v", err)
 		}
 		if !slices.Equal(deletedRules, []string{testRuleID1}) {

@@ -36,7 +36,7 @@ const (
 // BootstrapTarget seeds a new load balancer; STACKIT rejects an empty pool.
 func BootstrapTarget(ip string) Target {
 	if ip == "" {
-		ip = DefaultBootstrapTargetIP
+		ip = defaultBootstrapTargetIP
 	}
 	return Target{
 		Name: bootstrapTargetName,
@@ -112,8 +112,8 @@ func firstInternalIP(addresses []clusterv1.MachineAddress) string {
 	return ""
 }
 
-// SetTargets replaces the contents of the API-server target pool. STACKIT rejects an empty pool.
-func (c *Client) SetTargets(
+// setTargets replaces the contents of the API-server target pool. STACKIT rejects an empty pool.
+func (c *Client) setTargets(
 	ctx context.Context,
 	loadBalancerID string,
 	port int32,

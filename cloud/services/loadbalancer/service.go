@@ -20,21 +20,19 @@ const (
 	// DefaultAPIServerPort is the default TCP port for the Kubernetes API server.
 	DefaultAPIServerPort int32 = 6443
 
-	// DefaultBootstrapTargetIP is the placeholder IP used when no network prefix or target IP is available.
-	DefaultBootstrapTargetIP = "10.0.0.1"
-
-	apiserverTargetPoolName = "apiserver"
-	apiserverListenerName   = "apiserver"
-	bootstrapTargetName     = "capi-bootstrap-placeholder"
+	defaultBootstrapTargetIP = "10.0.0.1"
+	apiserverTargetPoolName  = "apiserver"
+	apiserverListenerName    = "apiserver"
+	bootstrapTargetName      = "capi-bootstrap-placeholder"
 )
 
-// ErrTargetPoolUpdate indicates that the load balancer was created/resolved
+// errTargetPoolUpdate indicates that the load balancer was created/resolved
 // successfully, but updating its target pool failed.
-var ErrTargetPoolUpdate = errors.New("load balancer target pool update failed")
+var errTargetPoolUpdate = errors.New("load balancer target pool update failed")
 
-// IsTargetPoolUpdateError reports whether err wraps ErrTargetPoolUpdate.
+// IsTargetPoolUpdateError reports whether err wraps errTargetPoolUpdate.
 func IsTargetPoolUpdateError(err error) bool {
-	return errors.Is(err, ErrTargetPoolUpdate)
+	return errors.Is(err, errTargetPoolUpdate)
 }
 
 // LoadBalancer describes an API-server load balancer.
@@ -95,14 +93,14 @@ func NewClient(scope ClientScope) *Client {
 
 // Service implements load balancer reconciler.
 type Service struct {
-	scope Scope
-	*Client
+	scope  Scope
+	client *Client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		Client: NewClient(scope),
+		client: NewClient(scope),
 	}
 }

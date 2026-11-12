@@ -25,7 +25,7 @@ import (
 func (s *Service) Reconcile(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	for _, spec := range s.scope.SecurityGroupSpecs() {
-		if err := s.reconcileSecurityGroup(ctx, spec); err != nil {
+		if err := s.client.reconcileSecurityGroup(ctx, spec); err != nil {
 			return err
 		}
 	}
@@ -36,7 +36,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 func (s *Service) Delete(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	for _, spec := range slices.Backward(s.scope.SecurityGroupSpecs()) {
-		if err := s.deleteSecurityGroup(ctx, spec); err != nil {
+		if err := s.client.deleteSecurityGroup(ctx, spec); err != nil {
 			return err
 		}
 	}
@@ -44,20 +44,20 @@ func (s *Service) Delete(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a STACKIT security group by ID.
-func (c *Client) Get(ctx context.Context, id string) (*SecurityGroup, error) {
+// get retrieves a STACKIT security group by ID.
+func (c *Client) get(ctx context.Context, id string) (*SecurityGroup, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
 	}
-	securityGroup, err := c.IaaSClient().DefaultAPI.GetSecurityGroup(ctx, c.ProjectID(), c.Region(), id).Execute()
+	securityGroup, err := c.scope.IaaSClient().DefaultAPI.GetSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get security group", err)
 	}
 	return securityGroupFromSDK(securityGroup), nil
 }
 
-// FindByTags finds a single STACKIT security group matching the given tag selector.
-func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
+// findByTags finds a single STACKIT security group matching the given tag selector.
+func (c *Client) findByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
 	return shared.FindByTags(ctx, tags, c.ListByTags, "security group", "security groups")
 }
 
@@ -66,7 +66,7 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Sec
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, c.ProjectID(), c.Region()).
+	resp, err := c.scope.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, c.scope.ProjectID(), c.scope.Region()).
 		LabelSelector(shared.LabelSelector(tags)).
 		Execute()
 	if err != nil {
@@ -94,14 +94,14 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	return c.deleteSecurityGroupWithRules(ctx, id, rules)
 }
 
-// AttachToServer attaches a security group to a server idempotently.
+// attachToServer attaches a security group to a server idempotently.
 // Three error responses are tolerated:
 //   - conflict: already attached
 //   - invalid input: duplicate item in security_groups list
 //   - not found: server has no network port yet
-func (c *Client) AttachToServer(ctx context.Context, serverID, securityGroupID string) error {
-	if err := c.IaaSClient().DefaultAPI.
-		AddSecurityGroupToServer(ctx, c.ProjectID(), c.Region(), serverID, securityGroupID).
+func (c *Client) attachToServer(ctx context.Context, serverID, securityGroupID string) error {
+	if err := c.scope.IaaSClient().DefaultAPI.
+		AddSecurityGroupToServer(ctx, c.scope.ProjectID(), c.scope.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("add security group to server", err)
 		if !shared.IsConflict(err) && !shared.IsInvalidInput(err) && !shared.IsNotFound(err) {
@@ -114,8 +114,8 @@ func (c *Client) AttachToServer(ctx context.Context, serverID, securityGroupID s
 
 // DetachFromServer detaches a security group from a server, ignoring NotFound and Conflict errors.
 func (c *Client) DetachFromServer(ctx context.Context, serverID, securityGroupID string) error {
-	if err := c.IaaSClient().DefaultAPI.
-		RemoveSecurityGroupFromServer(ctx, c.ProjectID(), c.Region(), serverID, securityGroupID).
+	if err := c.scope.IaaSClient().DefaultAPI.
+		RemoveSecurityGroupFromServer(ctx, c.scope.ProjectID(), c.scope.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("remove security group from server", err)
 		if !shared.IsNotFound(err) && !shared.IsConflict(err) {
@@ -144,7 +144,7 @@ func (c *Client) reconcileSecurityGroup(ctx context.Context, spec SecurityGroupS
 		if serverID == "" {
 			continue
 		}
-		if err := c.AttachToServer(ctx, serverID, securityGroup.ID); err != nil {
+		if err := c.attachToServer(ctx, serverID, securityGroup.ID); err != nil {
 			return err
 		}
 	}
@@ -188,7 +188,7 @@ func (c *Client) resolveSecurityGroupForDelete(
 	if len(spec.Tags) == 0 {
 		return "", nil, nil
 	}
-	securityGroup, err := c.FindByTags(ctx, spec.Tags)
+	securityGroup, err := c.findByTags(ctx, spec.Tags)
 	if shared.IsNotFound(err) {
 		return "", nil, nil
 	}
@@ -212,7 +212,7 @@ func (c *Client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.
 
 func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec) (*SecurityGroup, error) {
 	if spec.ID != "" {
-		securityGroup, err := c.Get(ctx, spec.ID)
+		securityGroup, err := c.get(ctx, spec.ID)
 		if err == nil {
 			return securityGroup, nil
 		}
@@ -220,12 +220,12 @@ func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec
 			return nil, err
 		}
 	}
-	if existing, err := c.FindByTags(ctx, spec.Tags); err == nil {
+	if existing, err := c.findByTags(ctx, spec.Tags); err == nil {
 		return existing, nil
 	} else if !shared.IsNotFound(err) {
 		return nil, err
 	}
-	securityGroup, err := c.IaaSClient().DefaultAPI.CreateSecurityGroup(ctx, c.ProjectID(), c.Region()).
+	securityGroup, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region()).
 		CreateSecurityGroupPayload(spec.toCreatePayload()).
 		Execute()
 	if err != nil {
@@ -247,8 +247,8 @@ func (c *Client) deleteSecurityGroupWithRules(
 			return err
 		}
 	}
-	if err := c.IaaSClient().DefaultAPI.
-		DeleteSecurityGroup(ctx, c.ProjectID(), c.Region(), id).
+	if err := c.scope.IaaSClient().DefaultAPI.
+		DeleteSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region(), id).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("delete security group", err)
 		if !shared.IsNotFound(err) {
@@ -265,7 +265,7 @@ func (c *Client) detachSecurityGroupFromServers(ctx context.Context, securityGro
 	if len(spec.ServerSelector) == 0 {
 		return nil
 	}
-	serverIDs, err := server.NewClient(c).ListIDsByTags(ctx, spec.ServerSelector)
+	serverIDs, err := server.NewClient(c.scope).ListIDsByTags(ctx, spec.ServerSelector)
 	if err != nil {
 		return err
 	}

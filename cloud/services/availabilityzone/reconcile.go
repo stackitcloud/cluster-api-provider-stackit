@@ -21,7 +21,7 @@ import (
 
 func (s *Service) Reconcile(ctx context.Context) error {
 	log := logf.FromContext(ctx)
-	zones, err := s.List(ctx)
+	zones, err := s.client.list(ctx)
 	if err != nil {
 		return err
 	}
@@ -33,8 +33,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// List retrieves the availability zones for the configured region.
-func (c *Client) List(ctx context.Context) ([]string, error) {
+// list retrieves the availability zones for the configured region.
+func (c *client) list(ctx context.Context) ([]string, error) {
 	if c.region == "" {
 		return nil, fmt.Errorf("%w: region is empty", shared.ErrInvalidInput)
 	}

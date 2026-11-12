@@ -71,7 +71,7 @@ func TestDefaultAvailabilityZone(t *testing.T) {
 func TestAvailabilityZoneSpecUsesResolvedRegion(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
-		CloudClient:    cloudfake.New(),
+		cloudClient:    cloudfake.New(),
 	}
 
 	clusterScope.AvailabilityZoneSpec().SetZones([]string{"eu01-1"})

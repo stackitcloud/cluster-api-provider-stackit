@@ -22,6 +22,33 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
+type testServerScope struct {
+	cloud.Client
+	spec server.ServerSpec
+}
+
+func (s *testServerScope) ServerSpec() server.ServerSpec {
+	return s.spec
+}
+
+func createTestServer(t *testing.T, client cloud.Client, name string, tags map[string]string) {
+	t.Helper()
+
+	err := server.New(&testServerScope{
+		Client: client,
+		spec: server.ServerSpec{
+			Name:        name,
+			ImageID:     "22222222-2222-4222-8222-222222222222",
+			MachineType: "c2i.2",
+			NetworkID:   "11111111-1111-4111-8111-111111111111",
+			Tags:        tags,
+		},
+	}).Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("server.Reconcile() error = %v", err)
+	}
+}
+
 func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	ctx := context.Background()
 	client := cloudfake.New()
@@ -39,12 +66,8 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	pubIPClient := publicip.NewClient(client)
 	sgClient := securitygroup.NewClient(client)
 
-	if _, err := srvClient.Create(ctx, server.ServerSpec{Name: "matched", Tags: tags}); err != nil {
-		t.Fatalf("server.Create() error = %v", err)
-	}
-	if _, err := srvClient.Create(ctx, server.ServerSpec{Name: "other", Tags: otherTags}); err != nil {
-		t.Fatalf("server.Create() error = %v", err)
-	}
+	createTestServer(t, client, "matched", tags)
+	createTestServer(t, client, "other", otherTags)
 	if _, err := client.CreatePublicIP(ctx, tags); err != nil {
 		t.Fatalf("CreatePublicIP() error = %v", err)
 	}

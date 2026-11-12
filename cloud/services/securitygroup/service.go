@@ -66,24 +66,24 @@ type Scope interface {
 
 // Client provides direct security group operations against the STACKIT IaaS API.
 type Client struct {
-	shared.IaaSScope
+	scope shared.IaaSScope
 }
 
 // NewClient returns a Client for the given scope.
 func NewClient(scope shared.IaaSClientScope) *Client {
-	return &Client{IaaSScope: shared.NewIaaSScope(scope)}
+	return &Client{scope: shared.NewIaaSScope(scope)}
 }
 
 // Service implements security groups reconciler.
 type Service struct {
-	scope Scope
-	*Client
+	scope  Scope
+	client *Client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		Client: NewClient(scope),
+		client: NewClient(scope),
 	}
 }

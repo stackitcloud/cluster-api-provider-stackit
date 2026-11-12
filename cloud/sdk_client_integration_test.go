@@ -100,11 +100,27 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 		{Name: "capistackit-initial-target", IP: initialIP},
 		{Name: "capistackit-integration-target", IP: targetIP},
 	}
-	if err := lbClient.SetTargets(context.Background(), lbID, 6443, targets); err != nil {
-		t.Fatalf("SetTargets() error = %v", err)
+	scope := &integrationLBScope{
+		Client: client,
+		spec: loadbalancer.LoadBalancerSpec{
+			ID:        lbID,
+			Name:      lbID,
+			NetworkID: networkID,
+			Port:      6443,
+			Targets:   targets,
+			Tags: map[string]string{
+				"capistackit-test": "true",
+				"capistackit-name": lbID,
+			},
+		},
 	}
-	if err := lbClient.SetTargets(context.Background(), lbID, 6443, targets[:1]); err != nil {
-		t.Fatalf("SetTargets() shrink error = %v", err)
+	svc := loadbalancer.New(scope)
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
+	}
+	scope.spec.Targets = targets[:1]
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() shrink error = %v", err)
 	}
 }
 

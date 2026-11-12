@@ -61,7 +61,7 @@ func (c *Client) ensureSecurityGroupRules(ctx context.Context, securityGroupID s
 func (c *Client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	rule = rule.normalize()
 	if rule.RemoteSecurityGroupID == "" && len(rule.RemoteSecurityGroupTags) > 0 {
-		remoteSG, err := c.FindByTags(ctx, rule.RemoteSecurityGroupTags)
+		remoteSG, err := c.findByTags(ctx, rule.RemoteSecurityGroupTags)
 		if err != nil {
 			return Rule{}, err
 		}
@@ -72,7 +72,7 @@ func (c *Client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 }
 
 func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
-	if _, err := c.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, c.ProjectID(), c.Region(), securityGroupID).
+	if _, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).
 		CreateSecurityGroupRulePayload(rule.toCreatePayload()).
 		Execute(); err != nil {
 		return shared.ClassifySDKError("create security group rule", err)
@@ -81,7 +81,7 @@ func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID st
 }
 
 func (c *Client) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
-	resp, err := c.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, c.ProjectID(), c.Region(), securityGroupID).Execute()
+	resp, err := c.scope.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list security group rules", err)
 	}
@@ -92,8 +92,8 @@ func (c *Client) deleteSecurityGroupRule(ctx context.Context, securityGroupID, r
 	if ruleID == "" {
 		return nil
 	}
-	if err := c.IaaSClient().DefaultAPI.
-		DeleteSecurityGroupRule(ctx, c.ProjectID(), c.Region(), securityGroupID, ruleID).
+	if err := c.scope.IaaSClient().DefaultAPI.
+		DeleteSecurityGroupRule(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID, ruleID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("delete security group rule", err)
 		if !shared.IsNotFound(err) {
