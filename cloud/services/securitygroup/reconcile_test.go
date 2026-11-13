@@ -309,6 +309,40 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("Reconcile() error = %v, want ErrConflict", err)
 		}
 	})
+
+	t.Run("returns retryable ErrTransient when remote security group referenced by tags does not exist yet", func(t *testing.T) {
+		specs := []securitygroup.SecurityGroupSpec{{
+			ID:   testSecurityGroupID,
+			Name: "node-ssh",
+			Tags: map[string]string{"role": "node-ssh"},
+			Rules: []securitygroup.Rule{{
+				Direction:               securitygroup.DirectionIngress,
+				Protocol:                securitygroup.ProtocolTCP,
+				PortMin:                 22,
+				PortMax:                 22,
+				RemoteSecurityGroupTags: map[string]string{"role": "bastion"},
+			}},
+		}}
+
+		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
+				writeJSON(t, w, map[string]any{"id": testSecurityGroupID, "name": "node-ssh"})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		err := svc.Reconcile(context.Background())
+		if !errors.Is(err, shared.ErrTransient) {
+			t.Fatalf("Reconcile() error = %v, want ErrTransient", err)
+		}
+	})
 }
 
 func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {

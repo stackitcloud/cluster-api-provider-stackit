@@ -63,6 +63,9 @@ func (c *client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	if rule.RemoteSecurityGroupID == "" && len(rule.RemoteSecurityGroupTags) > 0 {
 		remoteSG, err := c.findByTags(ctx, rule.RemoteSecurityGroupTags)
 		if err != nil {
+			if shared.IsNotFound(err) {
+				return Rule{}, fmt.Errorf("%w: remote security group not ready: %w", shared.ErrTransient, err)
+			}
 			return Rule{}, err
 		}
 		rule.RemoteSecurityGroupID = remoteSG.ID

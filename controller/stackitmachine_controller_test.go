@@ -261,6 +261,25 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroup.ID)).To(BeTrue())
 		})
 
+		It("requeues when bastion is enabled and bastion security group does not exist yet", func() {
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			stackitCluster.Spec.Bastion = validBastionSpec()
+			Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
+			stackitCluster.Status.Ready = true
+			stackitCluster.Status.Bastion.SecurityGroupID = ""
+			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "BastionSSHAccessError")
+		})
+
 		It("marks conditions not ready when bastion node SSH access fails", func() {
 			stackitCluster := &infrav1.StackitCluster{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
