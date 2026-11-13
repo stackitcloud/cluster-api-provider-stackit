@@ -170,10 +170,6 @@ func (s *ClusterScope) setBastionSecurityGroupID(id string) {
 	s.StackitCluster.Status.Bastion.SecurityGroupID = id
 }
 
-func (s *ClusterScope) ClearBastionStatus() {
-	s.StackitCluster.Status.Bastion = infrav1.StackitBastionStatus{}
-}
-
 func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
 	s.StackitCluster.Status.FailureDomains = failureDomains
 }

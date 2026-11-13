@@ -343,7 +343,6 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		return ctrl.Result{}, err
 	}
 	if hadBastion {
-		clusterScope.ClearBastionStatus()
 		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)

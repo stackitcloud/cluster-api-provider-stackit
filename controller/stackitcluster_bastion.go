@@ -55,7 +55,6 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			if err := deleteBastionResources(ctx, clusterScope); err != nil {
 				return ctrl.Result{}, false, err
 			}
-			clusterScope.ClearBastionStatus()
 			if hadBastion {
 				record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 			}
@@ -99,7 +98,6 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		if err := deleteBastionResources(ctx, clusterScope); err != nil {
 			return ctrl.Result{}, false, err
 		}
-		clusterScope.ClearBastionStatus()
 		clusterScope.SetNotReady(
 			"Recreating",
 			"recreating bastion because cloudInitRef content changed",
