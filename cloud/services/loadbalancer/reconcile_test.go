@@ -590,8 +590,8 @@ func TestServiceDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to tag lookup when ID is empty", func(t *testing.T) {
-		var deletedID string
+	t.Run("falls back to tag lookup when ID is empty and deletes all matching load balancers", func(t *testing.T) {
+		var deletedIDs []string
 		spec := loadbalancer.LoadBalancerSpec{
 			Tags: map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
 		}
@@ -604,9 +604,18 @@ func TestServiceDelete(t *testing.T) {
 					sdkLoadBalancerJSON(testLBName, map[string]any{
 						"cluster.x-k8s.io.cluster-name": "test",
 					}, nil),
+					sdkLoadBalancerJSON("second-lb", map[string]any{
+						"cluster.x-k8s.io.cluster-name": "test",
+					}, nil),
+					sdkLoadBalancerJSON("other-lb", map[string]any{
+						"cluster.x-k8s.io.cluster-name": "other",
+					}, nil),
 				}})
 			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/load-balancers/"+testLBName):
-				deletedID = testLBName
+				deletedIDs = append(deletedIDs, testLBName)
+				writeJSON(t, w, map[string]any{})
+			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/load-balancers/second-lb"):
+				deletedIDs = append(deletedIDs, "second-lb")
 				writeJSON(t, w, map[string]any{})
 			default:
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
@@ -616,8 +625,8 @@ func TestServiceDelete(t *testing.T) {
 		if err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
-		if deletedID != testLBName {
-			t.Fatalf("deletedID = %q, want %q", deletedID, testLBName)
+		if len(deletedIDs) != 2 || deletedIDs[0] != testLBName || deletedIDs[1] != "second-lb" {
+			t.Fatalf("deletedIDs = %v, want [%s second-lb]", deletedIDs, testLBName)
 		}
 	})
 

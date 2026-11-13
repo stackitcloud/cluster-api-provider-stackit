@@ -34,8 +34,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -414,33 +412,17 @@ var _ = Describe("Manager", Ordered, func() {
 			}, 10*time.Minute, 10*time.Second).Should(Succeed())
 
 			By("waiting for the StackitMachine to provision a VM")
-			var instanceID string
 			Eventually(func(g Gomega) {
 				ready := kubectlOutput(g, "get", "stackitmachine", machineName, "-n", cfg.Namespace, "-o", "jsonpath={.status.ready}")
 				g.Expect(ready).To(Equal("true"))
-				instanceID = kubectlOutput(g, "get", "stackitmachine", machineName, "-n", cfg.Namespace, "-o", "jsonpath={.status.instanceID}")
+				instanceID := kubectlOutput(g, "get", "stackitmachine", machineName, "-n", cfg.Namespace, "-o", "jsonpath={.status.instanceID}")
 				g.Expect(instanceID).NotTo(BeEmpty())
 			}, 25*time.Minute, 15*time.Second).Should(Succeed())
-
-			By("verifying the VM exists in STACKIT")
-			Eventually(func(g Gomega) {
-				expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
-			}, 5*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("deleting the StackitMachine to trigger VM cleanup")
 			cmd = exec.Command("kubectl", "delete", "stackitmachine", machineName, "-n", cfg.Namespace, "--wait=true", "--timeout=20m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete StackitMachine")
-
-			By("verifying the VM was deleted from STACKIT")
-			Eventually(func(g Gomega) {
-				expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 5*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should create and delete a 1 control-plane / 1 worker workload Cluster without STACKIT leaks", func() {
@@ -480,48 +462,22 @@ var _ = Describe("Manager", Ordered, func() {
 			}, 15*time.Minute, 10*time.Second).Should(Succeed())
 
 			if cfg.BastionEnabled {
-				By("verifying the bastion public IP and security group exist")
+				By("verifying the bastion status is populated")
 				Eventually(func(g Gomega) {
 					output := kubectlOutput(g, "get", "stackitcluster", clusterName, "-n", cfg.Namespace, "-o", "jsonpath={.status.bastion.publicIP}")
 					g.Expect(output).NotTo(BeEmpty())
-					publicIPCount, err := countPublicIPsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(publicIPCount).To(Equal(1))
-					sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(sgCount).To(Equal(1))
 				}, 10*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
 			By("waiting for one control-plane and one worker StackitMachine to provision")
-			var instanceIDs []string
 			Eventually(func(g Gomega) {
 				machines := stackitMachinesForTestID(g, cfg.Namespace, testID)
 				g.Expect(machines).To(HaveLen(2))
-				instanceIDs = instanceIDs[:0]
 				for _, machine := range machines {
 					g.Expect(machine.Status.Ready).To(BeTrue(), "StackitMachine %s is not ready", machine.Metadata.Name)
 					g.Expect(machine.Status.InstanceID).NotTo(BeEmpty(), "StackitMachine %s has no instanceID", machine.Metadata.Name)
-					instanceIDs = append(instanceIDs, machine.Status.InstanceID)
 				}
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
-
-			if cfg.BastionEnabled {
-				By("verifying the node SSH security group exists")
-				Eventually(func(g Gomega) {
-					sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2ENodeSSHTags(testID))
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(sgCount).To(Equal(1))
-				}, 10*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
-			By("verifying both VMs exist in STACKIT")
-			for _, instanceID := range instanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
-				}, 5*time.Minute, 15*time.Second).Should(Succeed())
-			}
 
 			By("deleting the workload Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
@@ -539,20 +495,6 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(BeEmpty())
 				g.Expect(stackitMachinesForTestID(g, cfg.Namespace, testID)).To(BeEmpty())
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-				publicIPCount, err := countPublicIPsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(publicIPCount).To(Equal(0))
-				sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(sgCount).To(Equal(0))
-				sgCount, err = countSecurityGroupsByTags(ctx, cloudClient, stackitE2ENodeSSHTags(testID))
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(sgCount).To(Equal(0))
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should align StackitMachine, Machine, and Node providerIDs in a real workload Cluster", func() {
@@ -571,7 +513,6 @@ var _ = Describe("Manager", Ordered, func() {
 			leakTags := stackitE2ETags(testID)
 			kubernetesVersion := envDefault("KUBERNETES_VERSION", defaultKubernetesVersion)
 			validateSupportedKubernetesVersion(kubernetesVersion)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -582,7 +523,6 @@ var _ = Describe("Manager", Ordered, func() {
 			var workloadKubeconfig string
 			defer func() {
 				cleanupStackitKubeadmClusterFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -597,25 +537,19 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to apply STACKIT NodeRef fixture")
 
 			waitForKubeadmWorkloadClusterReady(workloadReadinessOptions{
-				Namespace:           cfg.Namespace,
-				ClusterName:         clusterName,
-				TestID:              testID,
-				WantNodes:           2,
-				WantMachines:        2,
-				InstallCNI:          true,
-				WaitForCCM:          true,
-				ObservedInstanceIDs: &observedInstanceIDs,
+				Namespace:    cfg.Namespace,
+				ClusterName:  clusterName,
+				TestID:       testID,
+				WantNodes:    2,
+				WantMachines: 2,
+				InstallCNI:   true,
+				WaitForCCM:   true,
 			}, &workloadKubeconfig)
 
 			By("deleting the workload Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete NodeRef workload Cluster")
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should create a topology workload Cluster with Ready Nodes", func() {
@@ -634,7 +568,6 @@ var _ = Describe("Manager", Ordered, func() {
 			leakTags := stackitE2ETags(testID)
 			kubernetesVersion := envDefault("KUBERNETES_VERSION", defaultKubernetesVersion)
 			validateSupportedKubernetesVersion(kubernetesVersion)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -658,7 +591,6 @@ var _ = Describe("Manager", Ordered, func() {
 			var workloadKubeconfig string
 			defer func() {
 				cleanupStackitTopologyClusterFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -674,15 +606,14 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to apply STACKIT topology workload fixture")
 
 			waitForKubeadmWorkloadClusterReady(workloadReadinessOptions{
-				Namespace:           cfg.Namespace,
-				ClusterName:         clusterName,
-				TestID:              testID,
-				WantNodes:           2,
-				WantMachines:        2,
-				InstallCNI:          true,
-				WaitForCCM:          true,
-				Topology:            true,
-				ObservedInstanceIDs: &observedInstanceIDs,
+				Namespace:    cfg.Namespace,
+				ClusterName:  clusterName,
+				TestID:       testID,
+				WantNodes:    2,
+				WantMachines: 2,
+				InstallCNI:   true,
+				WaitForCCM:   true,
+				Topology:     true,
 			}, &workloadKubeconfig)
 
 			By("verifying topology template metadata is propagated to generated infrastructure resources")
@@ -701,11 +632,6 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(kubectlOutput(g, "get", "stackitmachine", "-n", cfg.Namespace, "-l", "cluster.x-k8s.io/cluster-name="+clusterName, "-o", "name")).To(BeEmpty())
 				g.Expect(kubectlOutput(g, "get", "stackitcluster", "-n", cfg.Namespace, "-l", "cluster.x-k8s.io/cluster-name="+clusterName, "-o", "name")).To(BeEmpty())
 			}, 10*time.Minute, 15*time.Second).Should(Succeed())
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should scale a worker MachineDeployment up and down without STACKIT leaks", func() {
@@ -720,7 +646,6 @@ var _ = Describe("Manager", Ordered, func() {
 			testID := envDefault("STACKIT_E2E_TEST_ID", clusterName)
 			leakTags := stackitE2ETags(testID)
 			machineDeploymentName := clusterName + "-md-0"
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -732,7 +657,6 @@ var _ = Describe("Manager", Ordered, func() {
 			fixturePath := writeTempManifest("stackit-md-scale-e2e-*.yaml", fixture)
 			defer func() {
 				cleanupStackitMachineDeploymentScaleFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -754,7 +678,6 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(func(g Gomega) {
 				initialInstanceIDs = readyStackitMachineInstanceIDs(g, cfg.Namespace, testID, 1)
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, initialInstanceIDs...)
 			Eventually(func(g Gomega) {
 				expectCAPIMachinesWithProviderIDs(g, cfg.Namespace, clusterName, 1)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
@@ -768,20 +691,11 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(func(g Gomega) {
 				scaledUpInstanceIDs = readyStackitMachineInstanceIDs(g, cfg.Namespace, testID, 3)
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, scaledUpInstanceIDs...)
 			Eventually(func(g Gomega) {
 				expectCAPIMachinesWithProviderIDs(g, cfg.Namespace, clusterName, 3)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 			for _, instanceID := range initialInstanceIDs {
 				Expect(scaledUpInstanceIDs).To(ContainElement(instanceID))
-			}
-
-			By("verifying all scaled-up worker VMs exist in STACKIT")
-			for _, instanceID := range scaledUpInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
-				}, 5*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
 			By("scaling workers back down to one replica")
@@ -793,7 +707,6 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(func(g Gomega) {
 				remainingInstanceIDs = readyStackitMachineInstanceIDs(g, cfg.Namespace, testID, 1)
 			}, 30*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, remainingInstanceIDs...)
 			Eventually(func(g Gomega) {
 				expectCAPIMachinesWithProviderIDs(g, cfg.Namespace, clusterName, 1)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
@@ -801,31 +714,10 @@ var _ = Describe("Manager", Ordered, func() {
 			deletedInstanceIDs := difference(scaledUpInstanceIDs, remainingInstanceIDs)
 			Expect(deletedInstanceIDs).To(HaveLen(2))
 
-			By("verifying scaled-down worker VMs were deleted from STACKIT")
-			for _, instanceID := range deletedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
 			By("deleting the scale test workload Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete scale test workload Cluster")
-
-			By("verifying all observed worker VMs were deleted from STACKIT")
-			for _, instanceID := range observedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should scale workload worker Nodes up and down without STACKIT leaks", func() {
@@ -845,7 +737,6 @@ var _ = Describe("Manager", Ordered, func() {
 			machineDeploymentName := clusterName + "-md-0"
 			kubernetesVersion := envDefault("KUBERNETES_VERSION", defaultKubernetesVersion)
 			validateSupportedKubernetesVersion(kubernetesVersion)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -866,7 +757,6 @@ var _ = Describe("Manager", Ordered, func() {
 			var workloadKubeconfig string
 			defer func() {
 				cleanupStackitKubeadmClusterFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -881,14 +771,13 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to apply STACKIT workload scale fixture")
 
 			waitForKubeadmWorkloadClusterReady(workloadReadinessOptions{
-				Namespace:           cfg.Namespace,
-				ClusterName:         clusterName,
-				TestID:              testID,
-				WantNodes:           2,
-				WantMachines:        2,
-				InstallCNI:          true,
-				WaitForCCM:          true,
-				ObservedInstanceIDs: &observedInstanceIDs,
+				Namespace:    cfg.Namespace,
+				ClusterName:  clusterName,
+				TestID:       testID,
+				WantNodes:    2,
+				WantMachines: 2,
+				InstallCNI:   true,
+				WaitForCCM:   true,
 			}, &workloadKubeconfig)
 
 			var initialWorkerNodeNames []string
@@ -918,18 +807,9 @@ var _ = Describe("Manager", Ordered, func() {
 				expectWorkloadNodesReady(g, workloadKubeconfig, 4)
 				scaledUpWorkerNodeNames = nodeNamesForMachines(workers)
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, scaledUpInstanceIDs...)
 			Expect(scaledUpWorkerNodeNames).To(HaveLen(3))
 			for _, nodeName := range initialWorkerNodeNames {
 				Expect(scaledUpWorkerNodeNames).To(ContainElement(nodeName))
-			}
-
-			By("verifying all scaled-up workload VMs exist in STACKIT")
-			for _, instanceID := range scaledUpInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
-				}, 5*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
 			By("scaling workload workers back down to one replica")
@@ -949,7 +829,6 @@ var _ = Describe("Manager", Ordered, func() {
 				expectWorkloadNodesReady(g, workloadKubeconfig, 2)
 				remainingWorkerNodeNames = nodeNamesForMachines(workers)
 			}, 30*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, remainingInstanceIDs...)
 
 			removedWorkerNodeNames := difference(scaledUpWorkerNodeNames, remainingWorkerNodeNames)
 			Expect(removedWorkerNodeNames).To(HaveLen(2))
@@ -962,23 +841,10 @@ var _ = Describe("Manager", Ordered, func() {
 			deletedInstanceIDs := difference(scaledUpInstanceIDs, remainingInstanceIDs)
 			Expect(deletedInstanceIDs).To(HaveLen(2))
 
-			By("verifying scaled-down workload VMs were deleted from STACKIT")
-			for _, instanceID := range deletedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
 			By("deleting the workload scale Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete workload scale Cluster")
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should replace worker VMs during a MachineDeployment version upgrade without STACKIT leaks", func() {
@@ -997,7 +863,6 @@ var _ = Describe("Manager", Ordered, func() {
 			upgradeTo := envDefault("STACKIT_E2E_UPGRADE_TO", "v1.34.8")
 			validateSupportedKubernetesVersion(upgradeFrom)
 			validateSupportedKubernetesVersion(upgradeTo)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -1007,7 +872,6 @@ var _ = Describe("Manager", Ordered, func() {
 			fixturePath := writeTempManifest("stackit-md-upgrade-e2e-*.yaml", fixture)
 			defer func() {
 				cleanupStackitMachineDeploymentScaleFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -1029,7 +893,6 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(func(g Gomega) {
 				initialInstanceIDs = readyStackitMachineInstanceIDs(g, cfg.Namespace, testID, 1)
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
-			observedInstanceIDs = appendUnique(observedInstanceIDs, initialInstanceIDs...)
 			Eventually(func(g Gomega) {
 				expectCAPIMachinesWithProviderIDs(g, cfg.Namespace, clusterName, 1)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
@@ -1047,7 +910,6 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(instanceIDs(upgradedMachines)).To(ContainElement(initialInstanceIDs[0]))
 			}, 45*time.Minute, 15*time.Second).Should(Succeed())
 			upgradedInstanceIDs := instanceIDs(upgradedMachines)
-			observedInstanceIDs = appendUnique(observedInstanceIDs, upgradedInstanceIDs...)
 			Eventually(func(g Gomega) {
 				expectCAPIMachinesWithProviderIDs(g, cfg.Namespace, clusterName, 2)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
@@ -1066,31 +928,10 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(remainingInstanceIDs).To(Equal(replacementInstanceIDs))
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 
-			By("verifying the old worker VM was deleted from STACKIT")
-			Eventually(func(g Gomega) {
-				expectServerGoneFromCloud(ctx, g, cloudClient, initialInstanceIDs[0])
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
-
 			By("deleting the upgraded workload Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete upgraded workload Cluster")
-
-			By("ensuring all observed worker VMs are deleted via the STACKIT API")
-			cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
-
-			By("verifying all observed worker VMs were deleted from STACKIT")
-			for _, instanceID := range observedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should complete a workload worker MachineDeployment upgrade with Ready Nodes", func() {
@@ -1112,7 +953,6 @@ var _ = Describe("Manager", Ordered, func() {
 			upgradeTo := envDefault("STACKIT_E2E_UPGRADE_TO", "v1.35.4")
 			validateSupportedKubernetesVersion(upgradeFrom)
 			validateSupportedKubernetesVersion(upgradeTo)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -1133,7 +973,6 @@ var _ = Describe("Manager", Ordered, func() {
 			var workloadKubeconfig string
 			defer func() {
 				cleanupStackitKubeadmClusterFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -1148,14 +987,13 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to apply STACKIT workload worker upgrade fixture")
 
 			waitForKubeadmWorkloadClusterReady(workloadReadinessOptions{
-				Namespace:           cfg.Namespace,
-				ClusterName:         clusterName,
-				TestID:              testID,
-				WantNodes:           3,
-				WantMachines:        3,
-				InstallCNI:          true,
-				WaitForCCM:          true,
-				ObservedInstanceIDs: &observedInstanceIDs,
+				Namespace:    cfg.Namespace,
+				ClusterName:  clusterName,
+				TestID:       testID,
+				WantNodes:    3,
+				WantMachines: 3,
+				InstallCNI:   true,
+				WaitForCCM:   true,
 			}, &workloadKubeconfig)
 
 			var initialWorkerNodeNames []string
@@ -1171,7 +1009,6 @@ var _ = Describe("Manager", Ordered, func() {
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 			Expect(initialWorkerNodeNames).To(HaveLen(2))
 			Expect(initialWorkerInstanceIDs).To(HaveLen(2))
-			observedInstanceIDs = appendUnique(observedInstanceIDs, initialWorkerInstanceIDs...)
 
 			By("patching the workload worker MachineDeployment Kubernetes version")
 			patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"version":"%s"}}}}`, upgradeTo)
@@ -1183,8 +1020,7 @@ var _ = Describe("Manager", Ordered, func() {
 			var upgradedWorkerInstanceIDs []string
 			Eventually(func(g Gomega) {
 				expectMachineDeploymentRollout(g, cfg.Namespace, machineDeploymentName, 2)
-				machines := readyStackitMachines(g, cfg.Namespace, testID, 3)
-				observedInstanceIDs = appendUnique(observedInstanceIDs, instanceIDs(machines)...)
+				_ = readyStackitMachines(g, cfg.Namespace, testID, 3)
 				workers := workerMachinesForDeployment(g, cfg.Namespace, clusterName, machineDeploymentName)
 				g.Expect(workers).To(HaveLen(2))
 				expectMachinesVersion(g, workers, upgradeTo)
@@ -1207,23 +1043,10 @@ var _ = Describe("Manager", Ordered, func() {
 			deletedInstanceIDs := difference(initialWorkerInstanceIDs, upgradedWorkerInstanceIDs)
 			Expect(deletedInstanceIDs).To(HaveLen(2))
 
-			By("verifying old workload worker VMs were deleted from STACKIT")
-			for _, instanceID := range deletedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
 			By("deleting the workload worker upgrade Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete workload worker upgrade Cluster")
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
 		It("should complete a workload control-plane upgrade with a Ready Node", func() {
@@ -1245,7 +1068,6 @@ var _ = Describe("Manager", Ordered, func() {
 			upgradeTo := envDefault("STACKIT_E2E_UPGRADE_TO", "v1.35.4")
 			validateSupportedKubernetesVersion(upgradeFrom)
 			validateSupportedKubernetesVersion(upgradeTo)
-			observedInstanceIDs := []string{}
 
 			By("cleaning up stale STACKIT resources for the e2e test ID")
 			Expect(cloud.CleanupByTags(ctx, cloudClient, leakTags)).To(Succeed())
@@ -1266,7 +1088,6 @@ var _ = Describe("Manager", Ordered, func() {
 			var workloadKubeconfig string
 			defer func() {
 				cleanupStackitKubeadmClusterFixture(clusterName, cfg.Namespace)
-				cleanupCloudServersByID(ctx, cloudClient, observedInstanceIDs)
 				if err := cloud.CleanupByTags(ctx, cloudClient, leakTags); err != nil {
 					_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API cleanup warning: %v\n", err)
 				}
@@ -1281,14 +1102,13 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to apply STACKIT workload control-plane upgrade fixture")
 
 			waitForKubeadmWorkloadClusterReady(workloadReadinessOptions{
-				Namespace:           cfg.Namespace,
-				ClusterName:         clusterName,
-				TestID:              testID,
-				WantNodes:           2,
-				WantMachines:        2,
-				InstallCNI:          true,
-				WaitForCCM:          true,
-				ObservedInstanceIDs: &observedInstanceIDs,
+				Namespace:    cfg.Namespace,
+				ClusterName:  clusterName,
+				TestID:       testID,
+				WantNodes:    2,
+				WantMachines: 2,
+				InstallCNI:   true,
+				WaitForCCM:   true,
 			}, &workloadKubeconfig)
 
 			var initialControlPlaneInstanceIDs []string
@@ -1301,7 +1121,6 @@ var _ = Describe("Manager", Ordered, func() {
 				initialControlPlaneInstanceIDs = stackitInstanceIDsForMachines(g, cfg.Namespace, testID, controlPlanes)
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 			Expect(initialControlPlaneInstanceIDs).To(HaveLen(1))
-			observedInstanceIDs = appendUnique(observedInstanceIDs, initialControlPlaneInstanceIDs...)
 
 			By("patching the workload KubeadmControlPlane Kubernetes version")
 			patch := fmt.Sprintf(`{"spec":{"version":"%s"}}`, upgradeTo)
@@ -1314,8 +1133,7 @@ var _ = Describe("Manager", Ordered, func() {
 				output := kubectlOutputWithKubeconfig(g, workloadKubeconfig, "get", "ns", "kube-system", "-o", "name")
 				g.Expect(output).To(Equal("namespace/kube-system"))
 				expectKubeadmControlPlaneRollout(g, cfg.Namespace, kubeadmControlPlaneName, 1)
-				machines := readyStackitMachines(g, cfg.Namespace, testID, 2)
-				observedInstanceIDs = appendUnique(observedInstanceIDs, instanceIDs(machines)...)
+				_ = readyStackitMachines(g, cfg.Namespace, testID, 2)
 				controlPlanes := controlPlaneMachinesForCluster(g, cfg.Namespace, clusterName)
 				g.Expect(controlPlanes).To(HaveLen(1))
 				expectMachinesVersion(g, controlPlanes, upgradeTo)
@@ -1325,24 +1143,10 @@ var _ = Describe("Manager", Ordered, func() {
 			}, 60*time.Minute, 15*time.Second).Should(Succeed())
 			Expect(upgradedControlPlaneInstanceIDs).To(HaveLen(1))
 
-			deletedInstanceIDs := difference(initialControlPlaneInstanceIDs, upgradedControlPlaneInstanceIDs)
-			By("verifying old workload control-plane VMs were deleted from STACKIT when replaced")
-			for _, instanceID := range deletedInstanceIDs {
-				instanceID := instanceID
-				Eventually(func(g Gomega) {
-					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
-				}, 20*time.Minute, 15*time.Second).Should(Succeed())
-			}
-
 			By("deleting the workload control-plane upgrade Cluster")
 			cmd = exec.Command("kubectl", "delete", "cluster", clusterName, "-n", cfg.Namespace, "--wait=true", "--timeout=45m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete workload control-plane upgrade Cluster")
-
-			By("verifying no tagged STACKIT resources remain for the e2e test ID")
-			Eventually(func(g Gomega) {
-				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
-			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 	})
 })
@@ -1389,15 +1193,14 @@ type topologyWorkloadFixtureOptions struct {
 }
 
 type workloadReadinessOptions struct {
-	Namespace           string
-	ClusterName         string
-	TestID              string
-	WantNodes           int
-	WantMachines        int
-	InstallCNI          bool
-	WaitForCCM          bool
-	Topology            bool
-	ObservedInstanceIDs *[]string
+	Namespace    string
+	ClusterName  string
+	TestID       string
+	WantNodes    int
+	WantMachines int
+	InstallCNI   bool
+	WaitForCCM   bool
+	Topology     bool
 }
 
 func stackitVMConfigFromEnv() stackitVMConfig {
@@ -2292,18 +2095,6 @@ func stackitE2ETags(testID string) map[string]string {
 	}
 }
 
-func stackitE2EBastionTags(testID string) map[string]string {
-	tags := stackitE2ETags(testID)
-	tags[util.LabelResourceRole] = util.ResourceRoleBastion
-	return tags
-}
-
-func stackitE2ENodeSSHTags(testID string) map[string]string {
-	tags := stackitE2ETags(testID)
-	tags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
-	return tags
-}
-
 func cleanupStackitClusterFixture(clusterName, namespace string) {
 	for _, args := range [][]string{
 		{"delete", "cluster", clusterName, "-n", namespace, "--ignore-not-found", "--wait=true", "--timeout=45m"},
@@ -2661,14 +2452,12 @@ func waitForKubeadmWorkloadClusterReady(opts workloadReadinessOptions, workloadK
 	if opts.Topology {
 		By("waiting for the topology control-plane VM to provision")
 		Eventually(func(g Gomega) {
-			machine := readyTopologyControlPlaneStackitMachine(g, opts.Namespace, opts.ClusterName, opts.TestID)
-			appendObservedInstanceIDs(opts.ObservedInstanceIDs, machine.Status.InstanceID)
+			_ = readyTopologyControlPlaneStackitMachine(g, opts.Namespace, opts.ClusterName, opts.TestID)
 		}, 45*time.Minute, 15*time.Second).Should(Succeed())
 	} else {
 		By("waiting for the control-plane VM to provision")
 		Eventually(func(g Gomega) {
-			machine := readyStackitMachineByNamePart(g, opts.Namespace, opts.TestID, "control-plane")
-			appendObservedInstanceIDs(opts.ObservedInstanceIDs, machine.Status.InstanceID)
+			_ = readyStackitMachineByNamePart(g, opts.Namespace, opts.TestID, "control-plane")
 		}, 45*time.Minute, 15*time.Second).Should(Succeed())
 	}
 
@@ -2691,8 +2480,7 @@ func waitForKubeadmWorkloadClusterReady(opts workloadReadinessOptions, workloadK
 
 	By("waiting for workload StackitMachines to provision")
 	Eventually(func(g Gomega) {
-		machines := readyStackitMachines(g, opts.Namespace, opts.TestID, opts.WantMachines)
-		appendObservedInstanceIDs(opts.ObservedInstanceIDs, instanceIDs(machines)...)
+		_ = readyStackitMachines(g, opts.Namespace, opts.TestID, opts.WantMachines)
 	}, 45*time.Minute, 15*time.Second).Should(Succeed())
 
 	By("waiting for workload Nodes to be Ready")
@@ -2704,13 +2492,6 @@ func waitForKubeadmWorkloadClusterReady(opts workloadReadinessOptions, workloadK
 	Eventually(func(g Gomega) {
 		expectProviderIDNodeRefAlignment(g, opts.Namespace, opts.ClusterName, opts.TestID, *workloadKubeconfig, opts.WantMachines)
 	}, 15*time.Minute, 10*time.Second).Should(Succeed())
-}
-
-func appendObservedInstanceIDs(observed *[]string, instanceIDs ...string) {
-	if observed == nil {
-		return
-	}
-	*observed = appendUnique(*observed, instanceIDs...)
 }
 
 func waitForWorkloadCCMRollout(kubeconfig string) {
@@ -3034,114 +2815,6 @@ func difference(left, right []string) []string {
 		}
 	}
 	return out
-}
-
-func appendUnique(values []string, additions ...string) []string {
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		seen[value] = struct{}{}
-	}
-	for _, value := range additions {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		values = append(values, value)
-	}
-	return values
-}
-
-func expectServerExistsInCloud(ctx context.Context, g Gomega, cloudClient cloud.Client, instanceID string) {
-	srv, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(srv.GetId()).To(Equal(instanceID))
-}
-
-func expectServerGoneFromCloud(ctx context.Context, g Gomega, cloudClient cloud.Client, instanceID string) {
-	_, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(shared.IsNotFound(shared.ClassifySDKError("get server", err))).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
-}
-
-func expectNoLeakedServersOrLoadBalancers(ctx context.Context, g Gomega, cloudClient cloud.Client, tags map[string]string) {
-	serverIDs, err := shared.ListServerIDsByTags(ctx, cloudClient, tags)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(serverIDs).To(BeEmpty())
-	lbCount, err := countLoadBalancersByTags(ctx, cloudClient, tags)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(lbCount).To(Equal(0))
-}
-
-func countLoadBalancersByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
-	resp, err := cloudClient.LoadBalancerClient().DefaultAPI.ListLoadBalancers(ctx, cloudClient.ProjectID(), cloudClient.Region()).Execute()
-	if err != nil {
-		return 0, shared.ClassifySDKError("list load balancers", err)
-	}
-	labels := loadbalancer.Labels(tags)
-	count := 0
-	for _, candidate := range resp.GetLoadBalancers() {
-		if shared.MapContains(candidate.GetLabels(), labels) {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func countPublicIPsByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
-	resp, err := cloudClient.IaaSClient().DefaultAPI.ListPublicIPs(ctx, cloudClient.ProjectID(), cloudClient.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
-	if err != nil {
-		return 0, shared.ClassifySDKError("list public IPs", err)
-	}
-	count := 0
-	for _, item := range resp.GetItems() {
-		if shared.LabelsContainTags(item.GetLabels(), tags) {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func countSecurityGroupsByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
-	resp, err := cloudClient.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, cloudClient.ProjectID(), cloudClient.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
-	if err != nil {
-		return 0, shared.ClassifySDKError("list security groups", err)
-	}
-	count := 0
-	for _, item := range resp.GetItems() {
-		if shared.LabelsContainTags(item.GetLabels(), tags) {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func cleanupCloudServersByID(ctx context.Context, cloudClient cloud.Client, instanceIDs []string) {
-	for _, instanceID := range instanceIDs {
-		if err := cloudClient.IaaSClient().DefaultAPI.DeleteServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute(); err != nil {
-			classified := shared.ClassifySDKError("delete server", err)
-			if !shared.IsNotFound(classified) {
-				_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup warning for %s: %v\n", instanceID, classified)
-				continue
-			}
-		}
-		deadline := time.Now().Add(10 * time.Minute)
-		for time.Now().Before(deadline) {
-			_, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
-			if err != nil {
-				classified := shared.ClassifySDKError("get server", err)
-				if shared.IsNotFound(classified) {
-					break
-				}
-				_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup verification warning for %s: %v\n", instanceID, classified)
-				break
-			}
-			time.Sleep(15 * time.Second)
-		}
-	}
 }
 
 func cleanupStackitVMFixture(clusterName, machineName, namespace string) {

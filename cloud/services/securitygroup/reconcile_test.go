@@ -634,10 +634,10 @@ func TestServiceDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("deletes rules and security group found by tags", func(t *testing.T) {
+	t.Run("deletes rules and all security groups found by tags", func(t *testing.T) {
 		var (
 			deletedRules []string
-			deletedSGID  string
+			deletedSGIDs []string
 		)
 		specs := []securitygroup.SecurityGroupSpec{{
 			Tags: map[string]string{"cluster": "test"},
@@ -649,18 +649,25 @@ func TestServiceDelete(t *testing.T) {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testSecurityGroupID, "name": "cluster-sg", "labels": map[string]any{"cluster": "test"}},
+					map[string]any{"id": testRemoteSGID, "name": "bastion-sg", "labels": map[string]any{"cluster": "test"}},
+					map[string]any{"id": "ignored-sg", "name": "other-sg", "labels": map[string]any{"cluster": "other"}},
 				}})
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testRuleID1, "direction": "ingress"},
 					map[string]any{"id": testRuleID2, "direction": "egress"},
 				}})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testRemoteSGID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
 			case r.Method == http.MethodDelete && strings.Contains(path, "/rules/"):
 				parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
 				deletedRules = append(deletedRules, parts[len(parts)-1])
 				w.WriteHeader(http.StatusNoContent)
 			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
-				deletedSGID = testSecurityGroupID
+				deletedSGIDs = append(deletedSGIDs, testSecurityGroupID)
+				w.WriteHeader(http.StatusNoContent)
+			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/security-groups/"+testRemoteSGID):
+				deletedSGIDs = append(deletedSGIDs, testRemoteSGID)
 				w.WriteHeader(http.StatusNoContent)
 			default:
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
@@ -673,8 +680,8 @@ func TestServiceDelete(t *testing.T) {
 		if !slices.Equal(deletedRules, []string{testRuleID1, testRuleID2}) {
 			t.Fatalf("deletedRules = %v, want [%s %s]", deletedRules, testRuleID1, testRuleID2)
 		}
-		if deletedSGID != testSecurityGroupID {
-			t.Fatalf("deletedSGID = %q, want %q", deletedSGID, testSecurityGroupID)
+		if !slices.Equal(deletedSGIDs, []string{testSecurityGroupID, testRemoteSGID}) {
+			t.Fatalf("deletedSGIDs = %v, want [%s %s]", deletedSGIDs, testSecurityGroupID, testRemoteSGID)
 		}
 	})
 

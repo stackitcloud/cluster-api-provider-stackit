@@ -340,59 +340,6 @@ func TestServiceDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to tag lookup for public IP and server when IDs are empty", func(t *testing.T) {
-		var (
-			detachedPair string
-			deletedID    string
-		)
-		spec := publicip.PublicIPSpec{
-			Tags:           map[string]string{"cluster": "test"},
-			ServerSelector: map[string]string{"cluster": "test"},
-		}
-
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
-				writeJSON(t, w, map[string]any{"items": []any{
-					map[string]any{
-						"id":               testPublicIPID,
-						"ip":               testPublicIPAddress,
-						"networkInterface": testNetworkInterface,
-						"labels":           map[string]any{"cluster": "test"},
-					},
-				}})
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
-				writeJSON(t, w, map[string]any{"items": []any{
-					map[string]any{
-						"id":          testServerID,
-						"name":        "bastion",
-						"machineType": "c2i.1",
-						"labels":      map[string]any{"cluster": "test"},
-					},
-				}})
-			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
-				detachedPair = testServerID + ":" + testPublicIPID
-				w.WriteHeader(http.StatusNoContent)
-			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/public-ips/"+testPublicIPID):
-				deletedID = testPublicIPID
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-			}
-		}))
-
-		if err := svc.Delete(context.Background()); err != nil {
-			t.Fatalf("Delete() error = %v", err)
-		}
-		if detachedPair != testServerID+":"+testPublicIPID {
-			t.Fatalf("detachedPair = %q, want %s:%s", detachedPair, testServerID, testPublicIPID)
-		}
-		if deletedID != testPublicIPID {
-			t.Fatalf("deletedID = %q, want %q", deletedID, testPublicIPID)
-		}
-	})
-
 	t.Run("succeeds when no public IP exists", func(t *testing.T) {
 		spec := publicip.PublicIPSpec{
 			Tags: map[string]string{"cluster": "test"},
@@ -416,4 +363,74 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})
+}
+
+func TestServiceDeleteTagFallback(t *testing.T) {
+	var (
+		detachedPairs []string
+		deletedIDs    []string
+	)
+	spec := publicip.PublicIPSpec{
+		Tags:           map[string]string{"cluster": "test"},
+		ServerSelector: map[string]string{"cluster": "test"},
+	}
+
+	svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id":               testPublicIPID,
+					"ip":               testPublicIPAddress,
+					"networkInterface": testNetworkInterface,
+					"labels":           map[string]any{"cluster": "test"},
+				},
+				map[string]any{
+					"id":               testOtherPublicIPID,
+					"ip":               "203.0.113.23",
+					"networkInterface": testNetworkInterface,
+					"labels":           map[string]any{"cluster": "test"},
+				},
+				map[string]any{
+					"id":     "ignored-pip",
+					"ip":     "203.0.113.24",
+					"labels": map[string]any{"cluster": "other"},
+				},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+			writeJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"id":          testServerID,
+					"name":        "bastion",
+					"machineType": "c2i.1",
+					"labels":      map[string]any{"cluster": "test"},
+				},
+			}})
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
+			detachedPairs = append(detachedPairs, testServerID+":"+testPublicIPID)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testOtherPublicIPID):
+			detachedPairs = append(detachedPairs, testServerID+":"+testOtherPublicIPID)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/public-ips/"+testPublicIPID):
+			deletedIDs = append(deletedIDs, testPublicIPID)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/public-ips/"+testOtherPublicIPID):
+			deletedIDs = append(deletedIDs, testOtherPublicIPID)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+
+	if err := svc.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if len(detachedPairs) != 2 || detachedPairs[0] != testServerID+":"+testPublicIPID || detachedPairs[1] != testServerID+":"+testOtherPublicIPID {
+		t.Fatalf("detachedPairs = %v, want [%s:%s %s:%s]", detachedPairs, testServerID, testPublicIPID, testServerID, testOtherPublicIPID)
+	}
+	if len(deletedIDs) != 2 || deletedIDs[0] != testPublicIPID || deletedIDs[1] != testOtherPublicIPID {
+		t.Fatalf("deletedIDs = %v, want [%s %s]", deletedIDs, testPublicIPID, testOtherPublicIPID)
+	}
 }

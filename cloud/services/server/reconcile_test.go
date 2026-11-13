@@ -537,8 +537,8 @@ func TestServiceDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to tag lookup when ID is empty", func(t *testing.T) {
-		var deletedID string
+	t.Run("falls back to tag lookup when ID is empty and deletes all matching servers", func(t *testing.T) {
+		var deletedIDs []string
 		spec := server.ServerSpec{
 			Tags: map[string]string{"cluster": "test"},
 		}
@@ -548,9 +548,14 @@ func TestServiceDelete(t *testing.T) {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
+					map[string]any{"id": testOtherServerID, "name": "node-1", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
+					map[string]any{"id": "ignored-id", "name": "other", "machineType": "c2i.2", "labels": map[string]any{"cluster": "other"}},
 				}})
 			case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID):
-				deletedID = testServerID
+				deletedIDs = append(deletedIDs, testServerID)
+				w.WriteHeader(http.StatusNoContent)
+			case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/servers/"+testOtherServerID):
+				deletedIDs = append(deletedIDs, testOtherServerID)
 				w.WriteHeader(http.StatusNoContent)
 			default:
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
@@ -560,8 +565,8 @@ func TestServiceDelete(t *testing.T) {
 		if err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
-		if deletedID != testServerID {
-			t.Fatalf("deletedID = %q, want %q", deletedID, testServerID)
+		if len(deletedIDs) != 2 || deletedIDs[0] != testServerID || deletedIDs[1] != testOtherServerID {
+			t.Fatalf("deletedIDs = %v, want [%s %s]", deletedIDs, testServerID, testOtherServerID)
 		}
 	})
 
