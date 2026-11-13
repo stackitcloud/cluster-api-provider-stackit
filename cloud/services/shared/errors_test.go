@@ -125,3 +125,172 @@ func TestFindByTags(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveExisting(t *testing.T) {
+	const (
+		testID1    = "id-1"
+		testByTags = "by-tags"
+	)
+	ctx := context.Background()
+	tags := map[string]string{"cluster": "test"}
+
+	t.Run("returns item by ID without calling findByTags", func(t *testing.T) {
+		findByTagsCalled := false
+		got, err := ResolveExisting(
+			ctx,
+			testID1,
+			tags,
+			func(_ context.Context, id string) (string, error) {
+				return "found-" + id, nil
+			},
+			func(_ context.Context, _ map[string]string) (string, error) {
+				findByTagsCalled = true
+				return testByTags, nil
+			},
+			IsNotFound,
+		)
+		if err != nil {
+			t.Fatalf("ResolveExisting() error = %v", err)
+		}
+		if got != "found-id-1" {
+			t.Fatalf("ResolveExisting() = %q, want %q", got, "found-id-1")
+		}
+		if findByTagsCalled {
+			t.Fatal("findByTags should not be called when getByID succeeds")
+		}
+	})
+
+	t.Run("falls back to findByTags when getByID returns NotFound", func(t *testing.T) {
+		got, err := ResolveExisting(
+			ctx,
+			"stale-id",
+			tags,
+			func(_ context.Context, _ string) (string, error) {
+				return "", ErrNotFound
+			},
+			func(_ context.Context, _ map[string]string) (string, error) {
+				return testByTags, nil
+			},
+			IsNotFound,
+		)
+		if err != nil {
+			t.Fatalf("ResolveExisting() error = %v", err)
+		}
+		if got != testByTags {
+			t.Fatalf("ResolveExisting() = %q, want %q", got, testByTags)
+		}
+	})
+
+	t.Run("returns zero value and nil error when both ID and tag lookup return NotFound", func(t *testing.T) {
+		got, err := ResolveExisting(
+			ctx,
+			"stale-id",
+			tags,
+			func(_ context.Context, _ string) (string, error) {
+				return "", ErrNotFound
+			},
+			func(_ context.Context, _ map[string]string) (string, error) {
+				return "", ErrNotFound
+			},
+			IsNotFound,
+		)
+		if err != nil {
+			t.Fatalf("ResolveExisting() error = %v, want nil", err)
+		}
+		if got != "" {
+			t.Fatalf("ResolveExisting() = %q, want empty", got)
+		}
+	})
+
+	t.Run("propagates non-ignorable error from getByID", func(t *testing.T) {
+		_, err := ResolveExisting(
+			ctx,
+			testID1,
+			tags,
+			func(_ context.Context, _ string) (string, error) {
+				return "", ErrTransient
+			},
+			func(_ context.Context, _ map[string]string) (string, error) {
+				return testByTags, nil
+			},
+			IsNotFound,
+		)
+		if !IsTransient(err) {
+			t.Fatalf("ResolveExisting() error = %v, want ErrTransient", err)
+		}
+	})
+}
+
+func TestDeleteByIDOrTags(t *testing.T) {
+	const testID1 = "id-1"
+	ctx := context.Background()
+	tags := map[string]string{"cluster": "test"}
+
+	t.Run("deletes by ID when found without listing by tags", func(t *testing.T) {
+		listCalled := false
+		deletedIDs, err := DeleteByIDOrTags(
+			ctx,
+			testID1,
+			tags,
+			func(_ context.Context, id string) (bool, error) {
+				return id == testID1, nil
+			},
+			func(_ context.Context, _ map[string]string) ([]string, error) {
+				listCalled = true
+				return []string{"id-2"}, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("DeleteByIDOrTags() error = %v", err)
+		}
+		if len(deletedIDs) != 1 || deletedIDs[0] != testID1 {
+			t.Fatalf("DeleteByIDOrTags() = %v, want [id-1]", deletedIDs)
+		}
+		if listCalled {
+			t.Fatal("listIDsByTags should not be called when deleteByID deletes spec.ID")
+		}
+	})
+
+	t.Run("falls back to tag lookup when spec.ID is already absent", func(t *testing.T) {
+		deletedIDs, err := DeleteByIDOrTags(
+			ctx,
+			"stale-id",
+			tags,
+			func(_ context.Context, id string) (bool, error) {
+				return id != "stale-id", nil
+			},
+			func(_ context.Context, _ map[string]string) ([]string, error) {
+				return []string{testID1, "id-2"}, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("DeleteByIDOrTags() error = %v", err)
+		}
+		if len(deletedIDs) != 2 || deletedIDs[0] != testID1 || deletedIDs[1] != "id-2" {
+			t.Fatalf("DeleteByIDOrTags() = %v, want [id-1 id-2]", deletedIDs)
+		}
+	})
+
+	t.Run("continues deleting remaining tag matches on partial error", func(t *testing.T) {
+		deletedIDs, err := DeleteByIDOrTags(
+			ctx,
+			"",
+			tags,
+			func(_ context.Context, id string) (bool, error) {
+				if id == "bad-id" {
+					return false, ErrTransient
+				}
+				return true, nil
+			},
+			func(_ context.Context, _ map[string]string) ([]string, error) {
+				return []string{"bad-id", "good-id"}, nil
+			},
+		)
+		if !IsTransient(err) {
+			t.Fatalf("DeleteByIDOrTags() error = %v, want ErrTransient", err)
+		}
+		if len(deletedIDs) != 1 || deletedIDs[0] != "good-id" {
+			t.Fatalf("DeleteByIDOrTags() = %v, want [good-id]", deletedIDs)
+		}
+	})
+}

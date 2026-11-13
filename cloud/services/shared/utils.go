@@ -36,23 +36,38 @@ type LoadBalancerClientScope interface {
 	LoadBalancerClient() *lb.APIClient
 }
 
-// ListServerIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
-func ListServerIDsByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]string, error) {
+// ListServersByTags lists STACKIT servers matching the given tag selector.
+func ListServersByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]*iaas.Server, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
 	}
 	resp, err := scope.IaaSClient().DefaultAPI.ListServers(ctx, scope.ProjectID(), scope.Region()).
 		LabelSelector(LabelSelector(tags)).
+		Details(true).
 		Execute()
 	if err != nil {
 		return nil, ClassifySDKError("list servers", err)
 	}
-	var ids []string
+	matched := []*iaas.Server{}
 	for _, srv := range resp.GetItems() {
 		if LabelsContainTags(srv.GetLabels(), tags) {
-			if id := srv.GetId(); id != "" {
-				ids = append(ids, id)
-			}
+			srv := srv
+			matched = append(matched, &srv)
+		}
+	}
+	return matched, nil
+}
+
+// ListServerIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
+func ListServerIDsByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]string, error) {
+	servers, err := ListServersByTags(ctx, scope, tags)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(servers))
+	for _, srv := range servers {
+		if id := srv.GetId(); id != "" {
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil
@@ -71,6 +86,84 @@ func FindByTags[T any](
 		return zero, err
 	}
 	return findSingle(matched, singular, plural)
+}
+
+// ResolveExisting looks up an existing resource by ID first (ignoring errors matched by ignoreLookupErr),
+// falling back to tag lookup when the ID is empty or absent. It returns the zero value and nil error when not found.
+func ResolveExisting[T any](
+	ctx context.Context,
+	id string,
+	tags map[string]string,
+	getByID func(context.Context, string) (T, error),
+	findByTags func(context.Context, map[string]string) (T, error),
+	ignoreLookupErr func(error) bool,
+) (T, error) {
+	var zero T
+	if id != "" {
+		item, err := getByID(ctx, id)
+		if err == nil {
+			return item, nil
+		}
+		if !ignoreLookupErr(err) {
+			return zero, err
+		}
+	}
+	if len(tags) == 0 {
+		return zero, nil
+	}
+	item, err := findByTags(ctx, tags)
+	if err == nil {
+		return item, nil
+	}
+	if ignoreLookupErr(err) {
+		return zero, nil
+	}
+	return zero, err
+}
+
+// DeleteByIDOrTags deletes a resource by ID when provided, falling back to deleting all resources matching tags
+// if the ID is empty or already absent.
+func DeleteByIDOrTags(
+	ctx context.Context,
+	id string,
+	tags map[string]string,
+	deleteByID func(context.Context, string) (bool, error),
+	listIDsByTags func(context.Context, map[string]string) ([]string, error),
+) ([]string, error) {
+	if id != "" {
+		deleted, err := deleteByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return []string{id}, nil
+		}
+	}
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	ids, err := listIDsByTags(ctx, tags)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		deletedIDs []string
+		errs       []error
+	)
+	for _, targetID := range ids {
+		if targetID == "" {
+			continue
+		}
+		deleted, err := deleteByID(ctx, targetID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if deleted {
+			deletedIDs = append(deletedIDs, targetID)
+		}
+	}
+	return deletedIDs, errors.Join(errs...)
 }
 
 // findSingle returns the single item in matched, or ErrNotFound if empty, or ErrConflict if more than one.

@@ -571,16 +571,12 @@ func TestServiceDelete(t *testing.T) {
 		}
 
 		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers/"+testLBName):
-				writeJSON(t, w, sdkLoadBalancerJSON(testLBName, nil, nil))
-			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/load-balancers/"+testLBName):
+			if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName) {
 				deletedID = testLBName
 				writeJSON(t, w, map[string]any{})
-			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+				return
 			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
 		if err := svc.Delete(context.Background()); err != nil {
@@ -635,7 +631,7 @@ func TestServiceDelete(t *testing.T) {
 		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers/stale-lb"):
+			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/load-balancers/stale-lb"):
 				w.WriteHeader(http.StatusNotFound)
 				writeJSON(t, w, map[string]any{"message": "not found"})
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):

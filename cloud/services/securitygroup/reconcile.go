@@ -232,27 +232,20 @@ func (c *client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.
 }
 
 func (c *client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec) (*SecurityGroup, error) {
-	if spec.ID != "" {
-		securityGroup, err := c.get(ctx, spec.ID)
-		if err == nil {
-			return securityGroup, nil
-		}
-		if !shared.IsNotFound(err) {
-			return nil, err
-		}
-	}
-	if existing, err := c.findByTags(ctx, spec.Tags); err == nil {
-		return existing, nil
-	} else if !shared.IsNotFound(err) {
+	securityGroup, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, c.get, c.findByTags, shared.IsNotFound)
+	if err != nil {
 		return nil, err
 	}
-	securityGroup, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region()).
+	if securityGroup != nil {
+		return securityGroup, nil
+	}
+	securityGroupResp, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region()).
 		CreateSecurityGroupPayload(spec.toCreatePayload()).
 		Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("create security group", err)
 	}
-	out := securityGroupFromSDK(securityGroup)
+	out := securityGroupFromSDK(securityGroupResp)
 	log := logf.FromContext(ctx)
 	log.V(1).Info("Created security group", "name", spec.Name, "securityGroupID", out.ID)
 	return out, nil

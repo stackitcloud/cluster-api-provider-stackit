@@ -12,7 +12,6 @@ package loadbalancer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -62,20 +61,12 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: load balancer ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	loadBalancerIDs, err := s.client.resolveLoadBalancersForDelete(ctx, spec)
+	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.client.deleteByID, s.client.listIDsByTags)
+	for _, deletedID := range deletedIDs {
+		log.V(1).Info("Deleted load balancer", "loadBalancerID", deletedID)
+	}
 	if err != nil {
 		return err
-	}
-	var errs []error
-	for _, loadBalancerID := range loadBalancerIDs {
-		if err := s.client.deleteByID(ctx, loadBalancerID); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		log.V(1).Info("Deleted load balancer", "loadBalancerID", loadBalancerID)
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
 	}
 	if spec.SetID != nil {
 		spec.SetID("")
@@ -124,34 +115,29 @@ func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*Loa
 	return matched, nil
 }
 
-// deleteByID deletes a load balancer by ID, ignoring NotFound errors.
-func (c *client) deleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a load balancer by ID, returning true if the load balancer existed and was deleted,
+// or false if it was already absent.
+func (c *client) deleteByID(ctx context.Context, id string) (bool, error) {
 	if id == "" {
-		return fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
+		return false, fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
 	}
 	if _, err := c.scope.LoadBalancerClient().DefaultAPI.DeleteLoadBalancer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete load balancer", err)
-		if !shared.IsNotFound(err) {
-			return err
+		if shared.IsNotFound(err) {
+			return false, nil
 		}
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 func (c *client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
-	if spec.ID != "" {
-		loadBalancer, err := c.get(ctx, spec.ID)
-		if err == nil {
-			return loadBalancer, nil
-		}
-		if !shared.IsNotFound(err) && !isLoadBalancerServiceNotEnabled(err) {
-			return nil, err
-		}
-	}
-	if existing, err := c.findByTags(ctx, spec.Tags); err == nil {
-		return existing, nil
-	} else if !shared.IsNotFound(err) && !isLoadBalancerServiceNotEnabled(err) {
+	loadBalancer, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, c.get, c.findByTags, isIgnorableLookupError)
+	if err != nil {
 		return nil, err
+	}
+	if loadBalancer != nil {
+		return loadBalancer, nil
 	}
 
 	payload := spec.toCreatePayload(c.scope.Region())
@@ -166,20 +152,8 @@ func (c *client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) 
 	return out, nil
 }
 
-func (c *client) resolveLoadBalancersForDelete(ctx context.Context, spec LoadBalancerSpec) ([]string, error) {
-	if spec.ID != "" {
-		exists, err := c.loadBalancerExists(ctx, spec.ID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			return []string{spec.ID}, nil
-		}
-	}
-	if len(spec.Tags) == 0 {
-		return nil, nil
-	}
-	loadBalancers, err := c.listByTags(ctx, spec.Tags)
+func (c *client) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
+	loadBalancers, err := c.listByTags(ctx, tags)
 	if err != nil {
 		return nil, err
 	}
@@ -190,17 +164,6 @@ func (c *client) resolveLoadBalancersForDelete(ctx context.Context, spec LoadBal
 		}
 	}
 	return ids, nil
-}
-
-func (c *client) loadBalancerExists(ctx context.Context, id string) (bool, error) {
-	_, err := c.get(ctx, id)
-	if err != nil {
-		if shared.IsNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
 }
 
 func (s LoadBalancerSpec) validate() error {
@@ -289,6 +252,10 @@ func listenerPort(listeners []lb.Listener) int32 {
 		}
 	}
 	return 0
+}
+
+func isIgnorableLookupError(err error) bool {
+	return shared.IsNotFound(err) || isLoadBalancerServiceNotEnabled(err)
 }
 
 func isLoadBalancerServiceNotEnabled(err error) bool {

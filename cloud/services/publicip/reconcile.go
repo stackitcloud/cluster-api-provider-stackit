@@ -188,7 +188,7 @@ func (c *client) deleteByID(ctx context.Context, id string) error {
 }
 
 func (c *client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
-	publicIP, err := c.resolvePublicIP(ctx, spec)
+	publicIP, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, c.get, c.findByTags, shared.IsNotFound)
 	if err != nil {
 		return nil, err
 	}
@@ -210,29 +210,6 @@ func (c *client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*Public
 	out := publicIPFromSDK(created)
 	logf.FromContext(ctx).V(1).Info("Created public IP", "publicIPID", out.ID)
 	return out, nil
-}
-
-func (c *client) resolvePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
-	if spec.ID != "" {
-		publicIP, err := c.get(ctx, spec.ID)
-		if err == nil {
-			return publicIP, nil
-		}
-		if !shared.IsNotFound(err) {
-			return nil, err
-		}
-	}
-	if len(spec.Tags) == 0 {
-		return nil, nil
-	}
-	publicIP, err := c.findByTags(ctx, spec.Tags)
-	if shared.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return publicIP, nil
 }
 
 func (c *client) resolvePublicIPsForDelete(ctx context.Context, spec PublicIPSpec) ([]*PublicIP, error) {

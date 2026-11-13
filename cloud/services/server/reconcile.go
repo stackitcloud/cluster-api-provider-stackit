@@ -13,7 +13,6 @@ package server
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
@@ -47,7 +46,9 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: server ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	deletedIDs, err := s.client.deleteBySpec(ctx, spec)
+	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.client.deleteByID, func(ctx context.Context, tags map[string]string) ([]string, error) {
+		return shared.ListServerIDsByTags(ctx, s.client.scope, tags)
+	})
 	for _, deletedID := range deletedIDs {
 		log.V(1).Info("Deleted server", "serverID", deletedID)
 	}
@@ -74,47 +75,29 @@ func (c *client) get(ctx context.Context, id string) (*Server, error) {
 
 // findByTags finds a single STACKIT server matching the given tag selector.
 func (c *client) findByTags(ctx context.Context, tags map[string]string) (*Server, error) {
-	srv, err := shared.FindByTags(ctx, tags, c.listByTags, "server", "servers")
+	srv, err := shared.FindByTags(ctx, tags, func(ctx context.Context, tags map[string]string) ([]*iaas.Server, error) {
+		return shared.ListServersByTags(ctx, c.scope, tags)
+	}, "server", "servers")
 	if err != nil {
 		return nil, err
 	}
 	return c.serverFromSDK(ctx, srv), nil
 }
 
-// listByTags lists STACKIT servers matching the given tag selector.
-func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*iaas.Server, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
-	}
-	resp, err := c.scope.IaaSClient().DefaultAPI.ListServers(ctx, c.scope.ProjectID(), c.scope.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Details(true).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("list servers", err)
-	}
-	matched := []*iaas.Server{}
-	for _, srv := range resp.GetItems() {
-		if shared.LabelsContainTags(srv.GetLabels(), tags) {
-			srv := srv
-			matched = append(matched, &srv)
-		}
-	}
-	return matched, nil
-}
-
-// deleteByID deletes a server by ID, ignoring NotFound errors.
-func (c *client) deleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a server by ID, returning true if the server existed and was deleted,
+// or false if it was already absent.
+func (c *client) deleteByID(ctx context.Context, id string) (bool, error) {
 	if id == "" {
-		return fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
+		return false, fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
 	if err := c.scope.IaaSClient().DefaultAPI.DeleteServer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete server", err)
-		if !shared.IsNotFound(err) {
-			return err
+		if shared.IsNotFound(err) {
+			return false, nil
 		}
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // create creates a new STACKIT server from the given spec.
@@ -132,19 +115,12 @@ func (c *client) create(ctx context.Context, spec ServerSpec) (*Server, error) {
 }
 
 func (c *client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
-	if spec.ID != "" {
-		srv, err := c.get(ctx, spec.ID)
-		if err == nil {
-			return srv, false, nil
-		}
-		if !shared.IsNotFound(err) {
-			return nil, false, err
-		}
-	}
-	if srv, err := c.findByTags(ctx, spec.Tags); err == nil {
-		return srv, false, nil
-	} else if !shared.IsNotFound(err) {
+	srv, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, c.get, c.findByTags, shared.IsNotFound)
+	if err != nil {
 		return nil, false, err
+	}
+	if srv != nil {
+		return srv, false, nil
 	}
 
 	// Recreating an already-provisioned server would replay bootstrap data
@@ -162,38 +138,6 @@ func (c *client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 		return nil, false, err
 	}
 	return out, true, nil
-}
-
-func (c *client) deleteBySpec(ctx context.Context, spec ServerSpec) ([]string, error) {
-	if spec.ID != "" {
-		err := c.scope.IaaSClient().DefaultAPI.DeleteServer(ctx, c.scope.ProjectID(), c.scope.Region(), spec.ID).Execute()
-		if err == nil {
-			return []string{spec.ID}, nil
-		}
-		err = shared.ClassifySDKError("delete server", err)
-		if !shared.IsNotFound(err) {
-			return nil, err
-		}
-	}
-	if len(spec.Tags) == 0 {
-		return nil, nil
-	}
-	ids, err := shared.ListServerIDsByTags(ctx, c.scope, spec.Tags)
-	if err != nil {
-		return nil, err
-	}
-	var (
-		deletedIDs []string
-		errs       []error
-	)
-	for _, id := range ids {
-		if err := c.deleteByID(ctx, id); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		deletedIDs = append(deletedIDs, id)
-	}
-	return deletedIDs, errors.Join(errs...)
 }
 
 func (s ServerSpec) validate() error {
