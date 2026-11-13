@@ -41,13 +41,13 @@ func NewProviderID(serverID string) string {
 // STACKIT providerID format does not contain project or region, so those return
 // values are empty. It returns ErrInvalidProviderID if any encoded component is
 // empty or the scheme is wrong.
-func ParseProviderID(providerID string) (projectID, region, serverID string, err error) {
+func ParseProviderID(providerID string) (serverID string, err error) {
 	if !strings.HasPrefix(providerID, providerIDScheme) {
-		return "", "", "", fmt.Errorf("%w: missing scheme %q", ErrInvalidProviderID, providerIDScheme)
+		return "", fmt.Errorf("%w: missing scheme %q", ErrInvalidProviderID, providerIDScheme)
 	}
 	serverID = strings.TrimPrefix(providerID, providerIDScheme)
 	if serverID == "" || strings.Contains(serverID, "/") {
-		return "", "", "", fmt.Errorf("%w: expected <server>, got %q", ErrInvalidProviderID, serverID)
+		return "", fmt.Errorf("%w: expected <server>, got %q", ErrInvalidProviderID, serverID)
 	}
-	return "", "", serverID, nil
+	return serverID, nil
 }

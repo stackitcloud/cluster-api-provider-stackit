@@ -24,12 +24,12 @@ func TestNewProviderID(t *testing.T) {
 }
 
 func TestParseProviderID(t *testing.T) {
-	projectID, region, serverID, err := ParseProviderID("stackit://server-id")
+	serverID, err := ParseProviderID("stackit://server-id")
 	if err != nil {
 		t.Fatalf("ParseProviderID() error = %v", err)
 	}
-	if projectID != "" || region != "" || serverID != "server-id" {
-		t.Fatalf("ParseProviderID() = %q, %q, %q", projectID, region, serverID)
+	if serverID != "server-id" {
+		t.Fatalf("ParseProviderID() = %q", serverID)
 	}
 }
 
@@ -45,7 +45,7 @@ func TestParseProviderIDInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt, func(t *testing.T) {
-			_, _, _, err := ParseProviderID(tt)
+			_, err := ParseProviderID(tt)
 			if !errors.Is(err, ErrInvalidProviderID) {
 				t.Fatalf("ParseProviderID(%q) error = %v, want ErrInvalidProviderID", tt, err)
 			}
@@ -56,12 +56,12 @@ func TestParseProviderIDInvalid(t *testing.T) {
 func TestProviderIDRoundTrip(t *testing.T) {
 	wantServerID := "server-id"
 
-	gotProjectID, gotRegion, gotServerID, err := ParseProviderID(NewProviderID(wantServerID))
+	gotServerID, err := ParseProviderID(NewProviderID(wantServerID))
 	if err != nil {
 		t.Fatalf("ParseProviderID(NewProviderID()) error = %v", err)
 	}
-	if gotProjectID != "" || gotRegion != "" || gotServerID != wantServerID {
-		t.Fatalf("roundtrip = %q, %q, %q", gotProjectID, gotRegion, gotServerID)
+	if gotServerID != wantServerID {
+		t.Fatalf("roundtrip = %q", gotServerID)
 	}
 }
 
@@ -75,19 +75,11 @@ func TestProviderIDMatchesCloudProviderStackitFormat(t *testing.T) {
 		t.Fatalf("NewProviderID() = %q, want cloud-provider-stackit format %q", providerID, "stackit://"+serverID)
 	}
 
-	projectID, region, parsedServerID, err := ParseProviderID(providerID)
+	parsedServerID, err := ParseProviderID(providerID)
 	if err != nil {
 		t.Fatalf("ParseProviderID(%q) error = %v", providerID, err)
 	}
-	if projectID != "" || region != "" {
-		t.Fatalf(
-			"ParseProviderID(%q) returned project/region %q/%q, want empty because cloud-provider-stackit does not encode them",
-			providerID,
-			projectID,
-			region,
-		)
-	}
 	if parsedServerID != serverID {
-		t.Fatalf("ParseProviderID(%q) serverID = %q, want %q", providerID, parsedServerID, serverID)
+		t.Fatalf("ParseProviderID(%q) serverID = %q, want %q", providerID, serverID, parsedServerID)
 	}
 }

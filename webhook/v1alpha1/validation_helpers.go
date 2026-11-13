@@ -192,7 +192,7 @@ func validateStackitMachineSpec(spec infrav1.StackitMachineSpec, fldPath *field.
 	if spec.ProviderID != nil {
 		if !allowProviderID {
 			allErrs = append(allErrs, field.Forbidden(fldPath.Child("providerID"), "providerID is generated per machine and must not be set in a template"))
-		} else if _, _, _, err := cloud.ParseProviderID(*spec.ProviderID); err != nil {
+		} else if _, err := cloud.ParseProviderID(*spec.ProviderID); err != nil {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("providerID"), *spec.ProviderID, "must use STACKIT providerID format stackit://<server-id>"))
 		}
 	}
