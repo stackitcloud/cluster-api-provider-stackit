@@ -211,14 +211,21 @@ func (c *Client) CreateServer(_ context.Context, input cloud.CreateServerInput) 
 	if zone == "" {
 		zone = "eu01-1"
 	}
+	addresses := []cloud.Address{
+		{Type: cloud.AddressTypeInternalIP, Address: "10.0.0.10"},
+	}
+	if input.Name != "" {
+		addresses = append(addresses,
+			cloud.Address{Type: cloud.AddressTypeHostname, Address: input.Name},
+			cloud.Address{Type: cloud.AddressTypeInternalDNS, Address: input.Name},
+		)
+	}
 	server := &cloud.Server{
 		ID:               id,
 		Name:             input.Name,
 		State:            "ACTIVE",
 		AvailabilityZone: zone,
-		Addresses: []cloud.Address{
-			{Type: "InternalIP", Address: "10.0.0.10"},
-		},
+		Addresses:        addresses,
 	}
 	c.servers[id] = &serverEntry{
 		server:         server,
@@ -389,13 +396,20 @@ func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cl
 	}
 
 	serverID := c.genID()
+	addresses := []cloud.Address{
+		{Type: cloud.AddressTypeInternalIP, Address: "10.0.0.20"},
+	}
+	if input.Name != "" {
+		addresses = append(addresses,
+			cloud.Address{Type: cloud.AddressTypeHostname, Address: input.Name},
+			cloud.Address{Type: cloud.AddressTypeInternalDNS, Address: input.Name},
+		)
+	}
 	server := &cloud.Server{
-		ID:    serverID,
-		Name:  input.Name,
-		State: "ACTIVE",
-		Addresses: []cloud.Address{
-			{Type: "InternalIP", Address: "10.0.0.20"},
-		},
+		ID:        serverID,
+		Name:      input.Name,
+		State:     "ACTIVE",
+		Addresses: addresses,
 	}
 	c.servers[serverID] = &serverEntry{
 		server:         server,

@@ -1057,12 +1057,18 @@ func (c *SDKClient) serverFromSDK(ctx context.Context, server *iaas.Server) *Ser
 	if err == nil {
 		for _, nic := range nics.GetItems() {
 			if ipv4 := nic.GetIpv4(); ipv4 != "" {
-				out.Addresses = append(out.Addresses, Address{Type: "InternalIP", Address: ipv4})
+				out.Addresses = append(out.Addresses, Address{Type: AddressTypeInternalIP, Address: ipv4})
 			}
 			if ipv6 := nic.GetIpv6(); ipv6 != "" {
-				out.Addresses = append(out.Addresses, Address{Type: "InternalIP", Address: ipv6})
+				out.Addresses = append(out.Addresses, Address{Type: AddressTypeInternalIP, Address: ipv6})
 			}
 		}
+	}
+	if out.Name != "" {
+		out.Addresses = append(out.Addresses,
+			Address{Type: AddressTypeHostname, Address: out.Name},
+			Address{Type: AddressTypeInternalDNS, Address: out.Name},
+		)
 	}
 	return out
 }

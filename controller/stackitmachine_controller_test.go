@@ -131,7 +131,11 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(got.Status.ProviderID).To(Equal("stackit://" + got.Status.InstanceID))
 			Expect(got.Spec.ProviderID).NotTo(BeNil())
 			Expect(*got.Spec.ProviderID).To(Equal(got.Status.ProviderID))
-			Expect(got.Status.Addresses).To(HaveLen(1))
+			Expect(got.Status.Addresses).To(ConsistOf(
+				clusterv1.MachineAddress{Type: clusterv1.MachineInternalIP, Address: "10.0.0.10"},
+				clusterv1.MachineAddress{Type: clusterv1.MachineHostName, Address: stackitName},
+				clusterv1.MachineAddress{Type: clusterv1.MachineInternalDNS, Address: stackitName},
+			))
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionTrue, "Available")
 			expectCondition(got.Status.Conditions, infrav1.MachineBootstrapReadyCondition, metav1.ConditionTrue, "Available")
 			expectCondition(got.Status.Conditions, infrav1.MachineInstanceReadyCondition, metav1.ConditionTrue, "Available")
