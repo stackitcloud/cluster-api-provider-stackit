@@ -17,6 +17,7 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 )
 
 func TestDefaultAvailabilityZone(t *testing.T) {
@@ -82,5 +83,30 @@ func TestAvailabilityZoneSpecUsesResolvedRegion(t *testing.T) {
 	gotRegion := clusterScope.StackitCluster.Status.FailureDomains[0].Attributes["region"]
 	if gotRegion != "eu01" {
 		t.Fatalf("FailureDomains[0].Attributes[region] = %q, want %q", gotRegion, "eu01")
+	}
+}
+
+func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+	clusterScope.SetBastionCloudInit([]byte("#cloud-config\npackages:\n- jq\n"), "new-hash")
+
+	spec := clusterScope.ServerSpec()
+	spec.SetServer(&server.Server{ID: "srv-adopted", State: "ACTIVE", PowerStatus: "RUNNING"}, false)
+
+	if clusterScope.BastionServerCreated() {
+		t.Fatal("BastionServerCreated() = true on adopted server, want false")
+	}
+	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "" {
+		t.Fatalf("Status.Bastion.CloudInitHash on adopted server = %q, want empty", got)
+	}
+
+	spec.SetServer(&server.Server{ID: "srv-created", State: "ACTIVE", PowerStatus: "RUNNING"}, true)
+	if !clusterScope.BastionServerCreated() {
+		t.Fatal("BastionServerCreated() = false on created server, want true")
+	}
+	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "new-hash" {
+		t.Fatalf("Status.Bastion.CloudInitHash on created server = %q, want %q", got, "new-hash")
 	}
 }

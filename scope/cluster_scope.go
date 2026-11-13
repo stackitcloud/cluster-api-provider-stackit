@@ -55,6 +55,7 @@ type ClusterScope struct {
 	bastionCloudInitHash     string
 	bastionServerState       string
 	bastionServerPowerStatus string
+	bastionServerCreated     bool
 
 	patchHelper *patch.Helper
 }
@@ -117,6 +118,25 @@ func (s *ClusterScope) BastionServerState() (state, powerStatus string) {
 	return s.bastionServerState, s.bastionServerPowerStatus
 }
 
+func (s *ClusterScope) BastionServerCreated() bool {
+	return s.bastionServerCreated
+}
+
+func (s *ClusterScope) setBastionServer(srv *server.Server, created bool) {
+	s.bastionServerCreated = created
+	s.bastionServerState = srv.State
+	s.bastionServerPowerStatus = srv.PowerStatus
+	s.StackitCluster.Status.Bastion.ServerID = srv.ID
+	if created {
+		s.StackitCluster.Status.Bastion.CloudInitHash = s.bastionCloudInitHash
+	}
+}
+
+func (s *ClusterScope) clearBastionServer() {
+	s.StackitCluster.Status.Bastion.ServerID = ""
+	s.StackitCluster.Status.Bastion.CloudInitHash = ""
+}
+
 func (s *ClusterScope) ServerSpec() server.ServerSpec {
 	return server.ServerSpec{
 		ID:               s.StackitCluster.Status.Bastion.ServerID,
@@ -129,16 +149,8 @@ func (s *ClusterScope) ServerSpec() server.ServerSpec {
 		UserData:         s.bastionCloudInit,
 		Tags:             s.bastionTags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitCluster.Spec.Bastion.RootVolume),
-		SetServer: func(srv *server.Server, _ bool) {
-			s.bastionServerState = srv.State
-			s.bastionServerPowerStatus = srv.PowerStatus
-			s.StackitCluster.Status.Bastion.ServerID = srv.ID
-			s.StackitCluster.Status.Bastion.CloudInitHash = s.bastionCloudInitHash
-		},
-		ClearServer: func() {
-			s.StackitCluster.Status.Bastion.ServerID = ""
-			s.StackitCluster.Status.Bastion.CloudInitHash = ""
-		},
+		SetServer:        s.setBastionServer,
+		ClearServer:      s.clearBastionServer,
 	}
 }
 

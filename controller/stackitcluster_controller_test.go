@@ -509,6 +509,52 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(configMap.Data["userData"]))
 	})
 
+	It("recreates the bastion when cloud-init changes even after bastion ServerID was lost from status", func() {
+		cloudInitName := "bastion-cloud-init-lost-id-" + clusterName
+		expectBastionCloudInit(
+			ctx, reconciler, request, stackitKey, fakeCloud,
+			"ConfigMap", cloudInitName,
+			"#cloud-config\npackages:\n- htop\n", createCloudInitConfigMap,
+		)
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		oldServerID := got.Status.Bastion.ServerID
+
+		By("losing Status.Bastion.ServerID while cloud-init changes")
+		got.Status.Bastion.ServerID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		configMap := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cloudInitName, Namespace: namespace}, configMap)).To(Succeed())
+		configMap.Data["userData"] = "#cloud-config\npackages:\n- jq\n"
+		Expect(k8sClient.Update(ctx, configMap)).To(Succeed())
+
+		By("adopting the existing server without overwriting CloudInitHash")
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Bastion.ServerID).To(Equal(oldServerID))
+		Expect(got.Status.Bastion.CloudInitHash).NotTo(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
+
+		By("detecting the cloud-init drift on the subsequent reconcile and recreating the bastion")
+		result, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		result, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Bastion.ServerID).NotTo(Equal(oldServerID))
+		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
+		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(configMap.Data["userData"]))
+	})
+
 	It("marks the network not ready when the configured network does not exist", func() {
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
