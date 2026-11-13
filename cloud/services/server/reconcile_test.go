@@ -421,17 +421,14 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 		}
 
 		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers") {
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
 					map[string]any{"id": testOtherServerID, "name": "node-1", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
 				}})
-			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/nics"):
-				writeJSON(t, w, map[string]any{"items": []any{}})
-			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+				return
 			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
 		err := svc.Reconcile(context.Background())

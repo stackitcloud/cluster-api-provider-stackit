@@ -74,11 +74,15 @@ func (c *client) get(ctx context.Context, id string) (*Server, error) {
 
 // findByTags finds a single STACKIT server matching the given tag selector.
 func (c *client) findByTags(ctx context.Context, tags map[string]string) (*Server, error) {
-	return shared.FindByTags(ctx, tags, c.listByTags, "server", "servers")
+	srv, err := shared.FindByTags(ctx, tags, c.listByTags, "server", "servers")
+	if err != nil {
+		return nil, err
+	}
+	return c.serverFromSDK(ctx, srv), nil
 }
 
 // listByTags lists STACKIT servers matching the given tag selector.
-func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*Server, error) {
+func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*iaas.Server, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
@@ -89,11 +93,11 @@ func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*Ser
 	if err != nil {
 		return nil, shared.ClassifySDKError("list servers", err)
 	}
-	matched := []*Server{}
+	matched := []*iaas.Server{}
 	for _, srv := range resp.GetItems() {
 		if shared.LabelsContainTags(srv.GetLabels(), tags) {
 			srv := srv
-			matched = append(matched, c.serverFromSDK(ctx, &srv))
+			matched = append(matched, &srv)
 		}
 	}
 	return matched, nil
