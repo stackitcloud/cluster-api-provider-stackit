@@ -12,6 +12,7 @@ package loadbalancer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -65,11 +66,16 @@ func (s *Service) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, loadBalancerID := range loadBalancerIDs {
 		if err := s.client.deleteByID(ctx, loadBalancerID); err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		log.V(1).Info("Deleted load balancer", "loadBalancerID", loadBalancerID)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	if spec.SetID != nil {
 		spec.SetID("")

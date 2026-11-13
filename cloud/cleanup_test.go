@@ -12,6 +12,7 @@ package cloud_test
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"testing"
 
@@ -177,5 +178,38 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	}
 	if sg := client.FindSecurityGroupByTags(otherTags); sg == nil {
 		t.Fatal("expected other security group to remain")
+	}
+}
+
+func TestCleanupByTagsContinuesWhenIndividualDeletesFail(t *testing.T) {
+	ctx := context.Background()
+	client := cloudfake.New()
+	tags := map[string]string{
+		"cluster-api-provider-stackit/e2e":     "true",
+		"cluster-api-provider-stackit/test-id": "test-partial-fail",
+	}
+
+	createTestResources(t, client, "matched", tags)
+
+	// Inject a transient failure on the first server delete; the remaining
+	// server, load balancer, public IP, and unattached security group should
+	// still be cleaned up in the same pass.
+	client.FailNextDeleteServer = fmt.Errorf("injected server delete failure")
+
+	if err := cloud.CleanupByTags(ctx, client, tags); err == nil {
+		t.Fatal("CleanupByTags() error = nil, want non-nil when server delete fails")
+	}
+
+	if got := client.ServerCount(); got != 1 {
+		t.Fatalf("remaining server count = %d, want 1 (the one that failed to delete)", got)
+	}
+	if got := client.LoadBalancerCount(); got != 0 {
+		t.Fatalf("remaining load balancer count = %d, want 0", got)
+	}
+	if got := client.PublicIPCount(); got != 0 {
+		t.Fatalf("remaining public IP count = %d, want 0", got)
+	}
+	if got := client.SecurityGroupCount(); got != 0 {
+		t.Fatalf("remaining security group count = %d, want 0", got)
 	}
 }

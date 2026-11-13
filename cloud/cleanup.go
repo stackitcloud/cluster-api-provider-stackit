@@ -12,8 +12,8 @@ package cloud
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
@@ -57,7 +57,9 @@ func (s *cleanupScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
 // relying on Kubernetes objects. Load balancers are deleted before servers so
-// server deletion is not blocked by target attachments.
+// server deletion is not blocked by target attachments, and servers are
+// deleted before security groups so attached servers do not block security
+// group deletion if server detachment fails or lags.
 func CleanupByTags(ctx context.Context, client Client, tags map[string]string) error {
 	if len(tags) == 0 {
 		return fmt.Errorf("%w: empty cleanup tag selector", shared.ErrInvalidInput)
@@ -67,20 +69,20 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		Client: client,
 		tags:   tags,
 	}
-	var errs []string
+	var errs []error
 	for _, deleteFn := range []func(context.Context) error{
 		publicip.New(scope).Delete,
 		loadbalancer.New(scope).Delete,
-		securitygroup.New(scope).Delete,
 		server.New(scope).Delete,
+		securitygroup.New(scope).Delete,
 	} {
 		if err := deleteFn(ctx); err != nil {
-			errs = append(errs, err.Error())
+			errs = append(errs, err)
 		}
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("%w: %s", shared.ErrTransient, strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %w", shared.ErrTransient, errors.Join(errs...))
 	}
 	return nil
 }

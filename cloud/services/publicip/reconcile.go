@@ -12,6 +12,7 @@ package publicip
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
@@ -71,16 +72,27 @@ func (s *Service) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, publicIP := range publicIPs {
+		var detachFailed bool
 		for _, serverID := range serverIDs {
 			if err := s.client.detachFromServer(ctx, serverID, publicIP.ID); err != nil {
-				return err
+				errs = append(errs, err)
+				detachFailed = true
+				break
 			}
 		}
+		if detachFailed {
+			continue
+		}
 		if err := s.client.deleteByID(ctx, publicIP.ID); err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		log.V(1).Info("Deleted public IP", "publicIPID", publicIP.ID)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
 	if spec.SetPublicIP != nil {

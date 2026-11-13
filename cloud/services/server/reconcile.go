@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
@@ -47,11 +48,11 @@ func (s *Service) Delete(ctx context.Context) error {
 	}
 
 	deletedIDs, err := s.client.deleteBySpec(ctx, spec)
-	if err != nil {
-		return err
-	}
 	for _, deletedID := range deletedIDs {
 		log.V(1).Info("Deleted server", "serverID", deletedID)
+	}
+	if err != nil {
+		return err
 	}
 	if spec.ClearServer != nil {
 		spec.ClearServer()
@@ -177,14 +178,18 @@ func (c *client) deleteBySpec(ctx context.Context, spec ServerSpec) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	var deletedIDs []string
+	var (
+		deletedIDs []string
+		errs       []error
+	)
 	for _, id := range ids {
 		if err := c.deleteByID(ctx, id); err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		deletedIDs = append(deletedIDs, id)
 	}
-	return deletedIDs, nil
+	return deletedIDs, errors.Join(errs...)
 }
 
 func (s ServerSpec) validate() error {
