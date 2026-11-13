@@ -11,13 +11,16 @@ You may obtain a copy of the License at
 package scope
 
 import (
+	"reflect"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
 func TestDefaultAvailabilityZone(t *testing.T) {
@@ -108,5 +111,31 @@ func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) 
 	}
 	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "new-hash" {
 		t.Fatalf("Status.Bastion.CloudInitHash on created server = %q, want %q", got, "new-hash")
+	}
+}
+
+func TestNodeSSHSecurityGroupSpecIncludesAdditionalLabelsInServerSelector(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-cluster",
+				Namespace: "my-ns",
+			},
+			Spec: infrav1.StackitClusterSpec{
+				AdditionalLabels: map[string]string{
+					"env": "staging",
+				},
+			},
+		},
+	}
+
+	specs := clusterScope.SecurityGroupSpecs()
+	if len(specs) != 2 {
+		t.Fatalf("SecurityGroupSpecs() count = %d, want 2", len(specs))
+	}
+
+	wantSelector := util.ClusterTags("my-cluster", "my-ns", map[string]string{"env": "staging"})
+	if got := specs[1].ServerSelector; !reflect.DeepEqual(got, wantSelector) {
+		t.Fatalf("nodeSSHSecurityGroupSpec ServerSelector = %#v, want %#v", got, wantSelector)
 	}
 }

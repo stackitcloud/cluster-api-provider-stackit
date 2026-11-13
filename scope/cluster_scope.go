@@ -430,7 +430,7 @@ func nodeSSHSecurityGroupSpec(stackitCluster *infrav1.StackitCluster, remoteSecu
 		Description:    "Cluster API Provider STACKIT node SSH access from bastion",
 		Tags:           NodeSSHTags(stackitCluster),
 		ServerIDs:      serverIDs,
-		ServerSelector: util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, nil),
+		ServerSelector: util.ClusterTags(stackitCluster.Name, stackitCluster.Namespace, stackitCluster.Spec.AdditionalLabels),
 		Rules: []securitygroup.Rule{
 			ingressRule,
 			{
