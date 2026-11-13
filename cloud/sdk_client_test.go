@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -85,8 +86,14 @@ func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
 	if created.ID != testSDKServerID || created.Name != "node-0" || created.State != "ACTIVE" {
 		t.Fatalf("CreateServer() = %#v", created)
 	}
-	if len(created.Addresses) != 2 {
-		t.Fatalf("CreateServer() addresses = %#v, want two internal addresses", created.Addresses)
+	wantAddresses := []Address{
+		{Type: AddressTypeInternalIP, Address: "10.0.0.10"},
+		{Type: AddressTypeInternalIP, Address: "fd00::10"},
+		{Type: AddressTypeHostname, Address: "node-0"},
+		{Type: AddressTypeInternalDNS, Address: "node-0"},
+	}
+	if !reflect.DeepEqual(created.Addresses, wantAddresses) {
+		t.Fatalf("CreateServer() addresses = %#v, want %#v", created.Addresses, wantAddresses)
 	}
 
 	assertStringField(t, createPayload, "name", "node-0")
@@ -102,6 +109,51 @@ func TestSDKClientCreateServerUsesExpectedPayload(t *testing.T) {
 	assertNestedStringField(t, createPayload, []string{"bootVolume", "source", "id"}, testSDKImageID)
 	assertNestedStringField(t, createPayload, []string{"bootVolume", "source", "type"}, "image")
 	assertNestedNumberField(t, createPayload, []string{"bootVolume", "size"}, 50)
+}
+
+func TestSDKClientCreateServerWithEmptyNameDoesNotAddHostnameOrInternalDNS(t *testing.T) {
+	server := newSDKTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
+			writeJSON(t, w, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/servers"):
+			writeJSON(t, w, map[string]any{
+				"id":          testSDKServerID,
+				"machineType": "c2i.2",
+				"name":        "",
+				"status":      "ACTIVE",
+			})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers/"+testSDKServerID+"/nics"):
+			writeJSON(t, w, map[string]any{
+				"items": []any{
+					map[string]any{"ipv4": "10.0.0.10"},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+
+	client := newTestSDKClient(t, server.URL)
+	created, err := client.CreateServer(context.Background(), CreateServerInput{
+		Name:             "",
+		MachineType:      "c2i.2",
+		ImageID:          testSDKImageID,
+		AvailabilityZone: "eu01-1",
+		SSHKeyName:       "default",
+		NetworkID:        testSDKNetworkID,
+		SecurityGroups:   []string{testSDKSecurityGroup},
+		Tags:             map[string]string{"cluster": "test"},
+	})
+	if err != nil {
+		t.Fatalf("CreateServer() error = %v", err)
+	}
+	wantAddresses := []Address{
+		{Type: AddressTypeInternalIP, Address: "10.0.0.10"},
+	}
+	if !reflect.DeepEqual(created.Addresses, wantAddresses) {
+		t.Fatalf("CreateServer() addresses = %#v, want %#v", created.Addresses, wantAddresses)
+	}
 }
 
 func assertFieldAbsent(t *testing.T, payload map[string]any, key string) {

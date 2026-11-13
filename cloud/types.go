@@ -30,6 +30,13 @@ type Address struct {
 	Address string
 }
 
+// Well-known server address types matching Cluster API conventions.
+const (
+	AddressTypeInternalIP  = "InternalIP"
+	AddressTypeHostname    = "Hostname"
+	AddressTypeInternalDNS = "InternalDNS"
+)
+
 // Network is an existing STACKIT virtual network referenced by the provider.
 type Network struct {
 	ID           string
