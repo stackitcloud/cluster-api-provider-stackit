@@ -20,10 +20,14 @@ const (
 	// DefaultAPIServerPort is the default TCP port for the Kubernetes API server.
 	DefaultAPIServerPort int32 = 6443
 
-	defaultBootstrapTargetIP = "10.0.0.1"
-	apiserverTargetPoolName  = "apiserver"
-	apiserverListenerName    = "apiserver"
-	bootstrapTargetName      = "capi-bootstrap-placeholder"
+	// DefaultBootstrapTargetIP is the fallback IPv4 address used for the
+	// bootstrap placeholder target when no network prefix can be derived.
+	DefaultBootstrapTargetIP = "10.0.0.1"
+
+	apiserverTargetPoolName = "apiserver"
+	apiserverListenerName   = "apiserver"
+	bootstrapTargetName     = "capi-bootstrap-placeholder"
+	listenerProtocolTCP     = "PROTOCOL_TCP"
 )
 
 // errTargetPoolUpdate indicates that the load balancer was created/resolved

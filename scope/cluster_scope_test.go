@@ -19,6 +19,8 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -179,5 +181,30 @@ func TestMachineScopeSecurityGroupSpecsRespectsBastionEnabled(t *testing.T) {
 	}
 	if len(got[0].Rules) == 0 || got[0].Rules[0].RemoteSecurityGroupID != "bastion-sg-id" {
 		t.Fatalf("SecurityGroupSpecs()[0].Rules = %#v, want RemoteSecurityGroupID=bastion-sg-id", got[0].Rules)
+	}
+}
+
+func TestBootstrapTargetIP(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+	if got := clusterScope.BootstrapTargetIP(); got != loadbalancer.DefaultBootstrapTargetIP {
+		t.Fatalf("BootstrapTargetIP() with nil network = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
+	}
+
+	clusterScope.NetworkSpec().SetNetwork(&network.Network{
+		ID:           "net-1",
+		IPv4Prefixes: []string{"192.168.10.0/24"},
+	})
+	if got := clusterScope.BootstrapTargetIP(); got != "192.168.10.10" {
+		t.Fatalf("BootstrapTargetIP() with /24 network = %q, want %q", got, "192.168.10.10")
+	}
+
+	clusterScope.NetworkSpec().SetNetwork(&network.Network{
+		ID:           "net-2",
+		IPv4Prefixes: []string{"invalid"},
+	})
+	if got := clusterScope.BootstrapTargetIP(); got != loadbalancer.DefaultBootstrapTargetIP {
+		t.Fatalf("BootstrapTargetIP() with invalid prefix = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
 	}
 }

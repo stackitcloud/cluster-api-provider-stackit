@@ -226,7 +226,7 @@ func (s LoadBalancerSpec) toCreatePayload(region string) lb.CreateLoadBalancerPa
 	listener := lb.NewListener()
 	listener.SetDisplayName(apiserverListenerName)
 	listener.SetPort(s.Port)
-	listener.SetProtocol("PROTOCOL_TCP")
+	listener.SetProtocol(listenerProtocolTCP)
 	listener.SetTargetPool(apiserverTargetPoolName)
 	payload.SetListeners([]lb.Listener{*listener})
 

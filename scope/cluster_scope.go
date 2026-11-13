@@ -281,7 +281,7 @@ func (s *ClusterScope) NetworkSpec() network.NetworkSpec {
 
 func (s *ClusterScope) BootstrapTargetIP() string {
 	if s.network == nil {
-		return "10.0.0.1"
+		return loadbalancer.DefaultBootstrapTargetIP
 	}
 	for _, prefixValue := range s.network.IPv4Prefixes {
 		prefix, err := netip.ParsePrefix(prefixValue)
@@ -296,7 +296,7 @@ func (s *ClusterScope) BootstrapTargetIP() string {
 			return address.String()
 		}
 	}
-	return "10.0.0.1"
+	return loadbalancer.DefaultBootstrapTargetIP
 }
 
 func (s *ClusterScope) PublicIPSpec() publicip.PublicIPSpec {
