@@ -101,7 +101,6 @@ repository.
 Relevant reference points:
 
 - `pkg/ccm/instances.go`: `Instances.makeInstanceID` returns `stackit://<server-id>`.
-- `pkg/ccm/instances.go`: `instanceIDFromProviderID` parses `stackit://<server-id>` with no project or region component.
 - `pkg/ccm/instances.go`: `getInstance` resolves nodes with `GetServer(projectID, region, serverID)`, where project and region come from the cloud-controller-manager configuration.
 - `pkg/ccm/instances_test.go`: the "new providerID" table entry expects `stackit://hello-server`.
 

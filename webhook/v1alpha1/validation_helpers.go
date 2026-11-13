@@ -31,7 +31,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 )
 
 const (
@@ -189,12 +188,8 @@ func validateBastionCloudInitRef(ref infrav1.StackitBastionCloudInitRef, fldPath
 func validateStackitMachineSpec(spec infrav1.StackitMachineSpec, fldPath *field.Path, allowProviderID bool) field.ErrorList {
 	var allErrs field.ErrorList
 
-	if spec.ProviderID != nil {
-		if !allowProviderID {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Child("providerID"), "providerID is generated per machine and must not be set in a template"))
-		} else if _, err := cloud.ParseProviderID(*spec.ProviderID); err != nil {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("providerID"), *spec.ProviderID, "must use STACKIT providerID format stackit://<server-id>"))
-		}
+	if spec.ProviderID != nil && !allowProviderID {
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("providerID"), "providerID is generated per machine and must not be set in a template"))
 	}
 
 	allErrs = append(allErrs, validateRequiredPattern(spec.ImageID, uuidPattern, fldPath.Child("imageID"), "must be a STACKIT image UUID")...)

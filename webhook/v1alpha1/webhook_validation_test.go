@@ -144,15 +144,6 @@ var _ = Describe("STACKIT admission webhooks", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("rejects invalid providerID", func() {
-			machine := validStackitMachine("invalid-providerid")
-			providerID := "stackit://"
-			machine.Spec.ProviderID = &providerID
-
-			_, err := validator.ValidateCreate(ctx, machine)
-			expectInvalidField(err, "spec.providerID")
-		})
-
 		It("defaults machine root volume deleteOnTermination idempotently", func() {
 			machine := validStackitMachine("default-machine")
 
