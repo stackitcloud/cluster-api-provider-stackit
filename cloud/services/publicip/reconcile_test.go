@@ -371,8 +371,6 @@ func TestServiceDelete(t *testing.T) {
 						"labels":      map[string]any{"cluster": "test"},
 					},
 				}})
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers/"+testServerID+"/nics"):
-				writeJSON(t, w, map[string]any{"items": []any{}})
 			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
 				detachedPair = testServerID + ":" + testPublicIPID
 				w.WriteHeader(http.StatusNoContent)

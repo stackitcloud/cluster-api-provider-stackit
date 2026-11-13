@@ -13,7 +13,7 @@ package loadbalancer
 import (
 	"errors"
 
-	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 const (
@@ -62,45 +62,32 @@ type LoadBalancerSpec struct {
 	SetAddress  func(ip string, port int32)
 }
 
-// ClientScope is an interface that provides the LoadBalancer client and target scope for load balancer operations.
-type ClientScope interface {
-	ProjectID() string
-	Region() string
-	LoadBalancerClient() *lb.APIClient
-}
-
 // Scope is an interface that provides scope data needed for load balancer reconciliation.
 type Scope interface {
-	ClientScope
+	shared.LoadBalancerClientScope
 	LoadBalancerSpec() LoadBalancerSpec
 }
 
-// Client provides direct load balancer operations against the STACKIT Load Balancer API.
-type Client struct {
-	lbClient  *lb.APIClient
-	projectID string
-	region    string
+// client provides direct load balancer operations against the STACKIT Load Balancer API.
+type client struct {
+	scope shared.LoadBalancerClientScope
 }
 
-// NewClient returns a Client for the given scope.
-func NewClient(scope ClientScope) *Client {
-	return &Client{
-		lbClient:  scope.LoadBalancerClient(),
-		projectID: scope.ProjectID(),
-		region:    scope.Region(),
-	}
+// newClient returns a client for the given scope.
+func newClient(scope shared.LoadBalancerClientScope) *client {
+	return &client{scope: scope}
 }
 
 // Service implements load balancer reconciler.
 type Service struct {
 	scope  Scope
-	client *Client
+	client *client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		client: NewClient(scope),
+		client: newClient(scope),
 	}
 }

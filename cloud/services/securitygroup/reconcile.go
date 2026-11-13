@@ -18,7 +18,6 @@ import (
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -45,7 +44,7 @@ func (s *Service) Delete(ctx context.Context) error {
 }
 
 // get retrieves a STACKIT security group by ID.
-func (c *Client) get(ctx context.Context, id string) (*SecurityGroup, error) {
+func (c *client) get(ctx context.Context, id string) (*SecurityGroup, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
 	}
@@ -57,12 +56,12 @@ func (c *Client) get(ctx context.Context, id string) (*SecurityGroup, error) {
 }
 
 // findByTags finds a single STACKIT security group matching the given tag selector.
-func (c *Client) findByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
-	return shared.FindByTags(ctx, tags, c.ListByTags, "security group", "security groups")
+func (c *client) findByTags(ctx context.Context, tags map[string]string) (*SecurityGroup, error) {
+	return shared.FindByTags(ctx, tags, c.listByTags, "security group", "security groups")
 }
 
-// ListByTags lists STACKIT security groups matching the given tag selector.
-func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error) {
+// listByTags lists STACKIT security groups matching the given tag selector.
+func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
@@ -82,24 +81,12 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Sec
 	return matched, nil
 }
 
-// DeleteByID deletes a security group and its rules by ID, ignoring NotFound errors.
-func (c *Client) DeleteByID(ctx context.Context, id string) error {
-	if id == "" {
-		return fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
-	}
-	rules, ok, err := c.listRulesIfGroupExists(ctx, id)
-	if err != nil || !ok {
-		return err
-	}
-	return c.deleteSecurityGroupWithRules(ctx, id, rules)
-}
-
 // attachToServer attaches a security group to a server idempotently.
 // Three error responses are tolerated:
 //   - conflict: already attached
 //   - invalid input: duplicate item in security_groups list
 //   - not found: server has no network port yet
-func (c *Client) attachToServer(ctx context.Context, serverID, securityGroupID string) error {
+func (c *client) attachToServer(ctx context.Context, serverID, securityGroupID string) error {
 	if err := c.scope.IaaSClient().DefaultAPI.
 		AddSecurityGroupToServer(ctx, c.scope.ProjectID(), c.scope.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
@@ -112,8 +99,8 @@ func (c *Client) attachToServer(ctx context.Context, serverID, securityGroupID s
 	return nil
 }
 
-// DetachFromServer detaches a security group from a server, ignoring NotFound and Conflict errors.
-func (c *Client) DetachFromServer(ctx context.Context, serverID, securityGroupID string) error {
+// detachFromServer detaches a security group from a server, ignoring NotFound and Conflict errors.
+func (c *client) detachFromServer(ctx context.Context, serverID, securityGroupID string) error {
 	if err := c.scope.IaaSClient().DefaultAPI.
 		RemoveSecurityGroupFromServer(ctx, c.scope.ProjectID(), c.scope.Region(), serverID, securityGroupID).
 		Execute(); err != nil {
@@ -126,7 +113,7 @@ func (c *Client) DetachFromServer(ctx context.Context, serverID, securityGroupID
 	return nil
 }
 
-func (c *Client) reconcileSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
+func (c *client) reconcileSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
 	if err := spec.validate(); err != nil {
 		return err
 	}
@@ -151,23 +138,33 @@ func (c *Client) reconcileSecurityGroup(ctx context.Context, spec SecurityGroupS
 	return nil
 }
 
-func (c *Client) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
+type resolvedSecurityGroup struct {
+	id    string
+	rules []iaas.SecurityGroupRule
+}
+
+func (c *client) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
 	if spec.ID == "" && len(spec.Tags) == 0 {
 		return fmt.Errorf("%w: security group ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	securityGroupID, rules, err := c.resolveSecurityGroupForDelete(ctx, spec)
+	resolved, err := c.resolveSecurityGroupsForDelete(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if securityGroupID != "" {
-		if err := c.detachSecurityGroupFromServers(ctx, securityGroupID, spec); err != nil {
+	for _, sg := range resolved {
+		if err := c.detachSecurityGroupFromServers(ctx, sg.id, spec); err != nil {
 			return err
 		}
-		if err := c.deleteSecurityGroupWithRules(ctx, securityGroupID, rules); err != nil {
+		if err := c.deleteSecurityGroupRules(ctx, sg.id, sg.rules); err != nil {
 			return err
 		}
-		logf.FromContext(ctx).V(1).Info("Deleted security group", "securityGroupID", securityGroupID)
+	}
+	for _, sg := range resolved {
+		if err := c.deleteSecurityGroupByID(ctx, sg.id); err != nil {
+			return err
+		}
+		logf.FromContext(ctx).V(1).Info("Deleted security group", "securityGroupID", sg.id)
 	}
 	if spec.SetID != nil {
 		spec.SetID("")
@@ -175,31 +172,40 @@ func (c *Client) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpec
 	return nil
 }
 
-func (c *Client) resolveSecurityGroupForDelete(
+func (c *client) resolveSecurityGroupsForDelete(
 	ctx context.Context,
 	spec SecurityGroupSpec,
-) (string, []iaas.SecurityGroupRule, error) {
+) ([]resolvedSecurityGroup, error) {
 	if spec.ID != "" {
 		rules, ok, err := c.listRulesIfGroupExists(ctx, spec.ID)
-		if err != nil || ok {
-			return spec.ID, rules, err
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return []resolvedSecurityGroup{{id: spec.ID, rules: rules}}, nil
 		}
 	}
 	if len(spec.Tags) == 0 {
-		return "", nil, nil
+		return nil, nil
 	}
-	securityGroup, err := c.findByTags(ctx, spec.Tags)
-	if shared.IsNotFound(err) {
-		return "", nil, nil
-	}
+	securityGroups, err := c.listByTags(ctx, spec.Tags)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	rules, _, err := c.listRulesIfGroupExists(ctx, securityGroup.ID)
-	return securityGroup.ID, rules, err
+	resolved := make([]resolvedSecurityGroup, 0, len(securityGroups))
+	for _, sg := range securityGroups {
+		rules, ok, err := c.listRulesIfGroupExists(ctx, sg.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			resolved = append(resolved, resolvedSecurityGroup{id: sg.ID, rules: rules})
+		}
+	}
+	return resolved, nil
 }
 
-func (c *Client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.SecurityGroupRule, bool, error) {
+func (c *client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.SecurityGroupRule, bool, error) {
 	rules, err := c.listSecurityGroupRules(ctx, id)
 	if shared.IsNotFound(err) {
 		return nil, false, nil
@@ -210,7 +216,7 @@ func (c *Client) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.
 	return rules, true, nil
 }
 
-func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec) (*SecurityGroup, error) {
+func (c *client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec) (*SecurityGroup, error) {
 	if spec.ID != "" {
 		securityGroup, err := c.get(ctx, spec.ID)
 		if err == nil {
@@ -237,7 +243,7 @@ func (c *Client) ensureSecurityGroup(ctx context.Context, spec SecurityGroupSpec
 	return out, nil
 }
 
-func (c *Client) deleteSecurityGroupWithRules(
+func (c *client) deleteSecurityGroupRules(
 	ctx context.Context,
 	id string,
 	rules []iaas.SecurityGroupRule,
@@ -247,6 +253,10 @@ func (c *Client) deleteSecurityGroupWithRules(
 			return err
 		}
 	}
+	return nil
+}
+
+func (c *client) deleteSecurityGroupByID(ctx context.Context, id string) error {
 	if err := c.scope.IaaSClient().DefaultAPI.
 		DeleteSecurityGroup(ctx, c.scope.ProjectID(), c.scope.Region(), id).
 		Execute(); err != nil {
@@ -258,26 +268,26 @@ func (c *Client) deleteSecurityGroupWithRules(
 	return nil
 }
 
-func (c *Client) detachSecurityGroupFromServers(ctx context.Context, securityGroupID string, spec SecurityGroupSpec) error {
+func (c *client) detachSecurityGroupFromServers(ctx context.Context, securityGroupID string, spec SecurityGroupSpec) error {
 	if err := c.detachServers(ctx, securityGroupID, spec.ServerIDs); err != nil {
 		return err
 	}
 	if len(spec.ServerSelector) == 0 {
 		return nil
 	}
-	serverIDs, err := server.NewClient(c.scope).ListIDsByTags(ctx, spec.ServerSelector)
+	serverIDs, err := shared.ListServerIDsByTags(ctx, c.scope, spec.ServerSelector)
 	if err != nil {
 		return err
 	}
 	return c.detachServers(ctx, securityGroupID, serverIDs)
 }
 
-func (c *Client) detachServers(ctx context.Context, securityGroupID string, serverIDs []string) error {
+func (c *client) detachServers(ctx context.Context, securityGroupID string, serverIDs []string) error {
 	for _, serverID := range serverIDs {
 		if serverID == "" {
 			continue
 		}
-		if err := c.DetachFromServer(ctx, serverID, securityGroupID); err != nil {
+		if err := c.detachFromServer(ctx, serverID, securityGroupID); err != nil {
 			return err
 		}
 	}

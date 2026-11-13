@@ -21,7 +21,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (c *Client) ensureSecurityGroupRules(ctx context.Context, securityGroupID string, rules []Rule) error {
+func (c *client) ensureSecurityGroupRules(ctx context.Context, securityGroupID string, rules []Rule) error {
 	if securityGroupID == "" {
 		return fmt.Errorf("%w: security group ID is required", shared.ErrInvalidInput)
 	}
@@ -58,7 +58,7 @@ func (c *Client) ensureSecurityGroupRules(ctx context.Context, securityGroupID s
 	return nil
 }
 
-func (c *Client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
+func (c *client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	rule = rule.normalize()
 	if rule.RemoteSecurityGroupID == "" && len(rule.RemoteSecurityGroupTags) > 0 {
 		remoteSG, err := c.findByTags(ctx, rule.RemoteSecurityGroupTags)
@@ -71,7 +71,7 @@ func (c *Client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	return rule, nil
 }
 
-func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
+func (c *client) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
 	if _, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).
 		CreateSecurityGroupRulePayload(rule.toCreatePayload()).
 		Execute(); err != nil {
@@ -80,7 +80,7 @@ func (c *Client) createSecurityGroupRule(ctx context.Context, securityGroupID st
 	return nil
 }
 
-func (c *Client) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
+func (c *client) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
 	resp, err := c.scope.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list security group rules", err)
@@ -88,7 +88,7 @@ func (c *Client) listSecurityGroupRules(ctx context.Context, securityGroupID str
 	return resp.GetItems(), nil
 }
 
-func (c *Client) deleteSecurityGroupRule(ctx context.Context, securityGroupID, ruleID string) error {
+func (c *client) deleteSecurityGroupRule(ctx context.Context, securityGroupID, ruleID string) error {
 	if ruleID == "" {
 		return nil
 	}

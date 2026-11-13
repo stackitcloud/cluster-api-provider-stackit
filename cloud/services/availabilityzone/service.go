@@ -10,37 +10,27 @@ You may obtain a copy of the License at
 
 package availabilityzone
 
-import iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+import "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 
 // AvailabilityZoneSpec describes the callback used to record discovered availability zones.
 type AvailabilityZoneSpec struct {
 	SetZones func(zones []string)
 }
 
-// clientScope is an interface that provides the IaaS client and target region for availability zone operations.
-type clientScope interface {
-	Region() string
-	IaaSClient() *iaas.APIClient
-}
-
 // Scope is an interface that provides scope data needed for availability zone reconciliation.
 type Scope interface {
-	clientScope
+	shared.IaaSClientScope
 	AvailabilityZoneSpec() AvailabilityZoneSpec
 }
 
 // client provides direct availability zone operations against the STACKIT IaaS API.
 type client struct {
-	iaasClient *iaas.APIClient
-	region     string
+	scope shared.IaaSClientScope
 }
 
 // newClient returns a client for the given scope.
-func newClient(scope clientScope) *client {
-	return &client{
-		iaasClient: scope.IaaSClient(),
-		region:     scope.Region(),
-	}
+func newClient(scope shared.IaaSClientScope) *client {
+	return &client{scope: scope}
 }
 
 // Service implements availability zones reconciler.

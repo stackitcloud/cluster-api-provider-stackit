@@ -35,10 +35,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 // list retrieves the availability zones for the configured region.
 func (c *client) list(ctx context.Context) ([]string, error) {
-	if c.region == "" {
+	if c.scope.Region() == "" {
 		return nil, fmt.Errorf("%w: region is empty", shared.ErrInvalidInput)
 	}
-	resp, err := c.iaasClient.DefaultAPI.ListAvailabilityZones(ctx, c.region).Execute()
+	resp, err := c.scope.IaaSClient().DefaultAPI.ListAvailabilityZones(ctx, c.scope.Region()).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list availability zones", err)
 	}

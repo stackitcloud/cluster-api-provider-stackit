@@ -76,16 +76,6 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestClient(t *testing.T, handler http.Handler) *server.Client {
-	t.Helper()
-
-	return server.NewClient(&testScope{
-		projectID:  testProjectID,
-		region:     testRegion,
-		iaasClient: newTestIaaSClient(t, handler),
-	})
-}
-
 func newTestService(t *testing.T, spec server.ServerSpec, handler http.Handler) *server.Service {
 	t.Helper()
 
@@ -562,8 +552,6 @@ func TestServiceDelete(t *testing.T) {
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
 				}})
-			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID+"/nics"):
-				writeJSON(t, w, map[string]any{"items": []any{}})
 			case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID):
 				deletedID = testServerID
 				w.WriteHeader(http.StatusNoContent)
@@ -596,8 +584,6 @@ func TestServiceDelete(t *testing.T) {
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
 				}})
-			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID+"/nics"):
-				writeJSON(t, w, map[string]any{"items": []any{}})
 			case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID):
 				deletedID = testServerID
 				w.WriteHeader(http.StatusNoContent)
@@ -637,28 +623,4 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})
-}
-
-func TestListIDsByTags(t *testing.T) {
-	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers") {
-			if got := r.URL.Query().Get("details"); got != "false" {
-				t.Fatalf("details = %q, want false", got)
-			}
-			writeJSON(t, w, map[string]any{"items": []any{
-				map[string]any{"id": testServerID, "name": "node-0", "machineType": "c2i.2", "labels": map[string]any{"cluster": "test"}},
-				map[string]any{"id": testOtherServerID, "name": "node-1", "machineType": "c2i.2", "labels": map[string]any{"cluster": "other"}},
-			}})
-			return
-		}
-		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-	}))
-
-	ids, err := client.ListIDsByTags(context.Background(), map[string]string{"cluster": "test"})
-	if err != nil {
-		t.Fatalf("ListIDsByTags() error = %v", err)
-	}
-	if len(ids) != 1 || ids[0] != testServerID {
-		t.Fatalf("ListIDsByTags() = %v, want [%s]", ids, testServerID)
-	}
 }

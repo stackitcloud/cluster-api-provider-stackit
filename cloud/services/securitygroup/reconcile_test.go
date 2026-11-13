@@ -76,16 +76,6 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestClient(t *testing.T, handler http.Handler) *securitygroup.Client {
-	t.Helper()
-
-	return securitygroup.NewClient(&testScope{
-		projectID:  testProjectID,
-		region:     testRegion,
-		iaasClient: newTestIaaSClient(t, handler),
-	})
-}
-
 func newTestService(t *testing.T, specs []securitygroup.SecurityGroupSpec, handler http.Handler) *securitygroup.Service {
 	t.Helper()
 
@@ -781,57 +771,4 @@ func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
 	if !slices.Equal(deletedSGIDs, []string{testSecurityGroupID, testRemoteSGID}) {
 		t.Fatalf("deletedSGIDs = %v, want [%s %s] (reverse order: node-ssh then bastion-ssh)", deletedSGIDs, testSecurityGroupID, testRemoteSGID)
 	}
-}
-
-func TestListByTagsAndDeleteByID(t *testing.T) {
-	t.Run("ListByTags returns matching security groups", func(t *testing.T) {
-		client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(t, w, map[string]any{"items": []any{
-				map[string]any{"id": testSecurityGroupID, "name": "bastion-ssh", "labels": map[string]any{"cluster": "test"}},
-			}})
-		}))
-
-		got, err := client.ListByTags(context.Background(), map[string]string{"cluster": "test"})
-		if err != nil {
-			t.Fatalf("ListByTags() error = %v", err)
-		}
-		if len(got) != 1 || got[0].ID != testSecurityGroupID {
-			t.Fatalf("ListByTags() = %#v, want [%s]", got, testSecurityGroupID)
-		}
-	})
-
-	t.Run("DeleteByID deletes rules and security group and ignores NotFound", func(t *testing.T) {
-		var (
-			deletedRules []string
-			deletedSGID  string
-		)
-		client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
-				writeJSON(t, w, map[string]any{"items": []any{
-					map[string]any{"id": testRuleID1, "direction": "ingress"},
-				}})
-			case r.Method == http.MethodDelete && strings.Contains(path, "/rules/"):
-				parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
-				deletedRules = append(deletedRules, parts[len(parts)-1])
-				w.WriteHeader(http.StatusNoContent)
-			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
-				deletedSGID = testSecurityGroupID
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-			}
-		}))
-
-		if err := client.DeleteByID(context.Background(), testSecurityGroupID); err != nil {
-			t.Fatalf("DeleteByID() error = %v", err)
-		}
-		if !slices.Equal(deletedRules, []string{testRuleID1}) {
-			t.Fatalf("deletedRules = %v, want [%s]", deletedRules, testRuleID1)
-		}
-		if deletedSGID != testSecurityGroupID {
-			t.Fatalf("deletedSGID = %q, want %q", deletedSGID, testSecurityGroupID)
-		}
-	})
 }

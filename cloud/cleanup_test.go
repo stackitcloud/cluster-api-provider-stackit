@@ -12,6 +12,7 @@ package cloud_test
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
@@ -20,32 +21,123 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
-type testServerScope struct {
+type testResourceScope struct {
 	cloud.Client
-	spec server.ServerSpec
+	serverSpec        server.ServerSpec
+	publicIPSpec      publicip.PublicIPSpec
+	loadBalancerSpec  loadbalancer.LoadBalancerSpec
+	securityGroupSpec []securitygroup.SecurityGroupSpec
 }
 
-func (s *testServerScope) ServerSpec() server.ServerSpec {
-	return s.spec
+func (s *testResourceScope) ServerSpec() server.ServerSpec {
+	return s.serverSpec
 }
 
-func createTestServer(t *testing.T, client cloud.Client, name string, tags map[string]string) {
+func (s *testResourceScope) PublicIPSpec() publicip.PublicIPSpec {
+	return s.publicIPSpec
+}
+
+func (s *testResourceScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
+	return s.loadBalancerSpec
+}
+
+func (s *testResourceScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	return s.securityGroupSpec
+}
+
+func createTestResources(t *testing.T, client cloud.Client, prefix string, tags map[string]string) {
 	t.Helper()
+	ctx := context.Background()
 
-	err := server.New(&testServerScope{
+	var workerServerID, bastionServerID string
+	if err := server.New(&testResourceScope{
 		Client: client,
-		spec: server.ServerSpec{
-			Name:        name,
+		serverSpec: server.ServerSpec{
+			Name:        prefix + "-worker",
 			ImageID:     "22222222-2222-4222-8222-222222222222",
 			MachineType: "c2i.2",
 			NetworkID:   "11111111-1111-4111-8111-111111111111",
 			Tags:        tags,
+			SetServer: func(srv *server.Server, _ bool) {
+				workerServerID = srv.ID
+			},
 		},
-	}).Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("server.Reconcile() error = %v", err)
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("server.Reconcile(worker) error = %v", err)
+	}
+
+	bastionTags := make(map[string]string, len(tags)+1)
+	maps.Copy(bastionTags, tags)
+	bastionTags[util.LabelResourceRole] = util.ResourceRoleBastion
+	if err := server.New(&testResourceScope{
+		Client: client,
+		serverSpec: server.ServerSpec{
+			Name:        prefix + "-bastion",
+			ImageID:     "22222222-2222-4222-8222-222222222222",
+			MachineType: "c2i.2",
+			NetworkID:   "11111111-1111-4111-8111-111111111111",
+			Tags:        bastionTags,
+			SetServer: func(srv *server.Server, _ bool) {
+				bastionServerID = srv.ID
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("server.Reconcile(bastion) error = %v", err)
+	}
+
+	if err := publicip.New(&testResourceScope{
+		Client: client,
+		publicIPSpec: publicip.PublicIPSpec{
+			Tags:     bastionTags,
+			ServerID: bastionServerID,
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("publicip.Reconcile() error = %v", err)
+	}
+
+	nodeSSHTags := make(map[string]string, len(tags)+1)
+	maps.Copy(nodeSSHTags, tags)
+	nodeSSHTags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
+	if err := securitygroup.New(&testResourceScope{
+		Client: client,
+		securityGroupSpec: []securitygroup.SecurityGroupSpec{
+			{
+				Name:      prefix + "-bastion-sg",
+				Tags:      bastionTags,
+				ServerIDs: []string{bastionServerID},
+			},
+			{
+				Name:      prefix + "-node-ssh-sg",
+				Tags:      nodeSSHTags,
+				ServerIDs: []string{workerServerID},
+				Rules: []securitygroup.Rule{
+					{
+						Direction:               securitygroup.DirectionIngress,
+						Protocol:                securitygroup.ProtocolTCP,
+						PortMin:                 22,
+						PortMax:                 22,
+						RemoteSecurityGroupTags: bastionTags,
+					},
+				},
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("securitygroup.Reconcile() error = %v", err)
+	}
+
+	if err := loadbalancer.New(&testResourceScope{
+		Client: client,
+		loadBalancerSpec: loadbalancer.LoadBalancerSpec{
+			Name:      prefix + "-apiserver",
+			NetworkID: "11111111-1111-4111-8111-111111111111",
+			Port:      loadbalancer.DefaultAPIServerPort,
+			Tags:      tags,
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
 	}
 }
 
@@ -61,90 +153,29 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 		"cluster-api-provider-stackit/test-id": "test-2",
 	}
 
-	srvClient := server.NewClient(client)
-	lbClient := loadbalancer.NewClient(client)
-	pubIPClient := publicip.NewClient(client)
-	sgClient := securitygroup.NewClient(client)
-
-	createTestServer(t, client, "matched", tags)
-	createTestServer(t, client, "other", otherTags)
-	if _, err := client.CreatePublicIP(ctx, tags); err != nil {
-		t.Fatalf("CreatePublicIP() error = %v", err)
-	}
-	if _, err := client.CreatePublicIP(ctx, otherTags); err != nil {
-		t.Fatalf("CreatePublicIP() error = %v", err)
-	}
-	if _, err := client.CreateSecurityGroup(ctx, "matched-sg", tags); err != nil {
-		t.Fatalf("CreateSecurityGroup() error = %v", err)
-	}
-	if _, err := client.CreateSecurityGroup(ctx, "other-sg", otherTags); err != nil {
-		t.Fatalf("CreateSecurityGroup() error = %v", err)
-	}
-	if _, err := client.CreateLoadBalancer(ctx, "matched", tags); err != nil {
-		t.Fatalf("CreateLoadBalancer() error = %v", err)
-	}
-	if _, err := client.CreateLoadBalancer(ctx, "other", otherTags); err != nil {
-		t.Fatalf("CreateLoadBalancer() error = %v", err)
-	}
+	createTestResources(t, client, "matched", tags)
+	createTestResources(t, client, "other", otherTags)
 
 	if err := cloud.CleanupByTags(ctx, client, tags); err != nil {
 		t.Fatalf("CleanupByTags() error = %v", err)
 	}
 
-	matchedServers, err := srvClient.ListByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("server.ListByTags() error = %v", err)
+	if got := client.ServerCount(); got != 2 {
+		t.Fatalf("remaining server count = %d, want 2", got)
 	}
-	if len(matchedServers) != 0 {
-		t.Fatalf("matched server count = %d, want 0", len(matchedServers))
+	if got := client.LoadBalancerCount(); got != 1 {
+		t.Fatalf("remaining load balancer count = %d, want 1", got)
 	}
-	otherServers, err := srvClient.ListByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("server.ListByTags(other) error = %v", err)
+	if got := client.PublicIPCount(); got != 1 {
+		t.Fatalf("remaining public IP count = %d, want 1", got)
 	}
-	if len(otherServers) != 1 {
-		t.Fatalf("other server count = %d, want 1", len(otherServers))
+	if got := client.SecurityGroupCount(); got != 2 {
+		t.Fatalf("remaining security group count = %d, want 2", got)
 	}
-	matchedLoadBalancers, err := lbClient.ListByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("loadbalancer.ListByTags() error = %v", err)
+	if sg := client.FindSecurityGroupByTags(tags); sg != nil {
+		t.Fatalf("unexpected remaining matched security group: %+v", sg)
 	}
-	if len(matchedLoadBalancers) != 0 {
-		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
-	}
-	otherLoadBalancers, err := lbClient.ListByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("loadbalancer.ListByTags(other) error = %v", err)
-	}
-	if len(otherLoadBalancers) != 1 {
-		t.Fatalf("other load balancer count = %d, want 1", len(otherLoadBalancers))
-	}
-	matchedPublicIPs, err := pubIPClient.ListByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("publicip.ListByTags() error = %v", err)
-	}
-	if len(matchedPublicIPs) != 0 {
-		t.Fatalf("matched public IP count = %d, want 0", len(matchedPublicIPs))
-	}
-	otherPublicIPs, err := pubIPClient.ListByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("publicip.ListByTags(other) error = %v", err)
-	}
-	if len(otherPublicIPs) != 1 {
-		t.Fatalf("other public IP count = %d, want 1", len(otherPublicIPs))
-	}
-	matchedSecurityGroups, err := sgClient.ListByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("securitygroup.ListByTags() error = %v", err)
-	}
-	if len(matchedSecurityGroups) != 0 {
-		t.Fatalf("matched security group count = %d, want 0", len(matchedSecurityGroups))
-	}
-	otherSecurityGroups, err := sgClient.ListByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("securitygroup.ListByTags(other) error = %v", err)
-	}
-	if len(otherSecurityGroups) != 1 {
-		t.Fatalf("other security group count = %d, want 1", len(otherSecurityGroups))
+	if sg := client.FindSecurityGroupByTags(otherTags); sg == nil {
+		t.Fatal("expected other security group to remain")
 	}
 }

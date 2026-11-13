@@ -46,11 +46,11 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: server ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	deletedID, err := s.client.deleteBySpec(ctx, spec)
+	deletedIDs, err := s.client.deleteBySpec(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if deletedID != "" {
+	for _, deletedID := range deletedIDs {
 		log.V(1).Info("Deleted server", "serverID", deletedID)
 	}
 	if spec.ClearServer != nil {
@@ -59,8 +59,8 @@ func (s *Service) Delete(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a STACKIT server by ID.
-func (c *Client) Get(ctx context.Context, id string) (*Server, error) {
+// get retrieves a STACKIT server by ID.
+func (c *client) get(ctx context.Context, id string) (*Server, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
@@ -71,63 +71,35 @@ func (c *Client) Get(ctx context.Context, id string) (*Server, error) {
 	return c.serverFromSDK(ctx, srv), nil
 }
 
-// FindByTags finds a single STACKIT server matching the given tag selector.
-func (c *Client) FindByTags(ctx context.Context, tags map[string]string) (*Server, error) {
-	return shared.FindByTags(ctx, tags, c.ListByTags, "server", "servers")
+// findByTags finds a single STACKIT server matching the given tag selector.
+func (c *client) findByTags(ctx context.Context, tags map[string]string) (*Server, error) {
+	return shared.FindByTags(ctx, tags, c.listByTags, "server", "servers")
 }
 
-// ListByTags lists STACKIT servers matching the given tag selector.
-func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Server, error) {
-	items, err := c.listSDKServersByTags(ctx, tags, true)
-	if err != nil {
-		return nil, err
-	}
-	matched := make([]*Server, 0, len(items))
-	for _, srv := range items {
-		matched = append(matched, c.serverFromSDK(ctx, &srv))
-	}
-	return matched, nil
-}
-
-// ListIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
-func (c *Client) ListIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
-	items, err := c.listSDKServersByTags(ctx, tags, false)
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, srv := range items {
-		if id := srv.GetId(); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
-}
-
-func (c *Client) listSDKServersByTags(ctx context.Context, tags map[string]string, details bool) ([]iaas.Server, error) {
+// listByTags lists STACKIT servers matching the given tag selector.
+func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*Server, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	req := c.scope.IaaSClient().DefaultAPI.ListServers(ctx, c.scope.ProjectID(), c.scope.Region()).
-		LabelSelector(shared.LabelSelector(tags))
-	if details {
-		req = req.Details(true)
-	}
-	resp, err := req.Execute()
+	resp, err := c.scope.IaaSClient().DefaultAPI.ListServers(ctx, c.scope.ProjectID(), c.scope.Region()).
+		LabelSelector(shared.LabelSelector(tags)).
+		Details(true).
+		Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list servers", err)
 	}
-	var matched []iaas.Server
+	matched := []*Server{}
 	for _, srv := range resp.GetItems() {
 		if shared.LabelsContainTags(srv.GetLabels(), tags) {
-			matched = append(matched, srv)
+			srv := srv
+			matched = append(matched, c.serverFromSDK(ctx, &srv))
 		}
 	}
 	return matched, nil
 }
 
-// DeleteByID deletes a server by ID, ignoring NotFound errors.
-func (c *Client) DeleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a server by ID, ignoring NotFound errors.
+func (c *client) deleteByID(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
@@ -141,7 +113,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 }
 
 // create creates a new STACKIT server from the given spec.
-func (c *Client) create(ctx context.Context, spec ServerSpec) (*Server, error) {
+func (c *client) create(ctx context.Context, spec ServerSpec) (*Server, error) {
 	payload := spec.toCreatePayload()
 	created, err := c.scope.IaaSClient().DefaultAPI.CreateServer(ctx, c.scope.ProjectID(), c.scope.Region()).
 		CreateServerPayload(payload).
@@ -154,9 +126,9 @@ func (c *Client) create(ctx context.Context, spec ServerSpec) (*Server, error) {
 	return out, nil
 }
 
-func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
+func (c *client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
 	if spec.ID != "" {
-		srv, err := c.Get(ctx, spec.ID)
+		srv, err := c.get(ctx, spec.ID)
 		if err == nil {
 			return srv, false, nil
 		}
@@ -164,7 +136,7 @@ func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 			return nil, false, err
 		}
 	}
-	if srv, err := c.FindByTags(ctx, spec.Tags); err == nil {
+	if srv, err := c.findByTags(ctx, spec.Tags); err == nil {
 		return srv, false, nil
 	} else if !shared.IsNotFound(err) {
 		return nil, false, err
@@ -187,31 +159,32 @@ func (c *Client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 	return out, true, nil
 }
 
-func (c *Client) deleteBySpec(ctx context.Context, spec ServerSpec) (string, error) {
+func (c *client) deleteBySpec(ctx context.Context, spec ServerSpec) ([]string, error) {
 	if spec.ID != "" {
 		err := c.scope.IaaSClient().DefaultAPI.DeleteServer(ctx, c.scope.ProjectID(), c.scope.Region(), spec.ID).Execute()
 		if err == nil {
-			return spec.ID, nil
+			return []string{spec.ID}, nil
 		}
 		err = shared.ClassifySDKError("delete server", err)
 		if !shared.IsNotFound(err) {
-			return "", err
+			return nil, err
 		}
 	}
 	if len(spec.Tags) == 0 {
-		return "", nil
+		return nil, nil
 	}
-	srv, err := c.FindByTags(ctx, spec.Tags)
+	ids, err := shared.ListServerIDsByTags(ctx, c.scope, spec.Tags)
 	if err != nil {
-		if shared.IsNotFound(err) {
-			return "", nil
+		return nil, err
+	}
+	var deletedIDs []string
+	for _, id := range ids {
+		if err := c.deleteByID(ctx, id); err != nil {
+			return nil, err
 		}
-		return "", err
+		deletedIDs = append(deletedIDs, id)
 	}
-	if err := c.DeleteByID(ctx, srv.ID); err != nil {
-		return "", err
-	}
-	return srv.ID, nil
+	return deletedIDs, nil
 }
 
 func (s ServerSpec) validate() error {
@@ -279,7 +252,7 @@ func (s ServerSpec) toCreatePayload() iaas.CreateServerPayload {
 	return *payload
 }
 
-func (c *Client) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
+func (c *client) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
 	if srv == nil {
 		return nil
 	}

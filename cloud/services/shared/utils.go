@@ -19,6 +19,7 @@ import (
 
 	"github.com/stackitcloud/stackit-sdk-go/core/oapierror"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
 // IaaSClientScope is an interface that provides the IaaS client and target scope for IaaS operations.
@@ -28,32 +29,33 @@ type IaaSClientScope interface {
 	IaaSClient() *iaas.APIClient
 }
 
-// IaaSScope holds the IaaS API client and target project/region for IaaS service operations.
-type IaaSScope struct {
-	iaasClient *iaas.APIClient
-	projectID  string
-	region     string
+// LoadBalancerClientScope is an interface that provides the LoadBalancer client and target scope for load balancer operations.
+type LoadBalancerClientScope interface {
+	ProjectID() string
+	Region() string
+	LoadBalancerClient() *lb.APIClient
 }
 
-// NewIaaSScope constructs an IaaSScope from the given scope.
-func NewIaaSScope(scope IaaSClientScope) IaaSScope {
-	return IaaSScope{
-		iaasClient: scope.IaaSClient(),
-		projectID:  scope.ProjectID(),
-		region:     scope.Region(),
+// ListServerIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
+func ListServerIDsByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
 	}
-}
-
-func (c IaaSScope) ProjectID() string {
-	return c.projectID
-}
-
-func (c IaaSScope) Region() string {
-	return c.region
-}
-
-func (c IaaSScope) IaaSClient() *iaas.APIClient {
-	return c.iaasClient
+	resp, err := scope.IaaSClient().DefaultAPI.ListServers(ctx, scope.ProjectID(), scope.Region()).
+		LabelSelector(LabelSelector(tags)).
+		Execute()
+	if err != nil {
+		return nil, ClassifySDKError("list servers", err)
+	}
+	var ids []string
+	for _, srv := range resp.GetItems() {
+		if LabelsContainTags(srv.GetLabels(), tags) {
+			if id := srv.GetId(); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
 }
 
 // FindByTags lists resources by tags and returns the single matching item, or ErrNotFound if empty, or ErrConflict if more than one.

@@ -34,26 +34,26 @@ type Scope interface {
 	PublicIPSpec() PublicIPSpec
 }
 
-// Client provides direct public IP operations against the STACKIT IaaS API.
-type Client struct {
-	scope shared.IaaSScope
+// client provides direct public IP operations against the STACKIT IaaS API.
+type client struct {
+	scope shared.IaaSClientScope
 }
 
-// NewClient returns a Client for the given scope.
-func NewClient(scope shared.IaaSClientScope) *Client {
-	return &Client{scope: shared.NewIaaSScope(scope)}
+// newClient returns a client for the given scope.
+func newClient(scope shared.IaaSClientScope) *client {
+	return &client{scope: scope}
 }
 
 // Service implements public IPs reconciler.
 type Service struct {
 	scope  Scope
-	client *Client
+	client *client
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
 		scope:  scope,
-		client: NewClient(scope),
+		client: newClient(scope),
 	}
 }

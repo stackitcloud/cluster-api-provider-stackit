@@ -33,12 +33,12 @@ type Scope interface {
 
 // client provides direct network operations against the STACKIT IaaS API.
 type client struct {
-	scope shared.IaaSScope
+	scope shared.IaaSClientScope
 }
 
 // newClient returns a client for the given scope.
 func newClient(scope shared.IaaSClientScope) *client {
-	return &client{scope: shared.NewIaaSScope(scope)}
+	return &client{scope: scope}
 }
 
 // Service implements network reconciler.

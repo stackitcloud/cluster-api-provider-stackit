@@ -152,10 +152,9 @@ var _ = Describe("StackitCluster Controller", func() {
 				Direction: securitygroup.DirectionEgress,
 			},
 		))
-		nodeSGs, err := securitygroup.NewClient(fakeCloud).ListByTags(ctx, scope.NodeSSHTags(got))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(nodeSGs).To(HaveLen(1))
-		Expect(fakeCloud.SecurityGroupRules(nodeSGs[0].ID)).To(ConsistOf(
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
+		Expect(fakeCloud.SecurityGroupRules(nodeSG.ID)).To(ConsistOf(
 			securitygroup.Rule{
 				Direction:             securitygroup.DirectionIngress,
 				Protocol:              securitygroup.ProtocolTCP,
@@ -201,11 +200,10 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
-		nodeSGs, err := securitygroup.NewClient(fakeCloud).ListByTags(ctx, scope.NodeSSHTags(got))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(nodeSGs).To(HaveLen(1))
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
 		stackitMachine := newStackitMachine(got.Name+"-worker-0", got.Namespace, "worker-0")
-		stackitMachine.Spec.SecurityGroups = []string{nodeSGs[0].ID}
+		stackitMachine.Spec.SecurityGroups = []string{nodeSG.ID}
 		machineScope, err := scope.NewMachineScope(
 			k8sClient,
 			&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: got.Namespace}},
@@ -217,7 +215,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		machineScope.SetCloudClient(fakeCloud)
 		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
 		workerServerID := stackitMachine.Status.InstanceID
-		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSGs[0].ID)).To(BeTrue())
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
 		got.Spec.Bastion.Enabled = false
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
@@ -228,7 +226,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
-		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSGs[0].ID)).To(BeFalse())
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeFalse())
 		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
@@ -1029,9 +1027,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(fakeCloud.LastCreateServerInput.AvailabilityZone).To(Equal("eu01-2"))
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		srv, err := server.NewClient(fakeCloud).Get(ctx, got.Status.Bastion.ServerID)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(srv.AvailabilityZone).To(Equal("eu01-2"))
+		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
 	})
 
 	It("reports an error condition when listing availability zones fails", func() {

@@ -61,12 +61,12 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: load balancer ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	loadBalancerID, err := s.client.resolveLoadBalancerForDelete(ctx, spec)
+	loadBalancerIDs, err := s.client.resolveLoadBalancersForDelete(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if loadBalancerID != "" {
-		if err := s.client.DeleteByID(ctx, loadBalancerID); err != nil {
+	for _, loadBalancerID := range loadBalancerIDs {
+		if err := s.client.deleteByID(ctx, loadBalancerID); err != nil {
 			return err
 		}
 		log.V(1).Info("Deleted load balancer", "loadBalancerID", loadBalancerID)
@@ -78,11 +78,11 @@ func (s *Service) Delete(ctx context.Context) error {
 }
 
 // get retrieves a STACKIT load balancer by ID.
-func (c *Client) get(ctx context.Context, id string) (*LoadBalancer, error) {
+func (c *client) get(ctx context.Context, id string) (*LoadBalancer, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
 	}
-	loadBalancer, err := c.lbClient.DefaultAPI.GetLoadBalancer(ctx, c.projectID, c.region, id).Execute()
+	loadBalancer, err := c.scope.LoadBalancerClient().DefaultAPI.GetLoadBalancer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get load balancer", err)
 	}
@@ -90,16 +90,16 @@ func (c *Client) get(ctx context.Context, id string) (*LoadBalancer, error) {
 }
 
 // findByTags finds a single STACKIT load balancer matching the given tag selector.
-func (c *Client) findByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
-	return shared.FindByTags(ctx, tags, c.ListByTags, "load balancer", "load balancers")
+func (c *client) findByTags(ctx context.Context, tags map[string]string) (*LoadBalancer, error) {
+	return shared.FindByTags(ctx, tags, c.listByTags, "load balancer", "load balancers")
 }
 
-// ListByTags lists STACKIT load balancers matching the given tag selector.
-func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error) {
+// listByTags lists STACKIT load balancers matching the given tag selector.
+func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
-	resp, err := c.lbClient.DefaultAPI.ListLoadBalancers(ctx, c.projectID, c.region).Execute()
+	resp, err := c.scope.LoadBalancerClient().DefaultAPI.ListLoadBalancers(ctx, c.scope.ProjectID(), c.scope.Region()).Execute()
 	if err != nil {
 		err := shared.ClassifySDKError("list load balancers", err)
 		if isLoadBalancerServiceNotEnabled(err) {
@@ -118,12 +118,12 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Loa
 	return matched, nil
 }
 
-// DeleteByID deletes a load balancer by ID, ignoring NotFound errors.
-func (c *Client) DeleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a load balancer by ID, ignoring NotFound errors.
+func (c *client) deleteByID(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: load balancer ID is empty", shared.ErrInvalidInput)
 	}
-	if _, err := c.lbClient.DefaultAPI.DeleteLoadBalancer(ctx, c.projectID, c.region, id).Execute(); err != nil {
+	if _, err := c.scope.LoadBalancerClient().DefaultAPI.DeleteLoadBalancer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete load balancer", err)
 		if !shared.IsNotFound(err) {
 			return err
@@ -132,7 +132,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
-func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
+func (c *client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
 	if spec.ID != "" {
 		loadBalancer, err := c.get(ctx, spec.ID)
 		if err == nil {
@@ -148,8 +148,8 @@ func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) 
 		return nil, err
 	}
 
-	payload := spec.toCreatePayload(c.region)
-	lbResp, err := c.lbClient.DefaultAPI.CreateLoadBalancer(ctx, c.projectID, c.region).
+	payload := spec.toCreatePayload(c.scope.Region())
+	lbResp, err := c.scope.LoadBalancerClient().DefaultAPI.CreateLoadBalancer(ctx, c.scope.ProjectID(), c.scope.Region()).
 		CreateLoadBalancerPayload(payload).
 		Execute()
 	if err != nil {
@@ -160,27 +160,33 @@ func (c *Client) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) 
 	return out, nil
 }
 
-func (c *Client) resolveLoadBalancerForDelete(ctx context.Context, spec LoadBalancerSpec) (string, error) {
+func (c *client) resolveLoadBalancersForDelete(ctx context.Context, spec LoadBalancerSpec) ([]string, error) {
 	if spec.ID != "" {
 		exists, err := c.loadBalancerExists(ctx, spec.ID)
-		if err != nil || exists {
-			return spec.ID, err
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return []string{spec.ID}, nil
 		}
 	}
 	if len(spec.Tags) == 0 {
-		return "", nil
+		return nil, nil
 	}
-	loadBalancer, err := c.findByTags(ctx, spec.Tags)
-	if shared.IsNotFound(err) {
-		return "", nil
-	}
+	loadBalancers, err := c.listByTags(ctx, spec.Tags)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return loadBalancer.ID, nil
+	ids := make([]string, 0, len(loadBalancers))
+	for _, loadBalancer := range loadBalancers {
+		if loadBalancer.ID != "" {
+			ids = append(ids, loadBalancer.ID)
+		}
+	}
+	return ids, nil
 }
 
-func (c *Client) loadBalancerExists(ctx context.Context, id string) (bool, error) {
+func (c *client) loadBalancerExists(ctx context.Context, id string) (bool, error) {
 	_, err := c.get(ctx, id)
 	if err != nil {
 		if shared.IsNotFound(err) {

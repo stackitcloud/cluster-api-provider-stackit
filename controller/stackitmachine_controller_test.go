@@ -30,7 +30,6 @@ import (
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -157,7 +156,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(instanceID).NotTo(BeEmpty())
 
 			By("removing the server behind the provider's back")
-			Expect(server.NewClient(fakeCloud).DeleteByID(ctx, instanceID)).To(Succeed())
+			fakeCloud.DeleteServer(instanceID)
 			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 			By("reconciling again")
@@ -242,13 +241,12 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			Expect(got.Status.Ready).To(BeTrue())
 			Expect(fakeCloud.AddSecurityGroupCalls).To(Equal(1))
-			securityGroups, err := securitygroup.NewClient(fakeCloud).ListByTags(ctx, map[string]string{
+			securityGroup := fakeCloud.FindSecurityGroupByTags(map[string]string{
 				util.LabelClusterName:  clusterName,
 				util.LabelResourceRole: util.ResourceRoleNodeSSH,
 			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(securityGroups).To(HaveLen(1))
-			Expect(fakeCloud.SecurityGroupRules(securityGroups[0].ID)).To(ConsistOf(
+			Expect(securityGroup).NotTo(BeNil())
+			Expect(fakeCloud.SecurityGroupRules(securityGroup.ID)).To(ConsistOf(
 				securitygroup.Rule{
 					Direction:             securitygroup.DirectionIngress,
 					Protocol:              securitygroup.ProtocolTCP,
@@ -260,7 +258,7 @@ var _ = Describe("StackitMachine Controller", func() {
 					Direction: securitygroup.DirectionEgress,
 				},
 			))
-			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
+			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroup.ID)).To(BeTrue())
 		})
 
 		It("marks conditions not ready when bastion node SSH access fails", func() {
@@ -542,7 +540,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(instanceID).NotTo(BeEmpty())
 
 			By("removing the server behind the provider's back")
-			Expect(server.NewClient(fakeCloud).DeleteByID(ctx, instanceID)).To(Succeed())
+			fakeCloud.DeleteServer(instanceID)
 			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 			By("reconciling into the terminal state")

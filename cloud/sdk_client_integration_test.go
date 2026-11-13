@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -38,16 +37,15 @@ const (
 func TestSDKClientCredentialsIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 
-	_, err := server.NewClient(client).FindByTags(context.Background(), map[string]string{
+	ids, err := shared.ListServerIDsByTags(context.Background(), client, map[string]string{
 		"capistackit-test": "credential-check",
 	})
-	if shared.IsNotFound(err) {
-		return
-	}
 	if err != nil {
-		t.Fatalf("FindByTags() error = %v", err)
+		t.Fatalf("ListServerIDsByTags() error = %v", err)
 	}
-	t.Fatal("FindByTags() unexpectedly found a server matching integration-test tags")
+	if len(ids) > 0 {
+		t.Fatal("ListServerIDsByTags() unexpectedly found a server matching integration-test tags")
+	}
 }
 
 func TestSDKClientListNetworksIntegration(t *testing.T) {
@@ -70,13 +68,13 @@ func TestSDKClientLoadBalancerCreateDeleteIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
-	lbID := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
+	scope := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   targetIP,
 	})
 
-	if err := loadbalancer.NewClient(client).DeleteByID(context.Background(), lbID); err != nil {
-		t.Fatalf("DeleteByID() error = %v", err)
+	if err := loadbalancer.New(scope).Delete(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Delete() error = %v", err)
 	}
 }
 
@@ -85,35 +83,16 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
 	initialIP := integrationInitialTargetIP(targetIP)
-	lbID := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
+	scope := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   initialIP,
-	})
-	lbClient := loadbalancer.NewClient(client)
-	t.Cleanup(func() {
-		if err := lbClient.DeleteByID(context.Background(), lbID); err != nil {
-			t.Logf("DeleteByID() cleanup error = %v", err)
-		}
 	})
 
 	targets := []loadbalancer.Target{
 		{Name: "capistackit-initial-target", IP: initialIP},
 		{Name: "capistackit-integration-target", IP: targetIP},
 	}
-	scope := &integrationLBScope{
-		Client: client,
-		spec: loadbalancer.LoadBalancerSpec{
-			ID:        lbID,
-			Name:      lbID,
-			NetworkID: networkID,
-			Port:      6443,
-			Targets:   targets,
-			Tags: map[string]string{
-				"capistackit-test": "true",
-				"capistackit-name": lbID,
-			},
-		},
-	}
+	scope.spec.Targets = targets
 	svc := loadbalancer.New(scope)
 	if err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
@@ -205,12 +184,12 @@ func (s *integrationLBScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return s.spec
 }
 
-func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target loadbalancer.Target) string {
+func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target loadbalancer.Target) *integrationLBScope {
 	t.Helper()
 
 	name := fmt.Sprintf("capistackit-it-%d", time.Now().UnixNano())
-	var lbID string
-	scope := &integrationLBScope{
+	var scope *integrationLBScope
+	scope = &integrationLBScope{
 		Client: client,
 		spec: loadbalancer.LoadBalancerSpec{
 			Name:        name,
@@ -222,23 +201,23 @@ func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string
 				"capistackit-name": name,
 			},
 			SetID: func(id string) {
-				lbID = id
+				scope.spec.ID = id
 			},
 		},
 	}
 	if err := loadbalancer.New(scope).Reconcile(context.Background()); err != nil {
 		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
 	}
-	if lbID == "" {
+	if scope.spec.ID == "" {
 		t.Fatal("loadbalancer.Reconcile() did not record a load balancer ID")
 	}
 	t.Cleanup(func() {
-		if err := loadbalancer.NewClient(client).DeleteByID(context.Background(), lbID); err != nil &&
+		if err := loadbalancer.New(scope).Delete(context.Background()); err != nil &&
 			!errors.Is(err, shared.ErrInvalidInput) {
-			t.Logf("DeleteByID() cleanup error = %v", err)
+			t.Logf("loadbalancer.Delete() cleanup error = %v", err)
 		}
 	})
-	return lbID
+	return scope
 }
 
 func integrationInitialTargetIP(targetIP string) string {

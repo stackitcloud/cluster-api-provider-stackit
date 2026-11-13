@@ -30,9 +30,14 @@ import (
 const testRegion = "eu01"
 
 type testScope struct {
+	projectID  string
 	region     string
 	iaasClient *iaas.APIClient
 	spec       availabilityzone.AvailabilityZoneSpec
+}
+
+func (s *testScope) ProjectID() string {
+	return s.projectID
 }
 
 func (s *testScope) Region() string {

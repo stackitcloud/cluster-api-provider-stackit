@@ -35,9 +35,6 @@ import (
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/test/utils"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
@@ -427,9 +424,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying the VM exists in STACKIT")
 			Eventually(func(g Gomega) {
-				server, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(server.ID).To(Equal(instanceID))
+				expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
 			}, 5*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("deleting the StackitMachine to trigger VM cleanup")
@@ -439,18 +434,12 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying the VM was deleted from STACKIT")
 			Eventually(func(g Gomega) {
-				_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-				g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+				expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 5*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -495,12 +484,12 @@ var _ = Describe("Manager", Ordered, func() {
 				Eventually(func(g Gomega) {
 					output := kubectlOutput(g, "get", "stackitcluster", clusterName, "-n", cfg.Namespace, "-o", "jsonpath={.status.bastion.publicIP}")
 					g.Expect(output).NotTo(BeEmpty())
-					publicIPs, err := publicip.NewClient(cloudClient).ListByTags(ctx, stackitE2EBastionTags(testID))
+					publicIPCount, err := countPublicIPsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(publicIPs).To(HaveLen(1))
-					securityGroups, err := securitygroup.NewClient(cloudClient).ListByTags(ctx, stackitE2EBastionTags(testID))
+					g.Expect(publicIPCount).To(Equal(1))
+					sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(securityGroups).To(HaveLen(1))
+					g.Expect(sgCount).To(Equal(1))
 				}, 10*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -520,9 +509,9 @@ var _ = Describe("Manager", Ordered, func() {
 			if cfg.BastionEnabled {
 				By("verifying the node SSH security group exists")
 				Eventually(func(g Gomega) {
-					securityGroups, err := securitygroup.NewClient(cloudClient).ListByTags(ctx, stackitE2ENodeSSHTags(testID))
+					sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2ENodeSSHTags(testID))
 					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(securityGroups).To(HaveLen(1))
+					g.Expect(sgCount).To(Equal(1))
 				}, 10*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -530,9 +519,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range instanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					server, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(server.ID).To(Equal(instanceID))
+					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
 				}, 5*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -555,22 +542,16 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
+				publicIPCount, err := countPublicIPsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
+				g.Expect(publicIPCount).To(Equal(0))
+				sgCount, err := countSecurityGroupsByTags(ctx, cloudClient, stackitE2EBastionTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
-				publicIPs, err := publicip.NewClient(cloudClient).ListByTags(ctx, stackitE2EBastionTags(testID))
+				g.Expect(sgCount).To(Equal(0))
+				sgCount, err = countSecurityGroupsByTags(ctx, cloudClient, stackitE2ENodeSSHTags(testID))
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(publicIPs).To(BeEmpty())
-				sgClient := securitygroup.NewClient(cloudClient)
-				securityGroups, err := sgClient.ListByTags(ctx, stackitE2EBastionTags(testID))
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(securityGroups).To(BeEmpty())
-				securityGroups, err = sgClient.ListByTags(ctx, stackitE2ENodeSSHTags(testID))
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(securityGroups).To(BeEmpty())
+				g.Expect(sgCount).To(Equal(0))
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -633,12 +614,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -728,12 +704,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -809,9 +780,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range scaledUpInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					server, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(server.ID).To(Equal(instanceID))
+					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
 				}, 5*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -836,8 +805,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range deletedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -850,19 +818,13 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range observedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -966,9 +928,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range scaledUpInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					server, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(server.ID).To(Equal(instanceID))
+					expectServerExistsInCloud(ctx, g, cloudClient, instanceID)
 				}, 5*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1006,8 +966,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range deletedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1018,12 +977,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -1114,8 +1068,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying the old worker VM was deleted from STACKIT")
 			Eventually(func(g Gomega) {
-				_, err := server.NewClient(cloudClient).Get(ctx, initialInstanceIDs[0])
-				g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", initialInstanceIDs[0], err)
+				expectServerGoneFromCloud(ctx, g, cloudClient, initialInstanceIDs[0])
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("deleting the upgraded workload Cluster")
@@ -1130,19 +1083,13 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range observedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -1264,8 +1211,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range deletedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1276,12 +1222,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 
@@ -1389,8 +1330,7 @@ var _ = Describe("Manager", Ordered, func() {
 			for _, instanceID := range deletedInstanceIDs {
 				instanceID := instanceID
 				Eventually(func(g Gomega) {
-					_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-					g.Expect(shared.IsNotFound(err)).To(BeTrue(), "expected old server %s to be deleted, got %v", instanceID, err)
+					expectServerGoneFromCloud(ctx, g, cloudClient, instanceID)
 				}, 20*time.Minute, 15*time.Second).Should(Succeed())
 			}
 
@@ -1401,12 +1341,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("verifying no tagged STACKIT resources remain for the e2e test ID")
 			Eventually(func(g Gomega) {
-				servers, err := server.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(servers).To(BeEmpty())
-				loadBalancers, err := loadbalancer.NewClient(cloudClient).ListByTags(ctx, leakTags)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(loadBalancers).To(BeEmpty())
+				expectNoLeakedServersOrLoadBalancers(ctx, g, cloudClient, leakTags)
 			}, 20*time.Minute, 15*time.Second).Should(Succeed())
 		})
 	})
@@ -3116,20 +3051,92 @@ func appendUnique(values []string, additions ...string) []string {
 	return values
 }
 
+func expectServerExistsInCloud(ctx context.Context, g Gomega, cloudClient cloud.Client, instanceID string) {
+	srv, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(srv.GetId()).To(Equal(instanceID))
+}
+
+func expectServerGoneFromCloud(ctx context.Context, g Gomega, cloudClient cloud.Client, instanceID string) {
+	_, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(shared.IsNotFound(shared.ClassifySDKError("get server", err))).To(BeTrue(), "expected server %s to be deleted, got %v", instanceID, err)
+}
+
+func expectNoLeakedServersOrLoadBalancers(ctx context.Context, g Gomega, cloudClient cloud.Client, tags map[string]string) {
+	serverIDs, err := shared.ListServerIDsByTags(ctx, cloudClient, tags)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(serverIDs).To(BeEmpty())
+	lbCount, err := countLoadBalancersByTags(ctx, cloudClient, tags)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(lbCount).To(Equal(0))
+}
+
+func countLoadBalancersByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
+	resp, err := cloudClient.LoadBalancerClient().DefaultAPI.ListLoadBalancers(ctx, cloudClient.ProjectID(), cloudClient.Region()).Execute()
+	if err != nil {
+		return 0, shared.ClassifySDKError("list load balancers", err)
+	}
+	labels := loadbalancer.Labels(tags)
+	count := 0
+	for _, candidate := range resp.GetLoadBalancers() {
+		if shared.MapContains(candidate.GetLabels(), labels) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func countPublicIPsByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
+	resp, err := cloudClient.IaaSClient().DefaultAPI.ListPublicIPs(ctx, cloudClient.ProjectID(), cloudClient.Region()).
+		LabelSelector(shared.LabelSelector(tags)).
+		Execute()
+	if err != nil {
+		return 0, shared.ClassifySDKError("list public IPs", err)
+	}
+	count := 0
+	for _, item := range resp.GetItems() {
+		if shared.LabelsContainTags(item.GetLabels(), tags) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func countSecurityGroupsByTags(ctx context.Context, cloudClient cloud.Client, tags map[string]string) (int, error) {
+	resp, err := cloudClient.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, cloudClient.ProjectID(), cloudClient.Region()).
+		LabelSelector(shared.LabelSelector(tags)).
+		Execute()
+	if err != nil {
+		return 0, shared.ClassifySDKError("list security groups", err)
+	}
+	count := 0
+	for _, item := range resp.GetItems() {
+		if shared.LabelsContainTags(item.GetLabels(), tags) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func cleanupCloudServersByID(ctx context.Context, cloudClient cloud.Client, instanceIDs []string) {
 	for _, instanceID := range instanceIDs {
-		if err := server.NewClient(cloudClient).DeleteByID(ctx, instanceID); err != nil {
-			_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup warning for %s: %v\n", instanceID, err)
-			continue
+		if err := cloudClient.IaaSClient().DefaultAPI.DeleteServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute(); err != nil {
+			classified := shared.ClassifySDKError("delete server", err)
+			if !shared.IsNotFound(classified) {
+				_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup warning for %s: %v\n", instanceID, classified)
+				continue
+			}
 		}
 		deadline := time.Now().Add(10 * time.Minute)
 		for time.Now().Before(deadline) {
-			_, err := server.NewClient(cloudClient).Get(ctx, instanceID)
-			if shared.IsNotFound(err) {
-				break
-			}
+			_, err := cloudClient.IaaSClient().DefaultAPI.GetServer(ctx, cloudClient.ProjectID(), cloudClient.Region(), instanceID).Execute()
 			if err != nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup verification warning for %s: %v\n", instanceID, err)
+				classified := shared.ClassifySDKError("get server", err)
+				if shared.IsNotFound(classified) {
+					break
+				}
+				_, _ = fmt.Fprintf(GinkgoWriter, "STACKIT API server cleanup verification warning for %s: %v\n", instanceID, classified)
 				break
 			}
 			time.Sleep(15 * time.Second)

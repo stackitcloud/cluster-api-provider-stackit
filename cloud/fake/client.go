@@ -247,7 +247,7 @@ func (c *Client) getPublicIP(_ context.Context, id string) (*publicip.PublicIP, 
 	return &out, nil
 }
 
-func (c *Client) CreatePublicIP(_ context.Context, tags map[string]string) (*publicip.PublicIP, error) {
+func (c *Client) createPublicIP(_ context.Context, tags map[string]string) (*publicip.PublicIP, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -323,30 +323,6 @@ func (c *Client) removePublicIPFromServer(_ context.Context, serverID, publicIPI
 	return nil
 }
 
-func (c *Client) CreateSecurityGroup(_ context.Context, name string, tags map[string]string) (*securitygroup.SecurityGroup, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	entry, err := c.createSecurityGroupEntry(name, "", tags)
-	if err != nil {
-		return nil, err
-	}
-	out := *entry.securityGroup
-	return &out, nil
-}
-
-func (c *Client) CreateLoadBalancer(_ context.Context, name string, tags map[string]string) (*loadbalancer.LoadBalancer, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	entry, err := c.createLoadBalancerEntry(name, 6443, loadbalancer.Labels(tags), nil)
-	if err != nil {
-		return nil, err
-	}
-	out := *entry.lb
-	return &out, nil
-}
-
 // ServerCount returns the number of currently tracked servers (test helper).
 func (c *Client) ServerCount() int {
 	c.mu.Lock()
@@ -408,6 +384,26 @@ func (c *Client) ServerUserData(serverID string) []byte {
 		return nil
 	}
 	return append([]byte(nil), entry.userData...)
+}
+
+// FindSecurityGroupByTags returns the single security group matching tags (test helper).
+func (c *Client) FindSecurityGroupByTags(tags map[string]string) *securitygroup.SecurityGroup {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.securityGroups {
+		if shared.MapContains(entry.tags, tags) {
+			out := *entry.securityGroup
+			return &out
+		}
+	}
+	return nil
+}
+
+// DeleteServer removes a server from the fake store by ID (test helper).
+func (c *Client) DeleteServer(serverID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.servers, serverID)
 }
 
 // SecurityGroupRules returns the rules currently stored on a fake security group.
@@ -859,7 +855,7 @@ func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.R
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 		}
-		created, err := c.CreatePublicIP(r.Context(), body.Labels)
+		created, err := c.createPublicIP(r.Context(), body.Labels)
 		if err != nil {
 			writeFakeError(rec, err)
 		} else {

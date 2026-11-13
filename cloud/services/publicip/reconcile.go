@@ -17,7 +17,6 @@ import (
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -57,31 +56,32 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: public IP ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	publicIP, err := s.client.resolvePublicIP(ctx, spec)
+	publicIPs, err := s.client.resolvePublicIPsForDelete(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if publicIP == nil {
+	if len(publicIPs) == 0 {
 		if spec.SetPublicIP != nil {
 			spec.SetPublicIP("", "")
 		}
 		return nil
 	}
 
-	serverID, err := s.client.resolveServerID(ctx, spec)
+	serverIDs, err := s.client.resolveServerIDs(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if serverID != "" {
-		if err := s.client.DetachFromServer(ctx, serverID, publicIP.ID); err != nil {
+	for _, publicIP := range publicIPs {
+		for _, serverID := range serverIDs {
+			if err := s.client.detachFromServer(ctx, serverID, publicIP.ID); err != nil {
+				return err
+			}
+		}
+		if err := s.client.deleteByID(ctx, publicIP.ID); err != nil {
 			return err
 		}
+		log.V(1).Info("Deleted public IP", "publicIPID", publicIP.ID)
 	}
-
-	if err := s.client.DeleteByID(ctx, publicIP.ID); err != nil {
-		return err
-	}
-	log.V(1).Info("Deleted public IP", "publicIPID", publicIP.ID)
 
 	if spec.SetPublicIP != nil {
 		spec.SetPublicIP("", "")
@@ -90,7 +90,7 @@ func (s *Service) Delete(ctx context.Context) error {
 }
 
 // get retrieves a STACKIT public IP by ID.
-func (c *Client) get(ctx context.Context, id string) (*PublicIP, error) {
+func (c *client) get(ctx context.Context, id string) (*PublicIP, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
 	}
@@ -102,12 +102,12 @@ func (c *Client) get(ctx context.Context, id string) (*PublicIP, error) {
 }
 
 // findByTags finds a single STACKIT public IP matching the given tag selector.
-func (c *Client) findByTags(ctx context.Context, tags map[string]string) (*PublicIP, error) {
-	return shared.FindByTags(ctx, tags, c.ListByTags, "public IP", "public IPs")
+func (c *client) findByTags(ctx context.Context, tags map[string]string) (*PublicIP, error) {
+	return shared.FindByTags(ctx, tags, c.listByTags, "public IP", "public IPs")
 }
 
-// ListByTags lists STACKIT public IPs matching the given tag selector.
-func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error) {
+// listByTags lists STACKIT public IPs matching the given tag selector.
+func (c *client) listByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
 	}
@@ -128,7 +128,7 @@ func (c *Client) ListByTags(ctx context.Context, tags map[string]string) ([]*Pub
 }
 
 // attachToServer attaches a public IP to a server idempotently, tolerating Conflict errors.
-func (c *Client) attachToServer(ctx context.Context, serverID, publicIPID string) error {
+func (c *client) attachToServer(ctx context.Context, serverID, publicIPID string) error {
 	if serverID == "" || publicIPID == "" {
 		return fmt.Errorf("%w: server ID and public IP ID are required", shared.ErrInvalidInput)
 	}
@@ -144,8 +144,8 @@ func (c *Client) attachToServer(ctx context.Context, serverID, publicIPID string
 	return nil
 }
 
-// DetachFromServer detaches a public IP from a server, ignoring NotFound and Conflict errors.
-func (c *Client) DetachFromServer(ctx context.Context, serverID, publicIPID string) error {
+// detachFromServer detaches a public IP from a server, ignoring NotFound and Conflict errors.
+func (c *client) detachFromServer(ctx context.Context, serverID, publicIPID string) error {
 	if serverID == "" || publicIPID == "" {
 		return fmt.Errorf("%w: server ID and public IP ID are required", shared.ErrInvalidInput)
 	}
@@ -161,8 +161,8 @@ func (c *Client) DetachFromServer(ctx context.Context, serverID, publicIPID stri
 	return nil
 }
 
-// DeleteByID deletes a public IP by ID, ignoring NotFound errors.
-func (c *Client) DeleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a public IP by ID, ignoring NotFound errors.
+func (c *client) deleteByID(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
 	}
@@ -175,7 +175,7 @@ func (c *Client) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
-func (c *Client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
+func (c *client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
 	publicIP, err := c.resolvePublicIP(ctx, spec)
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func (c *Client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*Public
 	return out, nil
 }
 
-func (c *Client) resolvePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
+func (c *client) resolvePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
 	if spec.ID != "" {
 		publicIP, err := c.get(ctx, spec.ID)
 		if err == nil {
@@ -223,21 +223,40 @@ func (c *Client) resolvePublicIP(ctx context.Context, spec PublicIPSpec) (*Publi
 	return publicIP, nil
 }
 
-func (c *Client) resolveServerID(ctx context.Context, spec PublicIPSpec) (string, error) {
+func (c *client) resolvePublicIPsForDelete(ctx context.Context, spec PublicIPSpec) ([]*PublicIP, error) {
+	if spec.ID != "" {
+		publicIP, err := c.get(ctx, spec.ID)
+		if err == nil {
+			return []*PublicIP{publicIP}, nil
+		}
+		if !shared.IsNotFound(err) {
+			return nil, err
+		}
+	}
+	if len(spec.Tags) == 0 {
+		return nil, nil
+	}
+	return c.listByTags(ctx, spec.Tags)
+}
+
+func (c *client) resolveServerIDs(ctx context.Context, spec PublicIPSpec) ([]string, error) {
+	var ids []string
 	if spec.ServerID != "" {
-		return spec.ServerID, nil
+		ids = append(ids, spec.ServerID)
 	}
 	if len(spec.ServerSelector) == 0 {
-		return "", nil
+		return ids, nil
 	}
-	srv, err := server.NewClient(c.scope).FindByTags(ctx, spec.ServerSelector)
+	selectedIDs, err := shared.ListServerIDsByTags(ctx, c.scope, spec.ServerSelector)
 	if err != nil {
-		if shared.IsNotFound(err) {
-			return "", nil
-		}
-		return "", err
+		return nil, err
 	}
-	return srv.ID, nil
+	for _, id := range selectedIDs {
+		if id != spec.ServerID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (s PublicIPSpec) validate() error {
