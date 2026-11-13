@@ -139,3 +139,45 @@ func TestNodeSSHSecurityGroupSpecIncludesAdditionalLabelsInServerSelector(t *tes
 		t.Fatalf("nodeSSHSecurityGroupSpec ServerSelector = %#v, want %#v", got, wantSelector)
 	}
 }
+
+func TestMachineScopeSecurityGroupSpecsRespectsBastionEnabled(t *testing.T) {
+	machineScope := &MachineScope{
+		StackitCluster: &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-cluster",
+				Namespace: "my-ns",
+			},
+			Spec: infrav1.StackitClusterSpec{
+				Bastion: infrav1.StackitBastionSpec{
+					Enabled: false,
+				},
+			},
+			Status: infrav1.StackitClusterStatus{
+				Bastion: infrav1.StackitBastionStatus{
+					SecurityGroupID: "bastion-sg-id",
+				},
+			},
+		},
+		StackitMachine: &infrav1.StackitMachine{
+			Status: infrav1.StackitMachineStatus{
+				InstanceID: "srv-1",
+			},
+		},
+	}
+
+	if got := machineScope.SecurityGroupSpecs(); len(got) != 0 {
+		t.Fatalf("SecurityGroupSpecs() when bastion disabled = %#v, want empty", got)
+	}
+
+	machineScope.StackitCluster.Spec.Bastion.Enabled = true
+	got := machineScope.SecurityGroupSpecs()
+	if len(got) != 1 {
+		t.Fatalf("SecurityGroupSpecs() when bastion enabled count = %d, want 1", len(got))
+	}
+	if !reflect.DeepEqual(got[0].ServerIDs, []string{"srv-1"}) {
+		t.Fatalf("SecurityGroupSpecs()[0].ServerIDs = %#v, want [srv-1]", got[0].ServerIDs)
+	}
+	if len(got[0].Rules) == 0 || got[0].Rules[0].RemoteSecurityGroupID != "bastion-sg-id" {
+		t.Fatalf("SecurityGroupSpecs()[0].Rules = %#v, want RemoteSecurityGroupID=bastion-sg-id", got[0].Rules)
+	}
+}

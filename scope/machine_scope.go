@@ -194,6 +194,9 @@ func (s *MachineScope) ServerSpec() server.ServerSpec {
 }
 
 func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	if !s.StackitCluster.Spec.Bastion.Enabled {
+		return nil
+	}
 	return []securitygroup.SecurityGroupSpec{
 		nodeSSHSecurityGroupSpec(
 			s.StackitCluster,

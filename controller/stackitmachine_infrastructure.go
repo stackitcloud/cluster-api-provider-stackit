@@ -30,7 +30,6 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -157,7 +156,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err := r.reconcileBastionNodeSSHAccess(ctx, machineScope); err != nil {
+	if err := securitygroup.New(machineScope).Reconcile(ctx); err != nil {
 		log.Error(err, "Failed to configure bastion SSH access for node", "machine", stackitMachine.Name)
 		record.Warnf(
 			stackitMachine, "FailedNodeSSHAccess",
@@ -272,22 +271,6 @@ func (r *StackitMachineReconciler) fetchBootstrapData(ctx context.Context, machi
 		return nil, metav1.ConditionFalse, util.BootstrapReasonInvalid, err.Error()
 	}
 	return data, metav1.ConditionTrue, "Available", ""
-}
-
-func (r *StackitMachineReconciler) reconcileBastionNodeSSHAccess(
-	ctx context.Context,
-	machineScope *scope.MachineScope,
-) error {
-	if !machineScope.StackitCluster.Spec.Bastion.Enabled {
-		return nil
-	}
-	if machineScope.StackitCluster.Status.Bastion.SecurityGroupID == "" {
-		return fmt.Errorf("%w: bastion security group ID is empty", shared.ErrTransient)
-	}
-	if machineScope.StackitMachine.Status.InstanceID == "" {
-		return fmt.Errorf("%w: server ID is empty", shared.ErrTransient)
-	}
-	return securitygroup.New(machineScope).Reconcile(ctx)
 }
 
 func (r *StackitMachineReconciler) getStackitCluster(ctx context.Context, cluster *clusterv1.Cluster) (*infrav1.StackitCluster, error) {
