@@ -31,6 +31,7 @@ const (
 	testRegion           = "eu01"
 	testPublicIPID       = "11111111-1111-4111-8111-111111111111"
 	testOtherPublicIPID  = "22222222-2222-4222-8222-222222222222"
+	testMissingPublicIP  = "99999999-9999-4999-8999-999999999999"
 	testServerID         = "33333333-3333-4333-8333-333333333333"
 	testNetworkInterface = "[VISA_REDACTED]-8444-444444444444"
 	testPublicIPAddress  = "203.0.113.22"
@@ -309,12 +310,6 @@ func TestServiceDelete(t *testing.T) {
 		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips/"+testPublicIPID):
-				writeJSON(t, w, map[string]any{
-					"id":               testPublicIPID,
-					"ip":               testPublicIPAddress,
-					"networkInterface": testNetworkInterface,
-				})
 			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
 				detachedPair = testServerID + ":" + testPublicIPID
 				w.WriteHeader(http.StatusNoContent)
@@ -371,6 +366,7 @@ func TestServiceDeleteTagFallback(t *testing.T) {
 		deletedIDs    []string
 	)
 	spec := publicip.PublicIPSpec{
+		ID:             testMissingPublicIP,
 		Tags:           map[string]string{"cluster": "test"},
 		ServerSelector: map[string]string{"cluster": "test"},
 	}
@@ -378,6 +374,12 @@ func TestServiceDeleteTagFallback(t *testing.T) {
 	svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testMissingPublicIP):
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(t, w, map[string]any{"message": "not found"})
+		case r.Method == http.MethodDelete && strings.HasSuffix(path, "/public-ips/"+testMissingPublicIP):
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(t, w, map[string]any{"message": "not found"})
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
 			writeJSON(t, w, map[string]any{"items": []any{
 				map[string]any{

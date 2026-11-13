@@ -12,7 +12,6 @@ package publicip
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
@@ -57,42 +56,18 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: public IP ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	publicIPs, err := s.client.resolvePublicIPsForDelete(ctx, spec)
-	if err != nil {
-		return err
-	}
-	if len(publicIPs) == 0 {
-		if spec.SetPublicIP != nil {
-			spec.SetPublicIP("", "")
-		}
-		return nil
-	}
-
 	serverIDs, err := s.client.resolveServerIDs(ctx, spec)
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for _, publicIP := range publicIPs {
-		var detachFailed bool
-		for _, serverID := range serverIDs {
-			if err := s.client.detachFromServer(ctx, serverID, publicIP.ID); err != nil {
-				errs = append(errs, err)
-				detachFailed = true
-				break
-			}
-		}
-		if detachFailed {
-			continue
-		}
-		if err := s.client.deleteByID(ctx, publicIP.ID); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		log.V(1).Info("Deleted public IP", "publicIPID", publicIP.ID)
+	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, func(ctx context.Context, id string) (bool, error) {
+		return s.client.detachAndDeleteByID(ctx, id, serverIDs)
+	}, s.client.listIDsByTags)
+	for _, deletedID := range deletedIDs {
+		log.V(1).Info("Deleted public IP", "publicIPID", deletedID)
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	if err != nil {
+		return err
 	}
 
 	if spec.SetPublicIP != nil {
@@ -173,18 +148,43 @@ func (c *client) detachFromServer(ctx context.Context, serverID, publicIPID stri
 	return nil
 }
 
-// deleteByID deletes a public IP by ID, ignoring NotFound errors.
-func (c *client) deleteByID(ctx context.Context, id string) error {
+// deleteByID deletes a public IP by ID, returning true if the public IP existed and was deleted,
+// or false if it was already absent.
+func (c *client) deleteByID(ctx context.Context, id string) (bool, error) {
 	if id == "" {
-		return fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
+		return false, fmt.Errorf("%w: public IP ID is empty", shared.ErrInvalidInput)
 	}
 	if err := c.scope.IaaSClient().DefaultAPI.DeletePublicIP(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete public IP", err)
-		if !shared.IsNotFound(err) {
-			return err
+		if shared.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *client) detachAndDeleteByID(ctx context.Context, id string, serverIDs []string) (bool, error) {
+	for _, serverID := range serverIDs {
+		if err := c.detachFromServer(ctx, serverID, id); err != nil {
+			return false, err
 		}
 	}
-	return nil
+	return c.deleteByID(ctx, id)
+}
+
+func (c *client) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
+	publicIPs, err := c.listByTags(ctx, tags)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(publicIPs))
+	for _, publicIP := range publicIPs {
+		if publicIP.ID != "" {
+			ids = append(ids, publicIP.ID)
+		}
+	}
+	return ids, nil
 }
 
 func (c *client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {
@@ -210,22 +210,6 @@ func (c *client) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*Public
 	out := publicIPFromSDK(created)
 	logf.FromContext(ctx).V(1).Info("Created public IP", "publicIPID", out.ID)
 	return out, nil
-}
-
-func (c *client) resolvePublicIPsForDelete(ctx context.Context, spec PublicIPSpec) ([]*PublicIP, error) {
-	if spec.ID != "" {
-		publicIP, err := c.get(ctx, spec.ID)
-		if err == nil {
-			return []*PublicIP{publicIP}, nil
-		}
-		if !shared.IsNotFound(err) {
-			return nil, err
-		}
-	}
-	if len(spec.Tags) == 0 {
-		return nil, nil
-	}
-	return c.listByTags(ctx, spec.Tags)
 }
 
 func (c *client) resolveServerIDs(ctx context.Context, spec PublicIPSpec) ([]string, error) {
