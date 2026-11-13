@@ -336,7 +336,7 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		)
 	}
 	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-	if err := r.deleteBastionResources(ctx, clusterScope); err != nil {
+	if err := deleteBastionResources(ctx, clusterScope); err != nil {
 		log.Error(err, "Failed to delete bastion", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion: %v", err)

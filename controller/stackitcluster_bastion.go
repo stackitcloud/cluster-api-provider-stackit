@@ -52,7 +52,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
 			hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-			if err := r.deleteBastionResources(ctx, clusterScope); err != nil {
+			if err := deleteBastionResources(ctx, clusterScope); err != nil {
 				return ctrl.Result{}, false, err
 			}
 			clusterScope.ClearBastionStatus()
@@ -96,7 +96,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	clusterScope.SetBastionCloudInit(cloudInit, bastionCloudInitHash(cloudInit))
 
 	if bastionNeedsRecreate(stackitCluster, cloudInit) {
-		if err := r.deleteBastionResources(ctx, clusterScope); err != nil {
+		if err := deleteBastionResources(ctx, clusterScope); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		clusterScope.ClearBastionStatus()
@@ -183,7 +183,7 @@ func hasBastionStatus(status infrav1.StackitBastionStatus) bool {
 	return status.ServerID != "" || status.PublicIPID != "" || status.PublicIP != "" || status.SecurityGroupID != "" || status.CloudInitHash != ""
 }
 
-func (r *StackitClusterReconciler) deleteBastionResources(
+func deleteBastionResources(
 	ctx context.Context,
 	clusterScope *scope.ClusterScope,
 ) error {
