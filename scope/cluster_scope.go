@@ -170,6 +170,11 @@ func (s *ClusterScope) setBastionSecurityGroupID(id string) {
 	s.StackitCluster.Status.Bastion.SecurityGroupID = id
 }
 
+func (s *ClusterScope) HasBastionStatus() bool {
+	status := s.StackitCluster.Status.Bastion
+	return status.ServerID != "" || status.PublicIPID != "" || status.PublicIP != "" || status.SecurityGroupID != "" || status.CloudInitHash != ""
+}
+
 func (s *ClusterScope) SetFailureDomains(failureDomains []clusterv1.FailureDomain) {
 	s.StackitCluster.Status.FailureDomains = failureDomains
 }

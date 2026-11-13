@@ -208,3 +208,17 @@ func TestBootstrapTargetIP(t *testing.T) {
 		t.Fatalf("BootstrapTargetIP() with invalid prefix = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
 	}
 }
+
+func TestHasBastionStatus(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+	if clusterScope.HasBastionStatus() {
+		t.Fatal("HasBastionStatus() = true on empty status, want false")
+	}
+
+	clusterScope.StackitCluster.Status.Bastion.ServerID = "srv-1"
+	if !clusterScope.HasBastionStatus() {
+		t.Fatal("HasBastionStatus() = false when ServerID is set, want true")
+	}
+}

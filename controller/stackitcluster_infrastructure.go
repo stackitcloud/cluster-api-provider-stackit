@@ -335,15 +335,11 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 			"Deleted API server load balancer %s", loadBalancerID,
 		)
 	}
-	hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-	if err := deleteBastionResources(ctx, clusterScope); err != nil {
+	if err := deleteBastion(ctx, clusterScope); err != nil {
 		log.Error(err, "Failed to delete bastion", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion: %v", err)
 		return ctrl.Result{}, err
-	}
-	if hadBastion {
-		record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 	}
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
 	return ctrl.Result{}, nil

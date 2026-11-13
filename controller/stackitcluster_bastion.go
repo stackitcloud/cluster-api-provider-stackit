@@ -51,12 +51,8 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		// the status keeps the tag-based cleanup to once per cluster.
 		condition := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition)
 		if condition == nil || condition.Reason != bastionDisabledReason {
-			hadBastion := hasBastionStatus(stackitCluster.Status.Bastion)
-			if err := deleteBastionResources(ctx, clusterScope); err != nil {
+			if err := deleteBastion(ctx, clusterScope); err != nil {
 				return ctrl.Result{}, false, err
-			}
-			if hadBastion {
-				record.Event(stackitCluster, "BastionDeleted", "Deleted bastion")
 			}
 		}
 		clusterScope.SetConditions(
@@ -177,8 +173,18 @@ func validateBastionSpec(spec infrav1.StackitBastionSpec) error {
 	return nil
 }
 
-func hasBastionStatus(status infrav1.StackitBastionStatus) bool {
-	return status.ServerID != "" || status.PublicIPID != "" || status.PublicIP != "" || status.SecurityGroupID != "" || status.CloudInitHash != ""
+func deleteBastion(
+	ctx context.Context,
+	clusterScope *scope.ClusterScope,
+) error {
+	hadBastion := clusterScope.HasBastionStatus()
+	if err := deleteBastionResources(ctx, clusterScope); err != nil {
+		return err
+	}
+	if hadBastion {
+		record.Event(clusterScope.StackitCluster, "BastionDeleted", "Deleted bastion")
+	}
+	return nil
 }
 
 func deleteBastionResources(

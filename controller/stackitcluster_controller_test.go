@@ -285,7 +285,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		got.Status.Bastion = infrav1.StackitBastionStatus{}
 		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
 		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
-		Expect(hasBastionStatus(got.Status.Bastion)).To(BeFalse())
+		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
 		Expect(got.Status.APIServerLoadBalancerID).To(BeEmpty())
 
 		By("deleting the cluster")
