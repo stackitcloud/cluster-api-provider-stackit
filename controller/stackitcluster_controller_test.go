@@ -464,7 +464,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionFalse, "CloudInitRefError")
 	})
 
-	It("recreates the bastion and node SSH access when referenced cloud-init changes", func() {
+	It("recreates the bastion without tearing down security groups or public IP when referenced cloud-init changes", func() {
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		cloudInitName := "bastion-cloud-init-" + clusterName
@@ -483,8 +483,29 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		oldServerID := got.Status.Bastion.ServerID
+		oldBastionSGID := got.Status.Bastion.SecurityGroupID
+		oldPublicIPID := got.Status.Bastion.PublicIPID
 		Expect(oldServerID).NotTo(BeEmpty())
+		Expect(oldBastionSGID).NotTo(BeEmpty())
+		Expect(oldPublicIPID).NotTo(BeEmpty())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
+
+		stackitMachine := newStackitMachine(got.Name+"-worker-0", got.Namespace, "worker-0")
+		stackitMachine.Spec.SecurityGroups = []string{nodeSG.ID}
+		machineScope, err := scope.NewMachineScope(
+			k8sClient,
+			&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: got.Namespace}},
+			&clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: "worker-0", UID: "uid-1"}},
+			got,
+			stackitMachine,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		machineScope.SetCloudClient(fakeCloud)
+		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		workerServerID := stackitMachine.Status.InstanceID
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
 		configMap := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cloudInitName, Namespace: namespace}, configMap)).To(Succeed())
@@ -494,9 +515,10 @@ var _ = Describe("StackitCluster Controller", func() {
 		result, err = reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
-		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
 		result, err = reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -505,6 +527,11 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
 		Expect(got.Status.Bastion.ServerID).NotTo(Equal(oldServerID))
+		Expect(got.Status.Bastion.SecurityGroupID).To(Equal(oldBastionSGID))
+		Expect(got.Status.Bastion.PublicIPID).To(Equal(oldPublicIPID))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
+		Expect(fakeCloud.ServerHasSecurityGroup(got.Status.Bastion.ServerID, oldBastionSGID)).To(BeTrue())
+		Expect(fakeCloud.PublicIPAttachedToServer(oldPublicIPID, got.Status.Bastion.ServerID)).To(BeTrue())
 		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
 		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(configMap.Data["userData"]))
 	})

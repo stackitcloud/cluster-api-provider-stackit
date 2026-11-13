@@ -345,6 +345,17 @@ func (c *Client) PublicIPCount() int {
 	return len(c.publicIPs)
 }
 
+// PublicIPAttachedToServer reports whether the public IP is attached to the server (test helper).
+func (c *Client) PublicIPAttachedToServer(publicIPID, serverID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.publicIPs[publicIPID]
+	if !ok {
+		return false
+	}
+	return entry.publicIP.NetworkInterfaceID == "fake-nic-"+serverID
+}
+
 // SecurityGroupCount returns the number of currently tracked security groups.
 func (c *Client) SecurityGroupCount() int {
 	c.mu.Lock()
@@ -1145,6 +1156,11 @@ func (c *Client) deleteServerHTTP(id string) error {
 	}
 	if _, ok := c.servers[id]; !ok {
 		return fmt.Errorf("server %q: %w", id, shared.ErrNotFound)
+	}
+	for _, entry := range c.publicIPs {
+		if entry.publicIP.NetworkInterfaceID == "fake-nic-"+id {
+			entry.publicIP.NetworkInterfaceID = ""
+		}
 	}
 	delete(c.servers, id)
 	return nil

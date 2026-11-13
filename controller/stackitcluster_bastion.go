@@ -91,7 +91,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 	clusterScope.SetBastionCloudInit(cloudInit, bastionCloudInitHash(cloudInit))
 
 	if bastionNeedsRecreate(stackitCluster, cloudInit) {
-		if err := deleteBastionResources(ctx, clusterScope); err != nil {
+		if err := server.New(clusterScope).Delete(ctx); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		clusterScope.SetNotReady(
@@ -178,26 +178,19 @@ func deleteBastion(
 	clusterScope *scope.ClusterScope,
 ) error {
 	hadBastion := clusterScope.HasBastionStatus()
-	if err := deleteBastionResources(ctx, clusterScope); err != nil {
-		return err
-	}
-	if hadBastion {
-		record.Event(clusterScope.StackitCluster, "BastionDeleted", "Deleted bastion")
-	}
-	return nil
-}
-
-func deleteBastionResources(
-	ctx context.Context,
-	clusterScope *scope.ClusterScope,
-) error {
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
 		return err
 	}
 	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
 		return err
 	}
-	return server.New(clusterScope).Delete(ctx)
+	if err := server.New(clusterScope).Delete(ctx); err != nil {
+		return err
+	}
+	if hadBastion {
+		record.Event(clusterScope.StackitCluster, "BastionDeleted", "Deleted bastion")
+	}
+	return nil
 }
 
 func bastionNeedsRecreate(stackitCluster *infrav1.StackitCluster, cloudInit []byte) bool {
