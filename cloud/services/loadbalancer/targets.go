@@ -113,7 +113,7 @@ func firstInternalIP(addresses []clusterv1.MachineAddress) string {
 }
 
 // setTargets replaces the contents of the API-server target pool. STACKIT rejects an empty pool.
-func (c *client) setTargets(
+func (s *Service) setTargets(
 	ctx context.Context,
 	loadBalancerID string,
 	port int32,
@@ -137,7 +137,7 @@ func (c *client) setTargets(
 		desired = append(desired, *target)
 	}
 
-	loadBalancer, err := c.scope.LoadBalancerClient().DefaultAPI.GetLoadBalancer(ctx, c.scope.ProjectID(), c.scope.Region(), loadBalancerID).Execute()
+	loadBalancer, err := s.scope.LoadBalancerClient().DefaultAPI.GetLoadBalancer(ctx, s.scope.ProjectID(), s.scope.Region(), loadBalancerID).Execute()
 	if err != nil {
 		return shared.ClassifySDKError("get load balancer", err)
 	}
@@ -156,10 +156,10 @@ func (c *client) setTargets(
 	if targetPool.GetTargetPort() == port && sameTargets(targetPool.GetTargets(), desired) {
 		return nil
 	}
-	return c.updateAPIServerTargetPool(ctx, loadBalancerID, targetPool, desired, port)
+	return s.updateAPIServerTargetPool(ctx, loadBalancerID, targetPool, desired, port)
 }
 
-func (c *client) updateAPIServerTargetPool(
+func (s *Service) updateAPIServerTargetPool(
 	ctx context.Context,
 	loadBalancerID string,
 	current *lb.TargetPool,
@@ -174,8 +174,8 @@ func (c *client) updateAPIServerTargetPool(
 		payload.SetTargetPort(current.GetTargetPort())
 	}
 	payload.SetTargets(targets)
-	if _, err := c.scope.LoadBalancerClient().DefaultAPI.
-		UpdateTargetPool(ctx, c.scope.ProjectID(), c.scope.Region(), loadBalancerID, apiserverTargetPoolName).
+	if _, err := s.scope.LoadBalancerClient().DefaultAPI.
+		UpdateTargetPool(ctx, s.scope.ProjectID(), s.scope.Region(), loadBalancerID, apiserverTargetPoolName).
 		UpdateTargetPoolPayload(*payload).
 		Execute(); err != nil {
 		return shared.ClassifySDKError("update load balancer target pool", err)

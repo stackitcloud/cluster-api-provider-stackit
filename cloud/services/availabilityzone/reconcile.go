@@ -21,7 +21,7 @@ import (
 
 func (s *Service) Reconcile(ctx context.Context) error {
 	log := logf.FromContext(ctx)
-	zones, err := s.client.list(ctx)
+	zones, err := s.list(ctx)
 	if err != nil {
 		return err
 	}
@@ -34,11 +34,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 // list retrieves the availability zones for the configured region.
-func (c *client) list(ctx context.Context) ([]string, error) {
-	if c.scope.Region() == "" {
+func (s *Service) list(ctx context.Context) ([]string, error) {
+	if s.scope.Region() == "" {
 		return nil, fmt.Errorf("%w: region is empty", shared.ErrInvalidInput)
 	}
-	resp, err := c.scope.IaaSClient().DefaultAPI.ListAvailabilityZones(ctx, c.scope.Region()).Execute()
+	resp, err := s.scope.IaaSClient().DefaultAPI.ListAvailabilityZones(ctx, s.scope.Region()).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list availability zones", err)
 	}

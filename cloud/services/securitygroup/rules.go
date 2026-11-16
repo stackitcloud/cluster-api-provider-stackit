@@ -21,17 +21,17 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (c *client) ensureSecurityGroupRules(ctx context.Context, securityGroupID string, rules []Rule) error {
+func (s *Service) ensureSecurityGroupRules(ctx context.Context, securityGroupID string, rules []Rule) error {
 	if securityGroupID == "" {
 		return fmt.Errorf("%w: security group ID is required", shared.ErrInvalidInput)
 	}
-	existingRules, err := c.listSecurityGroupRules(ctx, securityGroupID)
+	existingRules, err := s.listSecurityGroupRules(ctx, securityGroupID)
 	if err != nil {
 		return err
 	}
 	desired := make([]Rule, 0, len(rules))
 	for _, rule := range rules {
-		rule, err := c.resolveRule(ctx, rule)
+		rule, err := s.resolveRule(ctx, rule)
 		if err != nil {
 			return err
 		}
@@ -42,7 +42,7 @@ func (c *client) ensureSecurityGroupRules(ctx context.Context, securityGroupID s
 		if hasRule(existingRules, rule) {
 			continue
 		}
-		if err := c.createSecurityGroupRule(ctx, securityGroupID, rule); err != nil {
+		if err := s.createSecurityGroupRule(ctx, securityGroupID, rule); err != nil {
 			return err
 		}
 	}
@@ -51,17 +51,17 @@ func (c *client) ensureSecurityGroupRules(ctx context.Context, securityGroupID s
 		if slices.ContainsFunc(desired, ruleFromSDK(existing).equal) {
 			continue
 		}
-		if err := c.deleteSecurityGroupRule(ctx, securityGroupID, existing.GetId()); err != nil {
+		if err := s.deleteSecurityGroupRule(ctx, securityGroupID, existing.GetId()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
+func (s *Service) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	rule = rule.normalize()
 	if rule.RemoteSecurityGroupID == "" && len(rule.RemoteSecurityGroupTags) > 0 {
-		remoteSG, err := c.findByTags(ctx, rule.RemoteSecurityGroupTags)
+		remoteSG, err := s.findByTags(ctx, rule.RemoteSecurityGroupTags)
 		if err != nil {
 			if shared.IsNotFound(err) {
 				return Rule{}, fmt.Errorf("%w: remote security group not ready: %v", shared.ErrTransient, err)
@@ -74,8 +74,8 @@ func (c *client) resolveRule(ctx context.Context, rule Rule) (Rule, error) {
 	return rule, nil
 }
 
-func (c *client) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
-	if _, err := c.scope.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).
+func (s *Service) createSecurityGroupRule(ctx context.Context, securityGroupID string, rule Rule) error {
+	if _, err := s.scope.IaaSClient().DefaultAPI.CreateSecurityGroupRule(ctx, s.scope.ProjectID(), s.scope.Region(), securityGroupID).
 		CreateSecurityGroupRulePayload(rule.toCreatePayload()).
 		Execute(); err != nil {
 		return shared.ClassifySDKError("create security group rule", err)
@@ -83,20 +83,20 @@ func (c *client) createSecurityGroupRule(ctx context.Context, securityGroupID st
 	return nil
 }
 
-func (c *client) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
-	resp, err := c.scope.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID).Execute()
+func (s *Service) listSecurityGroupRules(ctx context.Context, securityGroupID string) ([]iaas.SecurityGroupRule, error) {
+	resp, err := s.scope.IaaSClient().DefaultAPI.ListSecurityGroupRules(ctx, s.scope.ProjectID(), s.scope.Region(), securityGroupID).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("list security group rules", err)
 	}
 	return resp.GetItems(), nil
 }
 
-func (c *client) deleteSecurityGroupRule(ctx context.Context, securityGroupID, ruleID string) error {
+func (s *Service) deleteSecurityGroupRule(ctx context.Context, securityGroupID, ruleID string) error {
 	if ruleID == "" {
 		return nil
 	}
-	if err := c.scope.IaaSClient().DefaultAPI.
-		DeleteSecurityGroupRule(ctx, c.scope.ProjectID(), c.scope.Region(), securityGroupID, ruleID).
+	if err := s.scope.IaaSClient().DefaultAPI.
+		DeleteSecurityGroupRule(ctx, s.scope.ProjectID(), s.scope.Region(), securityGroupID, ruleID).
 		Execute(); err != nil {
 		err := shared.ClassifySDKError("delete security group rule", err)
 		if !shared.IsNotFound(err) {

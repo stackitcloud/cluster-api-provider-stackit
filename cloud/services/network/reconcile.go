@@ -26,7 +26,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	net, err := s.client.get(ctx, spec.ID)
+	net, err := s.get(ctx, spec.ID)
 	if err != nil {
 		return err
 	}
@@ -38,11 +38,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 // get retrieves a STACKIT network by ID.
-func (c *client) get(ctx context.Context, id string) (*Network, error) {
+func (s *Service) get(ctx context.Context, id string) (*Network, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: network ID is empty", shared.ErrInvalidInput)
 	}
-	net, err := c.scope.IaaSClient().DefaultAPI.GetNetwork(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute()
+	net, err := s.scope.IaaSClient().DefaultAPI.GetNetwork(ctx, s.scope.ProjectID(), s.scope.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get network", err)
 	}

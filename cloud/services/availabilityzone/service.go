@@ -23,26 +23,14 @@ type Scope interface {
 	AvailabilityZoneSpec() AvailabilityZoneSpec
 }
 
-// client provides direct availability zone operations against the STACKIT IaaS API.
-type client struct {
-	scope shared.IaaSClientScope
-}
-
-// newClient returns a client for the given scope.
-func newClient(scope shared.IaaSClientScope) *client {
-	return &client{scope: scope}
-}
-
 // Service implements availability zones reconciler.
 type Service struct {
-	scope  Scope
-	client *client
+	scope Scope
 }
 
 // New returns Service from given scope.
 func New(scope Scope) *Service {
 	return &Service{
-		scope:  scope,
-		client: newClient(scope),
+		scope: scope,
 	}
 }

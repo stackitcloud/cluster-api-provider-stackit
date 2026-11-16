@@ -28,7 +28,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	srv, created, err := s.client.ensureServer(ctx, spec)
+	srv, created, err := s.ensureServer(ctx, spec)
 	if err != nil {
 		return err
 	}
@@ -46,8 +46,8 @@ func (s *Service) Delete(ctx context.Context) error {
 		return fmt.Errorf("%w: server ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.client.deleteByID, func(ctx context.Context, tags map[string]string) ([]string, error) {
-		return shared.ListServerIDsByTags(ctx, s.client.scope, tags)
+	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.deleteByID, func(ctx context.Context, tags map[string]string) ([]string, error) {
+		return shared.ListServerIDsByTags(ctx, s.scope, tags)
 	})
 	for _, deletedID := range deletedIDs {
 		log.V(1).Info("Deleted server", "serverID", deletedID)
@@ -62,35 +62,35 @@ func (s *Service) Delete(ctx context.Context) error {
 }
 
 // get retrieves a STACKIT server by ID.
-func (c *client) get(ctx context.Context, id string) (*Server, error) {
+func (s *Service) get(ctx context.Context, id string) (*Server, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
-	srv, err := c.scope.IaaSClient().DefaultAPI.GetServer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute()
+	srv, err := s.scope.IaaSClient().DefaultAPI.GetServer(ctx, s.scope.ProjectID(), s.scope.Region(), id).Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("get server", err)
 	}
-	return c.serverFromSDK(ctx, srv), nil
+	return s.serverFromSDK(ctx, srv), nil
 }
 
 // findByTags finds a single STACKIT server matching the given tag selector.
-func (c *client) findByTags(ctx context.Context, tags map[string]string) (*Server, error) {
+func (s *Service) findByTags(ctx context.Context, tags map[string]string) (*Server, error) {
 	srv, err := shared.FindByTags(ctx, tags, func(ctx context.Context, tags map[string]string) ([]*iaas.Server, error) {
-		return shared.ListServersByTags(ctx, c.scope, tags)
+		return shared.ListServersByTags(ctx, s.scope, tags)
 	}, "server", "servers")
 	if err != nil {
 		return nil, err
 	}
-	return c.serverFromSDK(ctx, srv), nil
+	return s.serverFromSDK(ctx, srv), nil
 }
 
 // deleteByID deletes a server by ID, returning true if the server existed and was deleted,
 // or false if it was already absent.
-func (c *client) deleteByID(ctx context.Context, id string) (bool, error) {
+func (s *Service) deleteByID(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, fmt.Errorf("%w: server ID is empty", shared.ErrInvalidInput)
 	}
-	if err := c.scope.IaaSClient().DefaultAPI.DeleteServer(ctx, c.scope.ProjectID(), c.scope.Region(), id).Execute(); err != nil {
+	if err := s.scope.IaaSClient().DefaultAPI.DeleteServer(ctx, s.scope.ProjectID(), s.scope.Region(), id).Execute(); err != nil {
 		err := shared.ClassifySDKError("delete server", err)
 		if shared.IsNotFound(err) {
 			return false, nil
@@ -101,21 +101,21 @@ func (c *client) deleteByID(ctx context.Context, id string) (bool, error) {
 }
 
 // create creates a new STACKIT server from the given spec.
-func (c *client) create(ctx context.Context, spec ServerSpec) (*Server, error) {
+func (s *Service) create(ctx context.Context, spec ServerSpec) (*Server, error) {
 	payload := spec.toCreatePayload()
-	created, err := c.scope.IaaSClient().DefaultAPI.CreateServer(ctx, c.scope.ProjectID(), c.scope.Region()).
+	created, err := s.scope.IaaSClient().DefaultAPI.CreateServer(ctx, s.scope.ProjectID(), s.scope.Region()).
 		CreateServerPayload(payload).
 		Execute()
 	if err != nil {
 		return nil, shared.ClassifySDKError("create server", err)
 	}
-	out := c.serverFromSDK(ctx, created)
+	out := s.serverFromSDK(ctx, created)
 	logf.FromContext(ctx).V(1).Info("Created server", "name", spec.Name, "serverID", out.ID)
 	return out, nil
 }
 
-func (c *client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
-	srv, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, c.get, c.findByTags, shared.IsNotFound)
+func (s *Service) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bool, error) {
+	srv, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, s.get, s.findByTags, shared.IsNotFound)
 	if err != nil {
 		return nil, false, err
 	}
@@ -133,7 +133,7 @@ func (c *client) ensureServer(ctx context.Context, spec ServerSpec) (*Server, bo
 		)
 	}
 
-	out, err := c.create(ctx, spec)
+	out, err := s.create(ctx, spec)
 	if err != nil {
 		return nil, false, err
 	}
@@ -205,7 +205,7 @@ func (s ServerSpec) toCreatePayload() iaas.CreateServerPayload {
 	return *payload
 }
 
-func (c *client) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
+func (s *Service) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
 	if srv == nil {
 		return nil
 	}
@@ -216,7 +216,7 @@ func (c *client) serverFromSDK(ctx context.Context, srv *iaas.Server) *Server {
 		PowerStatus:      srv.GetPowerStatus(),
 		AvailabilityZone: srv.GetAvailabilityZone(),
 	}
-	nics, err := c.scope.IaaSClient().DefaultAPI.ListServerNICs(ctx, c.scope.ProjectID(), c.scope.Region(), out.ID).Execute()
+	nics, err := s.scope.IaaSClient().DefaultAPI.ListServerNICs(ctx, s.scope.ProjectID(), s.scope.Region(), out.ID).Execute()
 	if err == nil {
 		for _, nic := range nics.GetItems() {
 			if ipv4 := nic.GetIpv4(); ipv4 != "" {
