@@ -182,9 +182,6 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 }
 
 func (s *Service) cleanupAndDeleteByID(ctx context.Context, id string, spec SecurityGroupSpec) (bool, error) {
-	if id == "" {
-		return false, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
-	}
 	rules, ok, err := s.listRulesIfGroupExists(ctx, id)
 	if err != nil || !ok {
 		return false, err
