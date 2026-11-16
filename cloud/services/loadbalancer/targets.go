@@ -168,11 +168,6 @@ func (s *Service) updateAPIServerTargetPool(
 ) error {
 	payload := lb.NewUpdateTargetPoolPayload()
 	payload.SetName(apiserverTargetPoolName)
-	if port > 0 {
-		payload.SetTargetPort(port)
-	} else if current.GetTargetPort() > 0 {
-		payload.SetTargetPort(current.GetTargetPort())
-	}
 	payload.SetTargets(targets)
 	if _, err := s.scope.LoadBalancerClient().DefaultAPI.
 		UpdateTargetPool(ctx, s.scope.ProjectID(), s.scope.Region(), loadBalancerID, apiserverTargetPoolName).
