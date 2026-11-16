@@ -143,41 +143,19 @@ func (s *Service) reconcileSecurityGroup(ctx context.Context, spec SecurityGroup
 	return nil
 }
 
-type resolvedSecurityGroup struct {
-	id    string
-	rules []iaas.SecurityGroupRule
-}
-
 func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
 	if spec.ID == "" && len(spec.Tags) == 0 {
 		return fmt.Errorf("%w: security group ID or tags are required", shared.ErrInvalidInput)
 	}
 
-	resolved, resolveErr := s.resolveSecurityGroupsForDelete(ctx, spec)
-	if resolveErr != nil && len(resolved) == 0 {
-		return resolveErr
+	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, func(ctx context.Context, id string) (bool, error) {
+		return s.deleteByID(ctx, id, spec)
+	}, s.listIDsByTags)
+	for _, deletedID := range deletedIDs {
+		logf.FromContext(ctx).V(1).Info("Deleted security group", "securityGroupID", deletedID)
 	}
-	var errs []error
-	if resolveErr != nil {
-		errs = append(errs, resolveErr)
-	}
-	for _, sg := range resolved {
-		if err := s.detachSecurityGroupFromServers(ctx, sg.id, spec); err != nil {
-			errs = append(errs, err)
-		}
-		if err := s.deleteSecurityGroupRules(ctx, sg.id, sg.rules); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	for _, sg := range resolved {
-		if err := s.deleteSecurityGroupByID(ctx, sg.id); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		logf.FromContext(ctx).V(1).Info("Deleted security group", "securityGroupID", sg.id)
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	if err != nil {
+		return err
 	}
 	if spec.SetID != nil {
 		spec.SetID("")
@@ -185,39 +163,34 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 	return nil
 }
 
-func (s *Service) resolveSecurityGroupsForDelete(
-	ctx context.Context,
-	spec SecurityGroupSpec,
-) ([]resolvedSecurityGroup, error) {
-	if spec.ID != "" {
-		rules, ok, err := s.listRulesIfGroupExists(ctx, spec.ID)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return []resolvedSecurityGroup{{id: spec.ID, rules: rules}}, nil
-		}
+func (s *Service) deleteByID(ctx context.Context, id string, spec SecurityGroupSpec) (bool, error) {
+	if id == "" {
+		return false, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
 	}
-	if len(spec.Tags) == 0 {
-		return nil, nil
+	rules, ok, err := s.listRulesIfGroupExists(ctx, id)
+	if err != nil || !ok {
+		return false, err
 	}
-	securityGroups, err := s.listByTags(ctx, spec.Tags)
-	if err != nil {
-		return nil, err
-	}
-	resolved := make([]resolvedSecurityGroup, 0, len(securityGroups))
 	var errs []error
-	for _, sg := range securityGroups {
-		rules, ok, err := s.listRulesIfGroupExists(ctx, sg.ID)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if ok {
-			resolved = append(resolved, resolvedSecurityGroup{id: sg.ID, rules: rules})
-		}
+	if err := s.detachSecurityGroupFromServers(ctx, id, spec); err != nil {
+		errs = append(errs, err)
 	}
-	return resolved, errors.Join(errs...)
+	if err := s.deleteSecurityGroupRules(ctx, id, rules); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.deleteSecurityGroupByID(ctx, id); err != nil {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return false, errors.Join(errs...)
+	}
+	return true, nil
+}
+
+func (s *Service) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
+	return shared.ListIDsByTags(ctx, tags, s.listByTags, func(securityGroup *SecurityGroup) string {
+		return securityGroup.ID
+	})
 }
 
 func (s *Service) listRulesIfGroupExists(ctx context.Context, id string) ([]iaas.SecurityGroupRule, bool, error) {
