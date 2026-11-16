@@ -80,9 +80,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	if err != nil {
 		log.Error(err, "Failed to build cloud client for machine", "machine", stackitMachine.Name)
 		record.Warnf(stackitMachine, "InvalidCredentials", "Failed to build cloud client: %v", err)
-		return util.CredentialFailureResult(
-			&stackitMachine.Status.Conditions,
-			stackitMachine.Generation,
+		return machineScope.CredentialFailureResult(
 			err,
 			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,
@@ -120,15 +118,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 			stackitMachine.Name, stackitMachine.Spec.ImageID, stackitMachine.Spec.Network.ID,
 			machineScope.StackitCluster.Spec.Region, err,
 		)
-		machineScope.SetNotReady(
-			"InstanceError",
-			err.Error(),
-			infrav1.MachineInstanceReadyCondition,
-			infrav1.MachineReadyCondition,
-		)
-		return util.CloudFailureResult(
-			&stackitMachine.Status.Conditions,
-			stackitMachine.Generation,
+		return machineScope.CloudFailureResult(
 			"InstanceError",
 			err,
 			retryableErrorRequeueAfter,
@@ -162,10 +152,7 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 			stackitMachine, "FailedNodeSSHAccess",
 			"Failed to configure bastion SSH access for server %s: %v", stackitMachine.Status.InstanceID, err,
 		)
-		machineScope.SetNotReady("BastionSSHAccessError", err.Error(), infrav1.MachineReadyCondition)
-		return util.CloudFailureResult(
-			&stackitMachine.Status.Conditions,
-			stackitMachine.Generation,
+		return machineScope.CloudFailureResult(
 			"BastionSSHAccessError",
 			err,
 			retryableErrorRequeueAfter,
@@ -227,9 +214,7 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 		log.Error(err, "Failed to build cloud client for machine deletion", "machine", stackitMachine.Name)
 		record.Warnf(stackitMachine, "InvalidCredentials",
 			"Failed to build cloud client for deletion: %v", err)
-		_, resultErr := util.CredentialFailureResult(
-			&stackitMachine.Status.Conditions,
-			stackitMachine.Generation,
+		_, resultErr := machineScope.CredentialFailureResult(
 			err,
 			credentialsRetryRequeueAfter,
 			infrav1.MachineCredentialsReadyCondition,

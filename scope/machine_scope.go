@@ -12,8 +12,10 @@ package scope
 
 import (
 	"context"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -87,6 +89,27 @@ func (s *MachineScope) SetReady() {
 func (s *MachineScope) SetNotReady(reason, message string, conditionTypes ...string) {
 	s.StackitMachine.Status.Ready = false
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
+}
+
+// CredentialFailureResult records the failure and decides how to retry.
+func (s *MachineScope) CredentialFailureResult(
+	err error,
+	requeueAfter time.Duration,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady("CredentialsInvalid", err.Error(), conditionTypes...)
+	return credentialFailureResult(err, requeueAfter)
+}
+
+func (s *MachineScope) CloudFailureResult(
+	reason string,
+	err error,
+	requeueAfter time.Duration,
+	returnError bool,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady(reason, err.Error(), conditionTypes...)
+	return cloudFailureResult(err, requeueAfter, returnError)
 }
 
 func (s *MachineScope) tags() map[string]string {

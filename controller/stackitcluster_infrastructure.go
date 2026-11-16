@@ -53,10 +53,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	if err != nil {
 		log.Error(err, "Failed to build cloud client for cluster", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "InvalidCredentials", "Failed to build cloud client: %v", err)
-		stackitCluster.Status.Ready = false
-		return util.CredentialFailureResult(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
+		return clusterScope.CredentialFailureResult(
 			err,
 			credentialsRetryRequeueAfter,
 			infrav1.ClusterCredentialsReadyCondition,
@@ -72,10 +69,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	)
 
 	if err := availabilityzone.New(clusterScope).Reconcile(ctx); err != nil {
-		stackitCluster.Status.Ready = false
-		return util.CloudFailureResult(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
+		return clusterScope.CloudFailureResult(
 			"AvailabilityZonesError",
 			err,
 			retryableErrorRequeueAfter,
@@ -94,10 +88,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			"Failed to get network %s in region %s: %v",
 			stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
 		)
-		stackitCluster.Status.Ready = false
-		return util.CloudFailureResult(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
+		return clusterScope.CloudFailureResult(
 			"NetworkNotFound",
 			err,
 			retryableErrorRequeueAfter,
@@ -186,10 +177,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 				stackitCluster, "FailedCreateLoadBalancer",
 				"Failed to create API server load balancer: %v", err,
 			)
-			stackitCluster.Status.Ready = false
-			return util.CloudFailureResult(
-				&stackitCluster.Status.Conditions,
-				stackitCluster.Generation,
+			return clusterScope.CloudFailureResult(
 				"LoadBalancerError",
 				err,
 				retryableErrorRequeueAfter,
@@ -249,10 +237,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			stackitCluster, "FailedCreateBastion",
 			"Failed to reconcile bastion: %v", err,
 		)
-		stackitCluster.Status.Ready = false
-		return util.CloudFailureResult(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
+		return clusterScope.CloudFailureResult(
 			"BastionError",
 			err,
 			retryableErrorRequeueAfter,

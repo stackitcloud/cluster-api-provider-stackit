@@ -15,11 +15,14 @@ package scope
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -33,6 +36,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
@@ -102,6 +106,48 @@ func (s *ClusterScope) SetReady() {
 func (s *ClusterScope) SetNotReady(reason, message string, conditionTypes ...string) {
 	s.StackitCluster.Status.Ready = false
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
+}
+
+// CredentialFailureResult records the failure and decides how to retry.
+//
+// Invalid credentials need an operator to fix the Secret, so they requeue on a
+// slow timer rather than returning an error and spinning through the controller
+// backoff. The reconcile reads the Secret again, which is what picks up the fix.
+func (s *ClusterScope) CredentialFailureResult(
+	err error,
+	requeueAfter time.Duration,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady("CredentialsInvalid", err.Error(), conditionTypes...)
+	return credentialFailureResult(err, requeueAfter)
+}
+
+func (s *ClusterScope) CloudFailureResult(
+	reason string,
+	err error,
+	requeueAfter time.Duration,
+	returnError bool,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady(reason, err.Error(), conditionTypes...)
+	return cloudFailureResult(err, requeueAfter, returnError)
+}
+
+func credentialFailureResult(err error, requeueAfter time.Duration) (ctrl.Result, error) {
+	if shared.IsUnauthorized(err) || shared.IsInvalidInput(err) || errors.Is(err, util.ErrCredentialsInvalid) {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+	return ctrl.Result{}, err
+}
+
+func cloudFailureResult(err error, requeueAfter time.Duration, returnError bool) (ctrl.Result, error) {
+	if shared.IsRetryable(err) {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+	if returnError {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
 }
 
 func (s *ClusterScope) setAPIServerEndpoint(endpoint clusterv1.APIEndpoint) {

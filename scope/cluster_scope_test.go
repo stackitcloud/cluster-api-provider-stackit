@@ -11,11 +11,16 @@ You may obtain a copy of the License at
 package scope
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
@@ -23,6 +28,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -272,5 +278,185 @@ func TestHasBastionStatus(t *testing.T) {
 	clusterScope.StackitCluster.Status.Bastion.ServerID = "srv-1"
 	if !clusterScope.HasBastionStatus() {
 		t.Fatal("HasBastionStatus() = false when ServerID is set, want true")
+	}
+}
+
+func TestClusterScopeCredentialFailureResult(t *testing.T) {
+	requeueAfter := time.Minute
+
+	t.Run("requeues on invalid credentials and marks cluster not ready", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Generation: 3},
+				Status:     infrav1.StackitClusterStatus{Ready: true},
+			},
+		}
+		err := fmt.Errorf("auth failed: %w", shared.ErrUnauthorized)
+
+		result, gotErr := clusterScope.CredentialFailureResult(
+			err,
+			requeueAfter,
+			infrav1.ClusterCredentialsReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+		if gotErr != nil {
+			t.Fatalf("CredentialFailureResult() error = %v, want nil", gotErr)
+		}
+		if result != (ctrl.Result{RequeueAfter: requeueAfter}) {
+			t.Fatalf("CredentialFailureResult() result = %#v, want RequeueAfter=%v", result, requeueAfter)
+		}
+		if clusterScope.StackitCluster.Status.Ready {
+			t.Fatal("StackitCluster.Status.Ready = true, want false")
+		}
+		assertConditionFalse(t, clusterScope.StackitCluster.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, "CredentialsInvalid", err.Error(), 3)
+		assertConditionFalse(t, clusterScope.StackitCluster.Status.Conditions, infrav1.ClusterReadyCondition, "CredentialsInvalid", err.Error(), 3)
+	})
+
+	t.Run("returns error on non-credential error", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			},
+		}
+		err := errors.New("k8s api error")
+
+		result, gotErr := clusterScope.CredentialFailureResult(err, requeueAfter, infrav1.ClusterCredentialsReadyCondition)
+		if !errors.Is(gotErr, err) {
+			t.Fatalf("CredentialFailureResult() error = %v, want %v", gotErr, err)
+		}
+		if result != (ctrl.Result{}) {
+			t.Fatalf("CredentialFailureResult() result = %#v, want empty", result)
+		}
+	})
+}
+
+func TestClusterScopeCloudFailureResult(t *testing.T) {
+	requeueAfter := 5 * time.Second
+
+	t.Run("requeues on retryable error and marks cluster not ready", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Generation: 4},
+				Status:     infrav1.StackitClusterStatus{Ready: true},
+			},
+		}
+		err := fmt.Errorf("temporary failure: %w", shared.ErrTransient)
+
+		result, gotErr := clusterScope.CloudFailureResult(
+			"NetworkNotFound",
+			err,
+			requeueAfter,
+			false,
+			infrav1.ClusterNetworkReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+		if gotErr != nil {
+			t.Fatalf("CloudFailureResult() error = %v, want nil", gotErr)
+		}
+		if result != (ctrl.Result{RequeueAfter: requeueAfter}) {
+			t.Fatalf("CloudFailureResult() result = %#v, want RequeueAfter=%v", result, requeueAfter)
+		}
+		if clusterScope.StackitCluster.Status.Ready {
+			t.Fatal("StackitCluster.Status.Ready = true, want false")
+		}
+		assertConditionFalse(t, clusterScope.StackitCluster.Status.Conditions, infrav1.ClusterNetworkReadyCondition, "NetworkNotFound", err.Error(), 4)
+		assertConditionFalse(t, clusterScope.StackitCluster.Status.Conditions, infrav1.ClusterReadyCondition, "NetworkNotFound", err.Error(), 4)
+	})
+
+	t.Run("returns nil on non-retryable error when returnError is false", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Generation: 1},
+			},
+		}
+		err := fmt.Errorf("not found: %w", shared.ErrNotFound)
+
+		result, gotErr := clusterScope.CloudFailureResult("NetworkNotFound", err, requeueAfter, false, infrav1.ClusterReadyCondition)
+		if gotErr != nil {
+			t.Fatalf("CloudFailureResult() error = %v, want nil", gotErr)
+		}
+		if result != (ctrl.Result{}) {
+			t.Fatalf("CloudFailureResult() result = %#v, want empty", result)
+		}
+	})
+
+	t.Run("returns error on non-retryable error when returnError is true", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Generation: 1},
+			},
+		}
+		err := fmt.Errorf("invalid input: %w", shared.ErrInvalidInput)
+
+		result, gotErr := clusterScope.CloudFailureResult("AvailabilityZonesError", err, requeueAfter, true, infrav1.ClusterReadyCondition)
+		if !errors.Is(gotErr, err) {
+			t.Fatalf("CloudFailureResult() error = %v, want %v", gotErr, err)
+		}
+		if result != (ctrl.Result{}) {
+			t.Fatalf("CloudFailureResult() result = %#v, want empty", result)
+		}
+	})
+}
+
+func TestMachineScopeFailureResults(t *testing.T) {
+	requeueAfter := 5 * time.Second
+
+	machineScope := &MachineScope{
+		StackitMachine: &infrav1.StackitMachine{
+			ObjectMeta: metav1.ObjectMeta{Generation: 5},
+			Status:     infrav1.StackitMachineStatus{Ready: true},
+		},
+	}
+	credErr := fmt.Errorf("invalid secret: %w", util.ErrCredentialsInvalid)
+	result, gotErr := machineScope.CredentialFailureResult(
+		credErr,
+		requeueAfter,
+		infrav1.MachineCredentialsReadyCondition,
+	)
+	if gotErr != nil || result != (ctrl.Result{RequeueAfter: requeueAfter}) {
+		t.Fatalf("CredentialFailureResult() = (%#v, %v), want (RequeueAfter=%v, nil)", result, gotErr, requeueAfter)
+	}
+	if machineScope.StackitMachine.Status.Ready {
+		t.Fatal("StackitMachine.Status.Ready = true after CredentialFailureResult, want false")
+	}
+	assertConditionFalse(t, machineScope.StackitMachine.Status.Conditions, infrav1.MachineCredentialsReadyCondition, "CredentialsInvalid", credErr.Error(), 5)
+
+	machineScope.SetReady()
+	cloudErr := fmt.Errorf("create server rejected: %w", shared.ErrInvalidInput)
+	result, gotErr = machineScope.CloudFailureResult(
+		"InstanceError",
+		cloudErr,
+		requeueAfter,
+		true,
+		infrav1.MachineInstanceReadyCondition,
+		infrav1.MachineReadyCondition,
+	)
+	if !errors.Is(gotErr, cloudErr) || result != (ctrl.Result{}) {
+		t.Fatalf("CloudFailureResult() = (%#v, %v), want (empty, %v)", result, gotErr, cloudErr)
+	}
+	if machineScope.StackitMachine.Status.Ready {
+		t.Fatal("StackitMachine.Status.Ready = true after CloudFailureResult, want false")
+	}
+	assertConditionFalse(t, machineScope.StackitMachine.Status.Conditions, infrav1.MachineInstanceReadyCondition, "InstanceError", cloudErr.Error(), 5)
+	assertConditionFalse(t, machineScope.StackitMachine.Status.Conditions, infrav1.MachineReadyCondition, "InstanceError", cloudErr.Error(), 5)
+}
+
+func assertConditionFalse(t *testing.T, conditions []metav1.Condition, condType, wantReason, wantMessage string, wantGeneration int64) {
+	t.Helper()
+	cond := meta.FindStatusCondition(conditions, condType)
+	if cond == nil {
+		t.Fatalf("condition %q not found", condType)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Fatalf("condition %q status = %q, want %q", condType, cond.Status, metav1.ConditionFalse)
+	}
+	if cond.Reason != wantReason {
+		t.Fatalf("condition %q reason = %q, want %q", condType, cond.Reason, wantReason)
+	}
+	if cond.Message != wantMessage {
+		t.Fatalf("condition %q message = %q, want %q", condType, cond.Message, wantMessage)
+	}
+	if cond.ObservedGeneration != wantGeneration {
+		t.Fatalf("condition %q observedGeneration = %d, want %d", condType, cond.ObservedGeneration, wantGeneration)
 	}
 }
