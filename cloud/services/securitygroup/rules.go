@@ -13,6 +13,7 @@ package securitygroup
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -115,11 +116,16 @@ func (r Rule) validate() error {
 			DirectionEgress,
 		)
 	}
-	if r.IPRange != "" && (r.RemoteSecurityGroupID != "" || len(r.RemoteSecurityGroupTags) > 0) {
-		return fmt.Errorf(
-			"%w: security group rule cannot specify both ipRange and remoteSecurityGroupID",
-			shared.ErrInvalidInput,
-		)
+	if r.IPRange != "" {
+		if r.RemoteSecurityGroupID != "" || len(r.RemoteSecurityGroupTags) > 0 {
+			return fmt.Errorf(
+				"%w: security group rule cannot specify both ipRange and remoteSecurityGroupID",
+				shared.ErrInvalidInput,
+			)
+		}
+		if _, err := netip.ParsePrefix(r.IPRange); err != nil {
+			return fmt.Errorf("%w: security group rule has invalid ipRange CIDR %q", shared.ErrInvalidInput, r.IPRange)
+		}
 	}
 	if r.hasInvalidPortRange() {
 		return fmt.Errorf("%w: invalid security group rule port range", shared.ErrInvalidInput)

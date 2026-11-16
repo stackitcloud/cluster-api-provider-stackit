@@ -145,6 +145,7 @@ func (s *ClusterScope) ServerSpec() server.ServerSpec {
 		MachineType:      s.StackitCluster.Spec.Bastion.MachineType,
 		AvailabilityZone: defaultAvailabilityZone(s.StackitCluster),
 		SSHKeyName:       s.StackitCluster.Spec.Bastion.SSHKeyName,
+		RequireSSHKey:    true,
 		NetworkID:        s.StackitCluster.Spec.Network.ID,
 		UserData:         s.bastionCloudInit,
 		Tags:             s.bastionTags(),

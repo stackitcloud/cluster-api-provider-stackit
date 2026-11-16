@@ -471,6 +471,17 @@ func TestServiceReconcileValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "missing SSH key name when required",
+			spec: server.ServerSpec{
+				Name:          "node-0",
+				ImageID:       testImageID,
+				MachineType:   "c2i.2",
+				RequireSSHKey: true,
+				NetworkID:     testNetworkID,
+				Tags:          map[string]string{"cluster": "test"},
+			},
+		},
+		{
 			name: "missing network ID",
 			spec: server.ServerSpec{
 				Name:        "node-0",

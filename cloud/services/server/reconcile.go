@@ -150,6 +150,9 @@ func (s ServerSpec) validate() error {
 	if s.MachineType == "" {
 		return fmt.Errorf("%w: server machine type is required", shared.ErrInvalidInput)
 	}
+	if s.RequireSSHKey && s.SSHKeyName == "" {
+		return fmt.Errorf("%w: server SSH key name is required", shared.ErrInvalidInput)
+	}
 	if s.NetworkID == "" {
 		return fmt.Errorf("%w: server network ID is required", shared.ErrInvalidInput)
 	}

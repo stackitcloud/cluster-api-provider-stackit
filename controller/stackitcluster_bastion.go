@@ -14,7 +14,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"net/netip"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,7 +29,6 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
@@ -62,18 +60,6 @@ func (r *StackitClusterReconciler) reconcileBastion(
 			infrav1.ClusterBastionReadyCondition,
 		)
 		return ctrl.Result{}, true, nil
-	}
-
-	if err := validateBastionSpec(stackitCluster.Spec.Bastion); err != nil {
-		log.Error(err, "Invalid bastion spec", "cluster", stackitCluster.Name)
-		record.Warnf(stackitCluster, "InvalidBastionSpec", "Invalid bastion spec: %v", err)
-		clusterScope.SetNotReady(
-			"InvalidBastionSpec",
-			err.Error(),
-			infrav1.ClusterBastionReadyCondition,
-			infrav1.ClusterReadyCondition,
-		)
-		return ctrl.Result{}, false, nil
 	}
 
 	cloudInit, err := r.resolveBastionCloudInit(ctx, stackitCluster)
@@ -150,27 +136,6 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		infrav1.ClusterBastionReadyCondition,
 	)
 	return ctrl.Result{}, true, nil
-}
-
-func validateBastionSpec(spec infrav1.StackitBastionSpec) error {
-	if spec.ImageID == "" {
-		return fmt.Errorf("%w: bastion.imageID is required", shared.ErrInvalidInput)
-	}
-	if spec.MachineType == "" {
-		return fmt.Errorf("%w: bastion.machineType is required", shared.ErrInvalidInput)
-	}
-	if spec.SSHKeyName == "" {
-		return fmt.Errorf("%w: bastion.sshKeyName is required", shared.ErrInvalidInput)
-	}
-	if len(spec.AllowedCIDRs) == 0 {
-		return fmt.Errorf("%w: bastion.allowedCIDRs is required", shared.ErrInvalidInput)
-	}
-	for _, cidr := range spec.AllowedCIDRs {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("%w: bastion.allowedCIDRs contains invalid CIDR %q", shared.ErrInvalidInput, cidr)
-		}
-	}
-	return nil
 }
 
 func deleteBastion(

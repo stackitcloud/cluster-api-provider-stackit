@@ -56,6 +56,7 @@ type ServerSpec struct {
 	MachineType      string
 	AvailabilityZone string
 	SSHKeyName       string
+	RequireSSHKey    bool
 	NetworkID        string
 	SecurityGroups   []string
 	UserData         []byte

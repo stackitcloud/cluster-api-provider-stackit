@@ -419,14 +419,6 @@ var _ = Describe("StackitCluster Controller", func() {
 			"load balancer leaked because cleanup was gated on spec and status")
 	})
 
-	It("validates bastion specs", func() {
-		spec := validBastionSpec()
-		Expect(validateBastionSpec(spec)).To(Succeed())
-
-		spec.AllowedCIDRs = []string{"not-a-cidr"}
-		Expect(validateBastionSpec(spec)).To(MatchError(ContainSubstring("invalid CIDR")))
-	})
-
 	It("creates the bastion with cloud-init user data from a ConfigMap", func() {
 		expectBastionCloudInit(
 			ctx, reconciler, request, stackitKey, fakeCloud,

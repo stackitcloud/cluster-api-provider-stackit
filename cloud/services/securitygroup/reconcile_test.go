@@ -611,6 +611,14 @@ func TestServiceReconcileValidation(t *testing.T) {
 				Rules: []securitygroup.Rule{{Direction: securitygroup.DirectionIngress, PortMin: 80, PortMax: 80, IPRange: "0.0.0.0/0"}},
 			},
 		},
+		{
+			name: "invalid ipRange CIDR",
+			spec: securitygroup.SecurityGroupSpec{
+				Name:  "cluster-sg",
+				Tags:  map[string]string{"cluster": "test"},
+				Rules: []securitygroup.Rule{{Direction: securitygroup.DirectionIngress, Protocol: securitygroup.ProtocolTCP, PortMin: 22, PortMax: 22, IPRange: "not-a-cidr"}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
