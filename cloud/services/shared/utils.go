@@ -60,13 +60,25 @@ func ListServersByTags(ctx context.Context, scope IaaSClientScope, tags map[stri
 
 // ListServerIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
 func ListServerIDsByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]string, error) {
-	servers, err := ListServersByTags(ctx, scope, tags)
+	return ListIDsByTags(ctx, tags, func(ctx context.Context, tags map[string]string) ([]*iaas.Server, error) {
+		return ListServersByTags(ctx, scope, tags)
+	}, (*iaas.Server).GetId)
+}
+
+// ListIDsByTags lists resources by tags and collects their non-empty IDs.
+func ListIDsByTags[T any](
+	ctx context.Context,
+	tags map[string]string,
+	listByTags func(context.Context, map[string]string) ([]T, error),
+	getID func(T) string,
+) ([]string, error) {
+	items, err := listByTags(ctx, tags)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(servers))
-	for _, srv := range servers {
-		if id := srv.GetId(); id != "" {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if id := getID(item); id != "" {
 			ids = append(ids, id)
 		}
 	}

@@ -126,6 +126,33 @@ func TestFindByTags(t *testing.T) {
 	})
 }
 
+func TestListIDsByTags(t *testing.T) {
+	ctx := context.Background()
+	tags := map[string]string{"cluster": "test"}
+	type item struct{ id string }
+
+	t.Run("propagates error from listByTags", func(t *testing.T) {
+		_, err := ListIDsByTags(ctx, tags, func(context.Context, map[string]string) ([]item, error) {
+			return nil, ErrTransient
+		}, func(i item) string { return i.id })
+		if !IsTransient(err) {
+			t.Fatalf("ListIDsByTags() error = %v, want ErrTransient", err)
+		}
+	})
+
+	t.Run("collects non-empty IDs", func(t *testing.T) {
+		ids, err := ListIDsByTags(ctx, tags, func(context.Context, map[string]string) ([]item, error) {
+			return []item{{id: "id-1"}, {id: ""}, {id: "id-2"}}, nil
+		}, func(i item) string { return i.id })
+		if err != nil {
+			t.Fatalf("ListIDsByTags() error = %v", err)
+		}
+		if len(ids) != 2 || ids[0] != "id-1" || ids[1] != "id-2" {
+			t.Fatalf("ListIDsByTags() = %v, want [id-1 id-2]", ids)
+		}
+	})
+}
+
 func TestResolveExisting(t *testing.T) {
 	const (
 		testID1    = "id-1"

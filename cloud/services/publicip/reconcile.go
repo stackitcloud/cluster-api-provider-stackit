@@ -174,17 +174,9 @@ func (s *Service) detachAndDeleteByID(ctx context.Context, id string, serverIDs 
 }
 
 func (s *Service) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
-	publicIPs, err := s.listByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(publicIPs))
-	for _, publicIP := range publicIPs {
-		if publicIP.ID != "" {
-			ids = append(ids, publicIP.ID)
-		}
-	}
-	return ids, nil
+	return shared.ListIDsByTags(ctx, tags, s.listByTags, func(publicIP *PublicIP) string {
+		return publicIP.ID
+	})
 }
 
 func (s *Service) ensurePublicIP(ctx context.Context, spec PublicIPSpec) (*PublicIP, error) {

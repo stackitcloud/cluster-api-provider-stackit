@@ -153,17 +153,9 @@ func (s *Service) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec)
 }
 
 func (s *Service) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
-	loadBalancers, err := s.listByTags(ctx, tags)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(loadBalancers))
-	for _, loadBalancer := range loadBalancers {
-		if loadBalancer.ID != "" {
-			ids = append(ids, loadBalancer.ID)
-		}
-	}
-	return ids, nil
+	return shared.ListIDsByTags(ctx, tags, s.listByTags, func(loadBalancer *LoadBalancer) string {
+		return loadBalancer.ID
+	})
 }
 
 func (s LoadBalancerSpec) validate() error {
