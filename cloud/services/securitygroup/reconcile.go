@@ -118,6 +118,24 @@ func (s *Service) detachFromServer(ctx context.Context, serverID, securityGroupI
 	return nil
 }
 
+// deleteByID deletes a security group by ID, returning true if the security group existed and was deleted,
+// or false if it was already absent.
+func (s *Service) deleteByID(ctx context.Context, id string) (bool, error) {
+	if id == "" {
+		return false, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
+	}
+	if err := s.scope.IaaSClient().DefaultAPI.
+		DeleteSecurityGroup(ctx, s.scope.ProjectID(), s.scope.Region(), id).
+		Execute(); err != nil {
+		err := shared.ClassifySDKError("delete security group", err)
+		if shared.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Service) reconcileSecurityGroup(ctx context.Context, spec SecurityGroupSpec) error {
 	if err := spec.validate(); err != nil {
 		return err
@@ -149,7 +167,7 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 	}
 
 	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, func(ctx context.Context, id string) (bool, error) {
-		return s.deleteByID(ctx, id, spec)
+		return s.cleanupAndDeleteByID(ctx, id, spec)
 	}, s.listIDsByTags)
 	for _, deletedID := range deletedIDs {
 		logf.FromContext(ctx).V(1).Info("Deleted security group", "securityGroupID", deletedID)
@@ -163,7 +181,7 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 	return nil
 }
 
-func (s *Service) deleteByID(ctx context.Context, id string, spec SecurityGroupSpec) (bool, error) {
+func (s *Service) cleanupAndDeleteByID(ctx context.Context, id string, spec SecurityGroupSpec) (bool, error) {
 	if id == "" {
 		return false, fmt.Errorf("%w: security group ID is empty", shared.ErrInvalidInput)
 	}
@@ -171,20 +189,13 @@ func (s *Service) deleteByID(ctx context.Context, id string, spec SecurityGroupS
 	if err != nil || !ok {
 		return false, err
 	}
-	var errs []error
-	if err := s.detachSecurityGroupFromServers(ctx, id, spec); err != nil {
-		errs = append(errs, err)
+	if err := errors.Join(
+		s.detachSecurityGroupFromServers(ctx, id, spec),
+		s.deleteSecurityGroupRules(ctx, id, rules),
+	); err != nil {
+		return false, err
 	}
-	if err := s.deleteSecurityGroupRules(ctx, id, rules); err != nil {
-		errs = append(errs, err)
-	}
-	if err := s.deleteSecurityGroupByID(ctx, id); err != nil {
-		errs = append(errs, err)
-	}
-	if len(errs) > 0 {
-		return false, errors.Join(errs...)
-	}
-	return true, nil
+	return s.deleteByID(ctx, id)
 }
 
 func (s *Service) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
@@ -236,18 +247,6 @@ func (s *Service) deleteSecurityGroupRules(
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (s *Service) deleteSecurityGroupByID(ctx context.Context, id string) error {
-	if err := s.scope.IaaSClient().DefaultAPI.
-		DeleteSecurityGroup(ctx, s.scope.ProjectID(), s.scope.Region(), id).
-		Execute(); err != nil {
-		err := shared.ClassifySDKError("delete security group", err)
-		if !shared.IsNotFound(err) {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Service) detachSecurityGroupFromServers(ctx context.Context, securityGroupID string, spec SecurityGroupSpec) error {
