@@ -21,6 +21,7 @@ import (
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
@@ -159,8 +160,37 @@ func TestClusterScopeSecurityGroupSpecsIncludesEmptyIngressRuleWhenAllowedCIDRsM
 	if len(specs[0].Rules) != 2 {
 		t.Fatalf("bastion SecurityGroupSpec Rules count = %d, want 2 (1 ingress + 1 egress)", len(specs[0].Rules))
 	}
-	if specs[0].Rules[0].Direction != "ingress" || specs[0].Rules[0].IPRange != "" {
+	if specs[0].Rules[0].Direction != securitygroup.DirectionIngress || specs[0].Rules[0].IPRange != "" {
 		t.Fatalf("bastion SecurityGroupSpec Rules[0] = %#v, want ingress rule with empty IPRange", specs[0].Rules[0])
+	}
+}
+
+func TestServerSpecRequireSSHKey(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{
+			Spec: infrav1.StackitClusterSpec{
+				Bastion: infrav1.StackitBastionSpec{
+					SSHKeyName: "my-key",
+				},
+			},
+		},
+	}
+	clusterServerSpec := clusterScope.ServerSpec()
+	if !clusterServerSpec.RequireSSHKey {
+		t.Fatal("ClusterScope.ServerSpec().RequireSSHKey = false, want true")
+	}
+	if clusterServerSpec.SSHKeyName != "my-key" {
+		t.Fatalf("ClusterScope.ServerSpec().SSHKeyName = %q, want %q", clusterServerSpec.SSHKeyName, "my-key")
+	}
+
+	machineScope := &MachineScope{
+		cluster:        &clusterv1.Cluster{},
+		Machine:        &clusterv1.Machine{},
+		StackitCluster: &infrav1.StackitCluster{},
+		StackitMachine: &infrav1.StackitMachine{},
+	}
+	if machineScope.ServerSpec().RequireSSHKey {
+		t.Fatal("MachineScope.ServerSpec().RequireSSHKey = true, want false")
 	}
 }
 
