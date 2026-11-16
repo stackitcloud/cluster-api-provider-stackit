@@ -142,6 +142,28 @@ func TestNodeSSHSecurityGroupSpecIncludesAdditionalLabelsInServerSelector(t *tes
 	}
 }
 
+func TestClusterScopeSecurityGroupSpecsIncludesEmptyIngressRuleWhenAllowedCIDRsMissing(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-cluster",
+				Namespace: "my-ns",
+			},
+		},
+	}
+
+	specs := clusterScope.SecurityGroupSpecs()
+	if len(specs) != 2 {
+		t.Fatalf("SecurityGroupSpecs() count = %d, want 2", len(specs))
+	}
+	if len(specs[0].Rules) != 2 {
+		t.Fatalf("bastion SecurityGroupSpec Rules count = %d, want 2 (1 ingress + 1 egress)", len(specs[0].Rules))
+	}
+	if specs[0].Rules[0].Direction != "ingress" || specs[0].Rules[0].IPRange != "" {
+		t.Fatalf("bastion SecurityGroupSpec Rules[0] = %#v, want ingress rule with empty IPRange", specs[0].Rules[0])
+	}
+}
+
 func TestMachineScopeSecurityGroupSpecsRespectsBastionEnabled(t *testing.T) {
 	machineScope := &MachineScope{
 		StackitCluster: &infrav1.StackitCluster{

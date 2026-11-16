@@ -116,8 +116,15 @@ func (r Rule) validate() error {
 			DirectionEgress,
 		)
 	}
+	hasRemoteSecurityGroup := r.RemoteSecurityGroupID != "" || len(r.RemoteSecurityGroupTags) > 0
+	if r.Direction == DirectionIngress && r.IPRange == "" && !hasRemoteSecurityGroup {
+		return fmt.Errorf(
+			"%w: ingress security group rule requires ipRange or remoteSecurityGroupID",
+			shared.ErrInvalidInput,
+		)
+	}
 	if r.IPRange != "" {
-		if r.RemoteSecurityGroupID != "" || len(r.RemoteSecurityGroupTags) > 0 {
+		if hasRemoteSecurityGroup {
 			return fmt.Errorf(
 				"%w: security group rule cannot specify both ipRange and remoteSecurityGroupID",
 				shared.ErrInvalidInput,

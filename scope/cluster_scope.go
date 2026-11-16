@@ -385,11 +385,12 @@ func (s *ClusterScope) setBastionPublicIP(id, ip string) {
 }
 
 func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
-	rules := make([]securitygroup.Rule, 0, len(s.StackitCluster.Spec.Bastion.AllowedCIDRs)+1)
-	for _, cidr := range s.StackitCluster.Spec.Bastion.AllowedCIDRs {
-		if cidr == "" {
-			continue
-		}
+	allowedCIDRs := s.StackitCluster.Spec.Bastion.AllowedCIDRs
+	if len(allowedCIDRs) == 0 {
+		allowedCIDRs = []string{""}
+	}
+	rules := make([]securitygroup.Rule, 0, len(allowedCIDRs)+1)
+	for _, cidr := range allowedCIDRs {
 		rules = append(rules, securitygroup.Rule{
 			Direction: securitygroup.DirectionIngress,
 			Protocol:  securitygroup.ProtocolTCP,

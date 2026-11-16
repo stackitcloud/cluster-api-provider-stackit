@@ -156,18 +156,18 @@ func (s *Service) setTargets(
 	if targetPool.GetTargetPort() == port && sameTargets(targetPool.GetTargets(), desired) {
 		return nil
 	}
-	return s.updateAPIServerTargetPool(ctx, loadBalancerID, targetPool, desired, port)
+	return s.updateAPIServerTargetPool(ctx, loadBalancerID, desired, port)
 }
 
 func (s *Service) updateAPIServerTargetPool(
 	ctx context.Context,
 	loadBalancerID string,
-	current *lb.TargetPool,
 	targets []lb.Target,
 	port int32,
 ) error {
 	payload := lb.NewUpdateTargetPoolPayload()
 	payload.SetName(apiserverTargetPoolName)
+	payload.SetTargetPort(port)
 	payload.SetTargets(targets)
 	if _, err := s.scope.LoadBalancerClient().DefaultAPI.
 		UpdateTargetPool(ctx, s.scope.ProjectID(), s.scope.Region(), loadBalancerID, apiserverTargetPoolName).
