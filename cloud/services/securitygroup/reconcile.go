@@ -99,6 +99,8 @@ func (s *Service) attachToServer(ctx context.Context, serverID, securityGroupID 
 		if !shared.IsConflict(err) && !shared.IsInvalidInput(err) && !shared.IsNotFound(err) {
 			return err
 		}
+		logf.FromContext(ctx).V(1).Info("Security group already attached to server", "securityGroupID", securityGroupID, "serverID", serverID, "err", err)
+		return nil
 	}
 	logf.FromContext(ctx).V(1).Info("Attached security group to server", "securityGroupID", securityGroupID, "serverID", serverID)
 	return nil
@@ -113,6 +115,8 @@ func (s *Service) detachFromServer(ctx context.Context, serverID, securityGroupI
 		if !shared.IsNotFound(err) && !shared.IsConflict(err) {
 			return err
 		}
+		logf.FromContext(ctx).V(1).Info("Security group already detached from server", "securityGroupID", securityGroupID, "serverID", serverID, "err", err)
+		return nil
 	}
 	logf.FromContext(ctx).V(1).Info("Detached security group from server", "securityGroupID", securityGroupID, "serverID", serverID)
 	return nil

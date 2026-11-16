@@ -19,8 +19,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
@@ -102,6 +105,13 @@ func readJSON(t *testing.T, r *http.Request) map[string]any {
 		t.Fatalf("decode request body: %v", err)
 	}
 	return out
+}
+
+func contextWithLogCapture(logs *[]string) context.Context {
+	logger := funcr.New(func(_, args string) {
+		*logs = append(*logs, args)
+	}, funcr.Options{Verbosity: 1})
+	return logf.IntoContext(context.Background(), logr.New(logger.GetSink()))
 }
 
 func TestServiceReconcile(t *testing.T) {
@@ -227,7 +237,10 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 	})
 
 	t.Run("tolerates conflict when attaching public IP to server", func(t *testing.T) {
-		var recordedID string
+		var (
+			recordedID string
+			logs       []string
+		)
 		spec := publicip.PublicIPSpec{
 			ID:       testPublicIPID,
 			Tags:     map[string]string{"cluster": "test"},
@@ -253,11 +266,18 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
 			t.Fatalf("Reconcile() error = %v, want nil on conflict", err)
 		}
 		if recordedID != testPublicIPID {
 			t.Fatalf("recordedID = %q, want %q", recordedID, testPublicIPID)
+		}
+		joined := strings.Join(logs, "\n")
+		if !strings.Contains(joined, "Public IP already attached to server") || !strings.Contains(joined, `"err"=`) {
+			t.Fatalf("logs = %v, want no-op attach log with error", logs)
+		}
+		if strings.Contains(joined, "Attached public IP to server") {
+			t.Fatalf("logs = %v, did not expect Attached public IP to server on conflict", logs)
 		}
 	})
 
@@ -346,6 +366,40 @@ func TestServiceDelete(t *testing.T) {
 
 		if err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("logs no-op when detaching public IP returns conflict or not found", func(t *testing.T) {
+		for _, status := range []int{http.StatusNotFound, http.StatusConflict} {
+			var logs []string
+			spec := publicip.PublicIPSpec{
+				ID:       testPublicIPID,
+				ServerID: testServerID,
+			}
+
+			svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path := r.URL.Path
+				switch {
+				case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
+					w.WriteHeader(status)
+					writeJSON(t, w, map[string]any{"message": "no-op"})
+				case r.Method == http.MethodDelete && strings.HasSuffix(path, "/public-ips/"+testPublicIPID):
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+				}
+			}))
+
+			if err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
+				t.Fatalf("Delete() error = %v", err)
+			}
+			joined := strings.Join(logs, "\n")
+			if !strings.Contains(joined, "Public IP already detached from server") || !strings.Contains(joined, `"err"=`) {
+				t.Fatalf("status %d: logs = %v, want no-op detach log with error", status, logs)
+			}
+			if strings.Contains(joined, "Detached public IP from server") {
+				t.Fatalf("status %d: logs = %v, did not expect Detached public IP from server", status, logs)
+			}
 		}
 	})
 

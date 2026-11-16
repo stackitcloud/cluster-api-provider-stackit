@@ -126,6 +126,8 @@ func (s *Service) attachToServer(ctx context.Context, serverID, publicIPID strin
 		if !shared.IsConflict(err) {
 			return err
 		}
+		logf.FromContext(ctx).V(1).Info("Public IP already attached to server", "publicIPID", publicIPID, "serverID", serverID, "err", err)
+		return nil
 	}
 	logf.FromContext(ctx).V(1).Info("Attached public IP to server", "publicIPID", publicIPID, "serverID", serverID)
 	return nil
@@ -143,6 +145,8 @@ func (s *Service) detachFromServer(ctx context.Context, serverID, publicIPID str
 		if !shared.IsNotFound(err) && !shared.IsConflict(err) {
 			return err
 		}
+		logf.FromContext(ctx).V(1).Info("Public IP already detached from server", "publicIPID", publicIPID, "serverID", serverID, "err", err)
+		return nil
 	}
 	logf.FromContext(ctx).V(1).Info("Detached public IP from server", "publicIPID", publicIPID, "serverID", serverID)
 	return nil

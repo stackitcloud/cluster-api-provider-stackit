@@ -20,8 +20,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
@@ -102,6 +105,13 @@ func readJSON(t *testing.T, r *http.Request) map[string]any {
 		t.Fatalf("decode request body: %v", err)
 	}
 	return out
+}
+
+func contextWithLogCapture(logs *[]string) context.Context {
+	logger := funcr.New(func(_, args string) {
+		*logs = append(*logs, args)
+	}, funcr.Options{Verbosity: 1})
+	return logf.IntoContext(context.Background(), logr.New(logger.GetSink()))
 }
 
 func TestServiceReconcile(t *testing.T) {
@@ -343,6 +353,44 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("Reconcile() error = %v, want ErrTransient", err)
 		}
 	})
+}
+
+func TestServiceReconcileAttachNoOpLogging(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusBadRequest, http.StatusNotFound} {
+		var logs []string
+		specs := []securitygroup.SecurityGroupSpec{{
+			ID:        testSecurityGroupID,
+			Name:      "cluster-sg",
+			Tags:      map[string]string{"cluster": "test"},
+			ServerIDs: []string{testServerID},
+		}}
+
+		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
+				writeJSON(t, w, map[string]any{"id": testSecurityGroupID, "name": "cluster-sg"})
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			case r.Method == http.MethodPut && strings.HasSuffix(path, "/servers/"+testServerID+"/security-groups/"+testSecurityGroupID):
+				w.WriteHeader(status)
+				writeJSON(t, w, map[string]any{"message": "no-op"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		if err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
+			t.Fatalf("status %d: Reconcile() error = %v", status, err)
+		}
+		joined := strings.Join(logs, "\n")
+		if !strings.Contains(joined, "Security group already attached to server") || !strings.Contains(joined, `"err"=`) {
+			t.Fatalf("status %d: logs = %v, want no-op attach log with error", status, logs)
+		}
+		if strings.Contains(joined, "Attached security group to server") {
+			t.Fatalf("status %d: logs = %v, did not expect Attached security group to server", status, logs)
+		}
+	}
 }
 
 func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {
@@ -759,6 +807,42 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})
+}
+
+func TestServiceDeleteDetachNoOpLogging(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusConflict} {
+		var logs []string
+		specs := []securitygroup.SecurityGroupSpec{{
+			ID:        testSecurityGroupID,
+			ServerIDs: []string{testServerID},
+		}}
+
+		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
+				writeJSON(t, w, map[string]any{"items": []any{}})
+			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/security-groups/"+testSecurityGroupID):
+				w.WriteHeader(status)
+				writeJSON(t, w, map[string]any{"message": "no-op"})
+			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+		}))
+
+		if err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
+			t.Fatalf("status %d: Delete() error = %v", status, err)
+		}
+		joined := strings.Join(logs, "\n")
+		if !strings.Contains(joined, "Security group already detached from server") || !strings.Contains(joined, `"err"=`) {
+			t.Fatalf("status %d: logs = %v, want no-op detach log with error", status, logs)
+		}
+		if strings.Contains(joined, "Detached security group from server") {
+			t.Fatalf("status %d: logs = %v, did not expect Detached security group from server", status, logs)
+		}
+	}
 }
 
 func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
