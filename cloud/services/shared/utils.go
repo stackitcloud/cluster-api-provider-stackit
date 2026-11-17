@@ -36,26 +36,49 @@ type LoadBalancerClientScope interface {
 	LoadBalancerClient() *lb.APIClient
 }
 
-// ListServersByTags lists STACKIT servers matching the given tag selector.
-func ListServersByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]*iaas.Server, error) {
+// labeledItem is implemented by pointers to STACKIT SDK models that carry a label map.
+type labeledItem[T any] interface {
+	*T
+	GetLabels() map[string]any
+}
+
+// ListByTags validates that tags are non-empty, lists SDK items using the tag label selector,
+// filters items whose labels contain all tags, and maps each matching item via convert.
+func ListByTags[T any, PT labeledItem[T], Out any](
+	tags map[string]string,
+	list func(labelSelector string) ([]T, error),
+	convert func(*T) Out,
+) ([]Out, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%w: empty tag selector", ErrInvalidInput)
 	}
-	resp, err := scope.IaaSClient().DefaultAPI.ListServers(ctx, scope.ProjectID(), scope.Region()).
-		LabelSelector(LabelSelector(tags)).
-		Details(true).
-		Execute()
+	items, err := list(labelSelector(tags))
 	if err != nil {
-		return nil, ClassifySDKError("list servers", err)
+		return nil, err
 	}
-	matched := []*iaas.Server{}
-	for _, srv := range resp.GetItems() {
-		if LabelsContainTags(srv.GetLabels(), tags) {
-			srv := srv
-			matched = append(matched, &srv)
+	matched := []Out{}
+	for _, item := range items {
+		if labelsContainTags(PT(&item).GetLabels(), tags) {
+			matched = append(matched, convert(&item))
 		}
 	}
 	return matched, nil
+}
+
+// ListServersByTags lists STACKIT servers matching the given tag selector.
+func ListServersByTags(ctx context.Context, scope IaaSClientScope, tags map[string]string) ([]*iaas.Server, error) {
+	return ListByTags(tags, func(selector string) ([]iaas.Server, error) {
+		resp, err := scope.IaaSClient().DefaultAPI.ListServers(ctx, scope.ProjectID(), scope.Region()).
+			LabelSelector(selector).
+			Details(true).
+			Execute()
+		if err != nil {
+			return nil, ClassifySDKError("list servers", err)
+		}
+		return resp.GetItems(), nil
+	}, func(srv *iaas.Server) *iaas.Server {
+		return srv
+	})
 }
 
 // ListServerIDsByTags lists the IDs of STACKIT servers matching the given tag selector.
@@ -208,7 +231,7 @@ func FirstNonEmpty(values ...string) string {
 	return ""
 }
 
-func LabelSelector(tags map[string]string) string {
+func labelSelector(tags map[string]string) string {
 	parts := make([]string, 0, len(tags))
 	for k, v := range tags {
 		parts = append(parts, k+"="+v)
@@ -216,7 +239,7 @@ func LabelSelector(tags map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
-func LabelsContainTags(labels map[string]any, tags map[string]string) bool {
+func labelsContainTags(labels map[string]any, tags map[string]string) bool {
 	for k, want := range tags {
 		got, ok := labels[k]
 		if !ok || fmt.Sprint(got) != want {

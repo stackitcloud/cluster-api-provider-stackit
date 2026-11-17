@@ -95,23 +95,15 @@ func (s *Service) findByTags(ctx context.Context, tags map[string]string) (*Publ
 
 // listByTags lists STACKIT public IPs matching the given tag selector.
 func (s *Service) listByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
-	}
-	resp, err := s.scope.IaaSClient().DefaultAPI.ListPublicIPs(ctx, s.scope.ProjectID(), s.scope.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("list public IPs", err)
-	}
-	matched := []*PublicIP{}
-	for _, publicIP := range resp.GetItems() {
-		if shared.LabelsContainTags(publicIP.GetLabels(), tags) {
-			publicIP := publicIP
-			matched = append(matched, publicIPFromSDK(&publicIP))
+	return shared.ListByTags(tags, func(selector string) ([]iaas.PublicIp, error) {
+		resp, err := s.scope.IaaSClient().DefaultAPI.ListPublicIPs(ctx, s.scope.ProjectID(), s.scope.Region()).
+			LabelSelector(selector).
+			Execute()
+		if err != nil {
+			return nil, shared.ClassifySDKError("list public IPs", err)
 		}
-	}
-	return matched, nil
+		return resp.GetItems(), nil
+	}, publicIPFromSDK)
 }
 
 // attachToServer attaches a public IP to a server idempotently, tolerating Conflict errors.

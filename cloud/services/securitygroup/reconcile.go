@@ -67,23 +67,15 @@ func (s *Service) findByTags(ctx context.Context, tags map[string]string) (*Secu
 
 // listByTags lists STACKIT security groups matching the given tag selector.
 func (s *Service) listByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
-	}
-	resp, err := s.scope.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, s.scope.ProjectID(), s.scope.Region()).
-		LabelSelector(shared.LabelSelector(tags)).
-		Execute()
-	if err != nil {
-		return nil, shared.ClassifySDKError("list security groups", err)
-	}
-	matched := []*SecurityGroup{}
-	for _, securityGroup := range resp.GetItems() {
-		if shared.LabelsContainTags(securityGroup.GetLabels(), tags) {
-			securityGroup := securityGroup
-			matched = append(matched, securityGroupFromSDK(&securityGroup))
+	return shared.ListByTags(tags, func(selector string) ([]iaas.SecurityGroup, error) {
+		resp, err := s.scope.IaaSClient().DefaultAPI.ListSecurityGroups(ctx, s.scope.ProjectID(), s.scope.Region()).
+			LabelSelector(selector).
+			Execute()
+		if err != nil {
+			return nil, shared.ClassifySDKError("list security groups", err)
 		}
-	}
-	return matched, nil
+		return resp.GetItems(), nil
+	}, securityGroupFromSDK)
 }
 
 // attachToServer attaches a security group to a server idempotently.

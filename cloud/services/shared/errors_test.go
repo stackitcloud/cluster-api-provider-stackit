@@ -153,6 +153,63 @@ func TestListIDsByTags(t *testing.T) {
 	})
 }
 
+type fakeLabeledItem struct {
+	id     string
+	labels map[string]any
+}
+
+func (f *fakeLabeledItem) GetLabels() map[string]any {
+	return f.labels
+}
+
+func TestListByTags(t *testing.T) {
+	tags := map[string]string{"cluster": "c1", "role": "bastion"}
+
+	t.Run("returns ErrInvalidInput when tags are empty", func(t *testing.T) {
+		listCalled := false
+		_, err := ListByTags(nil, func(string) ([]fakeLabeledItem, error) {
+			listCalled = true
+			return nil, nil
+		}, func(item *fakeLabeledItem) string { return item.id })
+		if !IsInvalidInput(err) {
+			t.Fatalf("ListByTags() error = %v, want ErrInvalidInput", err)
+		}
+		if listCalled {
+			t.Fatal("list should not be called when tags are empty")
+		}
+	})
+
+	t.Run("propagates error from list", func(t *testing.T) {
+		_, err := ListByTags(tags, func(string) ([]fakeLabeledItem, error) {
+			return nil, ErrTransient
+		}, func(item *fakeLabeledItem) string { return item.id })
+		if !IsTransient(err) {
+			t.Fatalf("ListByTags() error = %v, want ErrTransient", err)
+		}
+	})
+
+	t.Run("passes label selector and filters items matching all tags", func(t *testing.T) {
+		var gotSelector string
+		got, err := ListByTags(tags, func(selector string) ([]fakeLabeledItem, error) {
+			gotSelector = selector
+			return []fakeLabeledItem{
+				{id: "match", labels: map[string]any{"cluster": "c1", "role": "bastion", "extra": "ok"}},
+				{id: "partial", labels: map[string]any{"cluster": "c1"}},
+				{id: "other", labels: map[string]any{"cluster": "c2", "role": "bastion"}},
+			}, nil
+		}, func(item *fakeLabeledItem) string { return item.id })
+		if err != nil {
+			t.Fatalf("ListByTags() error = %v", err)
+		}
+		if gotSelector != "cluster=c1,role=bastion" && gotSelector != "role=bastion,cluster=c1" {
+			t.Fatalf("selector = %q, want both tag pairs", gotSelector)
+		}
+		if len(got) != 1 || got[0] != "match" {
+			t.Fatalf("ListByTags() = %v, want [match]", got)
+		}
+	})
+}
+
 func TestResolveExisting(t *testing.T) {
 	const (
 		testID1    = "id-1"
