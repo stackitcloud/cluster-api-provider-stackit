@@ -104,10 +104,10 @@ func (r *StackitMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}()
 
 	if paused, message := util.ReconciliationPaused(cluster, stackitMachine); paused {
-		util.SetPausedCondition(&stackitMachine.Status.Conditions, stackitMachine.Generation, true, message)
+		machineScope.SetPausedCondition(true, message)
 		return ctrl.Result{}, nil
 	}
-	util.SetPausedCondition(&stackitMachine.Status.Conditions, stackitMachine.Generation, false, "")
+	machineScope.SetPausedCondition(false, "")
 
 	if !stackitMachine.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, machineScope)

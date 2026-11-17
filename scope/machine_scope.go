@@ -78,7 +78,11 @@ func (s *MachineScope) PatchObject(ctx context.Context) error {
 }
 
 func (s *MachineScope) SetConditions(status metav1.ConditionStatus, reason, message string, conditionTypes ...string) {
-	util.SetConditions(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, status, reason, message, conditionTypes...)
+	setConditions(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, status, reason, message, conditionTypes...)
+}
+
+func (s *MachineScope) SetPausedCondition(paused bool, message string) {
+	setPausedCondition(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, paused, message)
 }
 
 func (s *MachineScope) SetReady() {

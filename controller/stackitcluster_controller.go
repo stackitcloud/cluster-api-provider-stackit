@@ -95,10 +95,10 @@ func (r *StackitClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}()
 
 	if paused, message := util.ReconciliationPaused(cluster, stackitCluster); paused {
-		util.SetPausedCondition(&stackitCluster.Status.Conditions, stackitCluster.Generation, true, message)
+		clusterScope.SetPausedCondition(true, message)
 		return ctrl.Result{}, nil
 	}
-	util.SetPausedCondition(&stackitCluster.Status.Conditions, stackitCluster.Generation, false, "")
+	clusterScope.SetPausedCondition(false, "")
 
 	if !stackitCluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, clusterScope)

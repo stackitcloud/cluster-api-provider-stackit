@@ -524,14 +524,45 @@ func TestMachineScopeFailureResults(t *testing.T) {
 	assertConditionFalse(t, machineScope.StackitMachine.Status.Conditions, infrav1.MachineReadyCondition, "InstanceError", cloudErr.Error(), 5)
 }
 
+func TestScopeSetPausedCondition(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+		},
+	}
+
+	clusterScope.SetPausedCondition(true, "Cluster spec.paused is set to true")
+	assertCondition(t, clusterScope.StackitCluster.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason, "Cluster spec.paused is set to true", 2)
+
+	clusterScope.SetPausedCondition(false, "")
+	assertCondition(t, clusterScope.StackitCluster.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionFalse, clusterv1.NotPausedReason, "", 2)
+
+	machineScope := &MachineScope{
+		StackitMachine: &infrav1.StackitMachine{
+			ObjectMeta: metav1.ObjectMeta{Generation: 6},
+		},
+	}
+
+	machineScope.SetPausedCondition(true, "object has the cluster.x-k8s.io/paused annotation")
+	assertCondition(t, machineScope.StackitMachine.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionTrue, clusterv1.PausedReason, "object has the cluster.x-k8s.io/paused annotation", 6)
+
+	machineScope.SetPausedCondition(false, "")
+	assertCondition(t, machineScope.StackitMachine.Status.Conditions, clusterv1.PausedCondition, metav1.ConditionFalse, clusterv1.NotPausedReason, "", 6)
+}
+
 func assertConditionFalse(t *testing.T, conditions []metav1.Condition, condType, wantReason, wantMessage string, wantGeneration int64) {
+	t.Helper()
+	assertCondition(t, conditions, condType, metav1.ConditionFalse, wantReason, wantMessage, wantGeneration)
+}
+
+func assertCondition(t *testing.T, conditions []metav1.Condition, condType string, wantStatus metav1.ConditionStatus, wantReason, wantMessage string, wantGeneration int64) {
 	t.Helper()
 	cond := meta.FindStatusCondition(conditions, condType)
 	if cond == nil {
 		t.Fatalf("condition %q not found", condType)
 	}
-	if cond.Status != metav1.ConditionFalse {
-		t.Fatalf("condition %q status = %q, want %q", condType, cond.Status, metav1.ConditionFalse)
+	if cond.Status != wantStatus {
+		t.Fatalf("condition %q status = %q, want %q", condType, cond.Status, wantStatus)
 	}
 	if cond.Reason != wantReason {
 		t.Fatalf("condition %q reason = %q, want %q", condType, cond.Reason, wantReason)

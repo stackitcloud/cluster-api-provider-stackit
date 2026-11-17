@@ -334,6 +334,41 @@ var _ = Describe("StackitCluster Controller", func() {
 		}).Should(BeTrue(), "cluster stayed in Terminating because the finalizer was never removed")
 	})
 
+	It("requeues on invalid credentials during deletion and keeps the finalizer until corrected", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
+		}
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
+		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
+		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		By("correcting the credentials so deletion succeeds")
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return fakeCloud, nil
+		}
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{}))
+		}).Should(BeTrue())
+	})
+
 	It("tears the bastion down when disabled even if its status was never persisted", func() {
 		// With the status lost, a status-gated teardown would report the bastion
 		// as disabled while leaving port 22 open.

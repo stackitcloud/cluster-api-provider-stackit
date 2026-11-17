@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,7 +95,37 @@ func (s *ClusterScope) PatchObject(ctx context.Context) error {
 }
 
 func (s *ClusterScope) SetConditions(status metav1.ConditionStatus, reason, message string, conditionTypes ...string) {
-	util.SetConditions(&s.StackitCluster.Status.Conditions, s.StackitCluster.Generation, status, reason, message, conditionTypes...)
+	setConditions(&s.StackitCluster.Status.Conditions, s.StackitCluster.Generation, status, reason, message, conditionTypes...)
+}
+
+func (s *ClusterScope) SetPausedCondition(paused bool, message string) {
+	setPausedCondition(&s.StackitCluster.Status.Conditions, s.StackitCluster.Generation, paused, message)
+}
+
+func setConditions(
+	conditions *[]metav1.Condition,
+	generation int64,
+	status metav1.ConditionStatus,
+	reason, message string,
+	conditionTypes ...string,
+) {
+	for _, conditionType := range conditionTypes {
+		meta.SetStatusCondition(conditions, metav1.Condition{
+			Type:               conditionType,
+			Status:             status,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: generation,
+		})
+	}
+}
+
+func setPausedCondition(conditions *[]metav1.Condition, generation int64, paused bool, message string) {
+	if paused {
+		setConditions(conditions, generation, metav1.ConditionTrue, clusterv1.PausedReason, message, clusterv1.PausedCondition)
+		return
+	}
+	setConditions(conditions, generation, metav1.ConditionFalse, clusterv1.NotPausedReason, "", clusterv1.PausedCondition)
 }
 
 func (s *ClusterScope) SetReady() {

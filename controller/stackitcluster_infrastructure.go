@@ -116,9 +116,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			collections.ActiveMachines,
 		)
 		if err != nil {
-			util.SetConditions(
-				&stackitCluster.Status.Conditions,
-				stackitCluster.Generation,
+			clusterScope.SetConditions(
 				metav1.ConditionFalse,
 				"MachineListError",
 				err.Error(),
@@ -156,9 +154,7 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 			}
 			// Scoped to the load balancer condition: failing the cluster would
 			// stop the machine reconciler from replacing the broken machine.
-			util.SetConditions(
-				&stackitCluster.Status.Conditions,
-				stackitCluster.Generation,
+			clusterScope.SetConditions(
 				metav1.ConditionFalse,
 				"LoadBalancerTargetError",
 				err.Error(),
@@ -296,15 +292,11 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		log.Error(err, "Failed to build cloud client for cluster deletion", "cluster", stackitCluster.Name)
 		record.Warnf(stackitCluster, "InvalidCredentials",
 			"Failed to build cloud client for deletion: %v", err)
-		util.SetConditions(
-			&stackitCluster.Status.Conditions,
-			stackitCluster.Generation,
-			metav1.ConditionFalse,
-			"CredentialsInvalid",
-			err.Error(),
+		return clusterScope.CredentialFailureResult(
+			err,
+			credentialsRetryRequeueAfter,
 			infrav1.ClusterCredentialsReadyCondition,
 		)
-		return ctrl.Result{}, err
 	}
 	clusterScope.SetCloudClient(cloudClient)
 	loadBalancerID := stackitCluster.Status.APIServerLoadBalancerID
