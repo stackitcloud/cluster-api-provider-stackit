@@ -26,6 +26,7 @@ import (
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
@@ -175,6 +176,57 @@ func TestLoadBalancerSpecSetLoadBalancerClearsOnNil(t *testing.T) {
 	}
 	if clusterScope.StackitCluster.Spec.ControlPlaneEndpoint != wantEndpoint {
 		t.Fatalf("Spec.ControlPlaneEndpoint after clear = %#v, want preserved %#v", clusterScope.StackitCluster.Spec.ControlPlaneEndpoint, wantEndpoint)
+	}
+}
+
+func TestPublicIPSpecSetPublicIPClearsOnNil(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+
+	spec := clusterScope.PublicIPSpec()
+	spec.SetPublicIP(&publicip.PublicIP{
+		ID: "pip-1",
+		IP: "203.0.113.22",
+	})
+
+	if clusterScope.StackitCluster.Status.Bastion.PublicIPID != "pip-1" {
+		t.Fatalf("Status.Bastion.PublicIPID = %q, want pip-1", clusterScope.StackitCluster.Status.Bastion.PublicIPID)
+	}
+	if clusterScope.StackitCluster.Status.Bastion.PublicIP != "203.0.113.22" {
+		t.Fatalf("Status.Bastion.PublicIP = %q, want 203.0.113.22", clusterScope.StackitCluster.Status.Bastion.PublicIP)
+	}
+
+	spec.SetPublicIP(nil)
+	if clusterScope.StackitCluster.Status.Bastion.PublicIPID != "" {
+		t.Fatalf("Status.Bastion.PublicIPID after clear = %q, want empty", clusterScope.StackitCluster.Status.Bastion.PublicIPID)
+	}
+	if clusterScope.StackitCluster.Status.Bastion.PublicIP != "" {
+		t.Fatalf("Status.Bastion.PublicIP after clear = %q, want empty", clusterScope.StackitCluster.Status.Bastion.PublicIP)
+	}
+}
+
+func TestSecurityGroupSpecsSetSecurityGroupClearsOnNil(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+
+	specs := clusterScope.SecurityGroupSpecs()
+	if len(specs) != 2 {
+		t.Fatalf("SecurityGroupSpecs() count = %d, want 2", len(specs))
+	}
+
+	specs[0].SetSecurityGroup(&securitygroup.SecurityGroup{
+		ID:   "sg-1",
+		Name: "bastion-ssh",
+	})
+	if clusterScope.StackitCluster.Status.Bastion.SecurityGroupID != "sg-1" {
+		t.Fatalf("Status.Bastion.SecurityGroupID = %q, want sg-1", clusterScope.StackitCluster.Status.Bastion.SecurityGroupID)
+	}
+
+	specs[0].SetSecurityGroup(nil)
+	if clusterScope.StackitCluster.Status.Bastion.SecurityGroupID != "" {
+		t.Fatalf("Status.Bastion.SecurityGroupID after clear = %q, want empty", clusterScope.StackitCluster.Status.Bastion.SecurityGroupID)
 	}
 }
 

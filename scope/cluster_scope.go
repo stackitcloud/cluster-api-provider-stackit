@@ -247,8 +247,12 @@ func rootVolumeFromSpec(in infrav1.StackitRootVolumeSpec) server.RootVolume {
 	}
 }
 
-func (s *ClusterScope) setBastionSecurityGroupID(id string) {
-	s.StackitCluster.Status.Bastion.SecurityGroupID = id
+func (s *ClusterScope) setBastionSecurityGroup(sg *securitygroup.SecurityGroup) {
+	if sg == nil {
+		s.StackitCluster.Status.Bastion.SecurityGroupID = ""
+		return
+	}
+	s.StackitCluster.Status.Bastion.SecurityGroupID = sg.ID
 }
 
 func (s *ClusterScope) HasBastionStatus() bool {
@@ -468,9 +472,14 @@ func NodeSSHTags(stackitCluster *infrav1.StackitCluster) map[string]string {
 	return tags
 }
 
-func (s *ClusterScope) setBastionPublicIP(id, ip string) {
-	s.StackitCluster.Status.Bastion.PublicIPID = id
-	s.StackitCluster.Status.Bastion.PublicIP = ip
+func (s *ClusterScope) setBastionPublicIP(pip *publicip.PublicIP) {
+	if pip == nil {
+		s.StackitCluster.Status.Bastion.PublicIPID = ""
+		s.StackitCluster.Status.Bastion.PublicIP = ""
+		return
+	}
+	s.StackitCluster.Status.Bastion.PublicIPID = pip.ID
+	s.StackitCluster.Status.Bastion.PublicIP = pip.IP
 }
 
 func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
@@ -493,14 +502,14 @@ func (s *ClusterScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	})
 	return []securitygroup.SecurityGroupSpec{
 		{
-			ID:             s.StackitCluster.Status.Bastion.SecurityGroupID,
-			Name:           s.StackitCluster.Name + "-bastion-ssh",
-			Description:    "Cluster API Provider STACKIT bastion SSH access",
-			Tags:           s.bastionTags(),
-			Rules:          rules,
-			ServerIDs:      []string{s.StackitCluster.Status.Bastion.ServerID},
-			ServerSelector: s.bastionTags(),
-			SetID:          s.setBastionSecurityGroupID,
+			ID:               s.StackitCluster.Status.Bastion.SecurityGroupID,
+			Name:             s.StackitCluster.Name + "-bastion-ssh",
+			Description:      "Cluster API Provider STACKIT bastion SSH access",
+			Tags:             s.bastionTags(),
+			Rules:            rules,
+			ServerIDs:        []string{s.StackitCluster.Status.Bastion.ServerID},
+			ServerSelector:   s.bastionTags(),
+			SetSecurityGroup: s.setBastionSecurityGroup,
 		},
 		nodeSSHSecurityGroupSpec(s.StackitCluster, ""),
 	}

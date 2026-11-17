@@ -48,14 +48,14 @@ type Rule struct {
 
 // SecurityGroupSpec describes the desired state of a STACKIT security group and its rules.
 type SecurityGroupSpec struct {
-	ID             string
-	Name           string
-	Description    string
-	Tags           map[string]string
-	Rules          []Rule
-	ServerIDs      []string
-	ServerSelector map[string]string
-	SetID          func(string)
+	ID               string
+	Name             string
+	Description      string
+	Tags             map[string]string
+	Rules            []Rule
+	ServerIDs        []string
+	ServerSelector   map[string]string
+	SetSecurityGroup func(securityGroup *SecurityGroup)
 }
 
 // Scope is an interface that provides scope data needed for security group reconciliation.

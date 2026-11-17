@@ -43,7 +43,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 
 	if spec.SetPublicIP != nil {
-		spec.SetPublicIP(publicIP.ID, publicIP.IP)
+		spec.SetPublicIP(publicIP)
 	}
 	log.V(1).Info("Reconciled public IP resources", "publicIPID", publicIP.ID)
 	return nil
@@ -71,7 +71,7 @@ func (s *Service) Delete(ctx context.Context) error {
 	}
 
 	if spec.SetPublicIP != nil {
-		spec.SetPublicIP("", "")
+		spec.SetPublicIP(nil)
 	}
 	return nil
 }

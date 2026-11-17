@@ -25,7 +25,7 @@ type PublicIPSpec struct {
 	Tags           map[string]string
 	ServerID       string
 	ServerSelector map[string]string
-	SetPublicIP    func(id, ip string)
+	SetPublicIP    func(publicIP *PublicIP)
 }
 
 // Scope is an interface that provides scope data needed for public IP reconciliation.

@@ -119,15 +119,13 @@ func TestServiceReconcile(t *testing.T) {
 		var (
 			createPayload map[string]any
 			attachedPair  string
-			recordedID    string
-			recordedIP    string
+			recorded      *publicip.PublicIP
 		)
 		spec := publicip.PublicIPSpec{
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(id, ip string) {
-				recordedID = id
-				recordedIP = ip
+			SetPublicIP: func(pip *publicip.PublicIP) {
+				recorded = pip
 			},
 		}
 
@@ -162,8 +160,8 @@ func TestServiceReconcile(t *testing.T) {
 		if attachedPair != testServerID+":"+testPublicIPID {
 			t.Fatalf("attachedPair = %q, want %s:%s", attachedPair, testServerID, testPublicIPID)
 		}
-		if recordedID != testPublicIPID || recordedIP != testPublicIPAddress {
-			t.Fatalf("recorded = (%q, %q), want (%q, %q)", recordedID, recordedIP, testPublicIPID, testPublicIPAddress)
+		if recorded == nil || recorded.ID != testPublicIPID || recorded.IP != testPublicIPAddress {
+			t.Fatalf("recorded = %#v, want ID=%q IP=%q", recorded, testPublicIPID, testPublicIPAddress)
 		}
 		labels, _ := createPayload["labels"].(map[string]any)
 		if labels["cluster"] != "test" {
@@ -172,14 +170,13 @@ func TestServiceReconcile(t *testing.T) {
 	})
 
 	t.Run("reuses existing public IP found by ID without listing by tags", func(t *testing.T) {
-		var recordedID, recordedIP string
+		var recorded *publicip.PublicIP
 		spec := publicip.PublicIPSpec{
 			ID:       testPublicIPID,
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(id, ip string) {
-				recordedID = id
-				recordedIP = ip
+			SetPublicIP: func(pip *publicip.PublicIP) {
+				recorded = pip
 			},
 		}
 
@@ -198,8 +195,8 @@ func TestServiceReconcile(t *testing.T) {
 		if err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
-		if recordedID != testPublicIPID || recordedIP != testPublicIPAddress {
-			t.Fatalf("recorded = (%q, %q), want (%q, %q)", recordedID, recordedIP, testPublicIPID, testPublicIPAddress)
+		if recorded == nil || recorded.ID != testPublicIPID || recorded.IP != testPublicIPAddress {
+			t.Fatalf("recorded = %#v, want ID=%q IP=%q", recorded, testPublicIPID, testPublicIPAddress)
 		}
 	})
 }
@@ -209,8 +206,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 		var recordedID string
 		spec := publicip.PublicIPSpec{
 			Tags: map[string]string{"cluster": "test"},
-			SetPublicIP: func(id, _ string) {
-				recordedID = id
+			SetPublicIP: func(pip *publicip.PublicIP) {
+				recordedID = pip.ID
 			},
 		}
 
@@ -245,8 +242,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:       testPublicIPID,
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(id, _ string) {
-				recordedID = id
+			SetPublicIP: func(pip *publicip.PublicIP) {
+				recordedID = pip.ID
 			},
 		}
 
@@ -315,15 +312,13 @@ func TestServiceDelete(t *testing.T) {
 		var (
 			detachedPair string
 			deletedID    string
-			clearedID    = "not-cleared"
-			clearedIP    = "not-cleared"
+			cleared      = &publicip.PublicIP{ID: "not-cleared", IP: "not-cleared"}
 		)
 		spec := publicip.PublicIPSpec{
 			ID:       testPublicIPID,
 			ServerID: testServerID,
-			SetPublicIP: func(id, ip string) {
-				clearedID = id
-				clearedIP = ip
+			SetPublicIP: func(pip *publicip.PublicIP) {
+				cleared = pip
 			},
 		}
 
@@ -350,8 +345,8 @@ func TestServiceDelete(t *testing.T) {
 		if deletedID != testPublicIPID {
 			t.Fatalf("deletedID = %q, want %q", deletedID, testPublicIPID)
 		}
-		if clearedID != "" || clearedIP != "" {
-			t.Fatalf("cleared = (%q, %q), want both empty", clearedID, clearedIP)
+		if cleared != nil {
+			t.Fatalf("cleared = %#v, want nil", cleared)
 		}
 	})
 

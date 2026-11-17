@@ -148,8 +148,8 @@ func (s *Service) reconcileSecurityGroup(ctx context.Context, spec SecurityGroup
 	if err != nil {
 		return err
 	}
-	if spec.SetID != nil {
-		spec.SetID(securityGroup.ID)
+	if spec.SetSecurityGroup != nil {
+		spec.SetSecurityGroup(securityGroup)
 	}
 	if err := s.ensureSecurityGroupRules(ctx, securityGroup.ID, spec.Rules); err != nil {
 		return err
@@ -179,8 +179,8 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 	if err != nil {
 		return err
 	}
-	if spec.SetID != nil {
-		spec.SetID("")
+	if spec.SetSecurityGroup != nil {
+		spec.SetSecurityGroup(nil)
 	}
 	return nil
 }

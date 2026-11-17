@@ -196,8 +196,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:   testSecurityGroupID,
 			Name: "cluster-sg",
 			Tags: map[string]string{"cluster": "test"},
-			SetID: func(id string) {
-				recordedID = id
+			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
+				recordedID = sg.ID
 			},
 		}}
 
@@ -234,8 +234,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:   staleID,
 			Name: "cluster-sg",
 			Tags: map[string]string{"cluster": "test"},
-			SetID: func(id string) {
-				recordedID = id
+			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
+				recordedID = sg.ID
 			},
 		}}
 
@@ -404,8 +404,8 @@ func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {
 		{
 			Name: "cluster-bastion-ssh",
 			Tags: map[string]string{"role": "bastion"},
-			SetID: func(id string) {
-				bastionSGID = id
+			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
+				bastionSGID = sg.ID
 			},
 			Rules: []securitygroup.Rule{
 				{
@@ -696,9 +696,13 @@ func TestServiceDelete(t *testing.T) {
 		var (
 			deletedRules []string
 			deletedSGID  string
+			cleared      = &securitygroup.SecurityGroup{ID: "not-cleared", Name: "not-cleared"}
 		)
 		specs := []securitygroup.SecurityGroupSpec{{
 			ID: testSecurityGroupID,
+			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
+				cleared = sg
+			},
 		}}
 
 		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -729,6 +733,9 @@ func TestServiceDelete(t *testing.T) {
 		}
 		if deletedSGID != testSecurityGroupID {
 			t.Fatalf("deletedSGID = %q, want %q", deletedSGID, testSecurityGroupID)
+		}
+		if cleared != nil {
+			t.Fatalf("cleared = %#v, want nil", cleared)
 		}
 	})
 
