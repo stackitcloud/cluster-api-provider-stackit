@@ -121,6 +121,89 @@ func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) 
 	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "new-hash" {
 		t.Fatalf("Status.Bastion.CloudInitHash on created server = %q, want %q", got, "new-hash")
 	}
+
+	spec.SetServer(nil, false)
+	if clusterScope.BastionServerCreated() {
+		t.Fatal("BastionServerCreated() = true after SetServer(nil, false), want false")
+	}
+	if state, powerStatus := clusterScope.BastionServerState(); state != "" || powerStatus != "" {
+		t.Fatalf("BastionServerState() after SetServer(nil, false) = (%q, %q), want empty", state, powerStatus)
+	}
+	if got := clusterScope.StackitCluster.Status.Bastion.ServerID; got != "" {
+		t.Fatalf("Status.Bastion.ServerID after SetServer(nil, false) = %q, want empty", got)
+	}
+	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "" {
+		t.Fatalf("Status.Bastion.CloudInitHash after SetServer(nil, false) = %q, want empty", got)
+	}
+}
+
+func TestLoadBalancerSpecSetIDAndSetAddressClearsOnEmpty(t *testing.T) {
+	clusterScope := &ClusterScope{
+		StackitCluster: &infrav1.StackitCluster{},
+	}
+
+	spec := clusterScope.LoadBalancerSpec()
+	spec.SetID("lb-1")
+	spec.SetAddress("203.0.113.10", 6443)
+
+	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "lb-1" {
+		t.Fatalf("Status.APIServerLoadBalancerID = %q, want lb-1", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
+	}
+	wantEndpoint := clusterv1.APIEndpoint{Host: "203.0.113.10", Port: 6443}
+	if clusterScope.StackitCluster.Spec.ControlPlaneEndpoint != wantEndpoint {
+		t.Fatalf("Spec.ControlPlaneEndpoint = %#v, want %#v", clusterScope.StackitCluster.Spec.ControlPlaneEndpoint, wantEndpoint)
+	}
+	if clusterScope.StackitCluster.Status.APIServerEndpoint != wantEndpoint {
+		t.Fatalf("Status.APIServerEndpoint = %#v, want %#v", clusterScope.StackitCluster.Status.APIServerEndpoint, wantEndpoint)
+	}
+
+	spec.SetID("")
+	spec.SetAddress("", 0)
+	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "" {
+		t.Fatalf("Status.APIServerLoadBalancerID after clear = %q, want empty", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
+	}
+	if clusterScope.StackitCluster.Status.APIServerEndpoint != (clusterv1.APIEndpoint{}) {
+		t.Fatalf("Status.APIServerEndpoint after clear = %#v, want empty", clusterScope.StackitCluster.Status.APIServerEndpoint)
+	}
+	if clusterScope.StackitCluster.Spec.ControlPlaneEndpoint != wantEndpoint {
+		t.Fatalf("Spec.ControlPlaneEndpoint after clear = %#v, want preserved %#v", clusterScope.StackitCluster.Spec.ControlPlaneEndpoint, wantEndpoint)
+	}
+}
+
+func TestMachineScopeServerSpecSetServerClearsOnNil(t *testing.T) {
+	machineScope := &MachineScope{
+		cluster:        &clusterv1.Cluster{},
+		Machine:        &clusterv1.Machine{},
+		StackitCluster: &infrav1.StackitCluster{},
+		StackitMachine: &infrav1.StackitMachine{},
+	}
+
+	spec := machineScope.ServerSpec()
+	spec.SetServer(&server.Server{
+		ID:               "srv-1",
+		State:            "ACTIVE",
+		PowerStatus:      "RUNNING",
+		AvailabilityZone: "eu01-1",
+		Addresses:        []server.Address{{Type: "InternalIP", Address: "10.0.0.5"}},
+	}, true)
+
+	if !machineScope.InstanceCreated() || machineScope.InstancePowerStatus() != "RUNNING" {
+		t.Fatalf("InstanceCreated=%v, InstancePowerStatus=%q", machineScope.InstanceCreated(), machineScope.InstancePowerStatus())
+	}
+	if machineScope.StackitMachine.Status.InstanceID != "srv-1" {
+		t.Fatalf("Status.InstanceID = %q, want srv-1", machineScope.StackitMachine.Status.InstanceID)
+	}
+
+	spec.SetServer(nil, false)
+	if machineScope.InstanceCreated() || machineScope.InstancePowerStatus() != "" {
+		t.Fatalf("after SetServer(nil, false): InstanceCreated=%v, InstancePowerStatus=%q, want false and empty", machineScope.InstanceCreated(), machineScope.InstancePowerStatus())
+	}
+	if machineScope.StackitMachine.Status.InstanceID != "" ||
+		machineScope.StackitMachine.Status.InstanceState != "" ||
+		machineScope.StackitMachine.Status.AvailabilityZone != "" ||
+		len(machineScope.StackitMachine.Status.Addresses) != 0 {
+		t.Fatalf("Status after SetServer(nil, false) = %#v, want cleared instance fields", machineScope.StackitMachine.Status)
+	}
 }
 
 func TestNodeSSHSecurityGroupSpecIncludesAdditionalLabelsInServerSelector(t *testing.T) {

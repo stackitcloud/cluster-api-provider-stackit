@@ -71,6 +71,9 @@ func (s *Service) Delete(ctx context.Context) error {
 	if spec.SetID != nil {
 		spec.SetID("")
 	}
+	if spec.SetAddress != nil {
+		spec.SetAddress("", 0)
+	}
 	return nil
 }
 

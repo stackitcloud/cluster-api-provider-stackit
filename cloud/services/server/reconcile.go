@@ -55,8 +55,8 @@ func (s *Service) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if spec.ClearServer != nil {
-		spec.ClearServer()
+	if spec.SetServer != nil {
+		spec.SetServer(nil, false)
 	}
 	return nil
 }

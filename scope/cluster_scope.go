@@ -169,6 +169,14 @@ func (s *ClusterScope) BastionServerCreated() bool {
 }
 
 func (s *ClusterScope) setBastionServer(srv *server.Server, created bool) {
+	if srv == nil {
+		s.bastionServerCreated = false
+		s.bastionServerState = ""
+		s.bastionServerPowerStatus = ""
+		s.StackitCluster.Status.Bastion.ServerID = ""
+		s.StackitCluster.Status.Bastion.CloudInitHash = ""
+		return
+	}
 	s.bastionServerCreated = created
 	s.bastionServerState = srv.State
 	s.bastionServerPowerStatus = srv.PowerStatus
@@ -176,11 +184,6 @@ func (s *ClusterScope) setBastionServer(srv *server.Server, created bool) {
 	if created {
 		s.StackitCluster.Status.Bastion.CloudInitHash = s.bastionCloudInitHash
 	}
-}
-
-func (s *ClusterScope) clearBastionServer() {
-	s.StackitCluster.Status.Bastion.ServerID = ""
-	s.StackitCluster.Status.Bastion.CloudInitHash = ""
 }
 
 func (s *ClusterScope) ServerSpec() server.ServerSpec {
@@ -197,7 +200,6 @@ func (s *ClusterScope) ServerSpec() server.ServerSpec {
 		Tags:             s.bastionTags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitCluster.Spec.Bastion.RootVolume),
 		SetServer:        s.setBastionServer,
-		ClearServer:      s.clearBastionServer,
 	}
 }
 
@@ -282,6 +284,17 @@ func (s *ClusterScope) setAPIServerLoadBalancerID(id string) {
 	s.StackitCluster.Status.APIServerLoadBalancerID = id
 }
 
+func (s *ClusterScope) setAPIServerLoadBalancerAddress(ip string, port int32) {
+	if ip == "" {
+		s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
+		return
+	}
+	s.setAPIServerEndpoint(clusterv1.APIEndpoint{
+		Host: ip,
+		Port: port,
+	})
+}
+
 func (s *ClusterScope) SetAPIServerLoadBalancerTargets(targets, seedTargets []loadbalancer.Target) {
 	s.loadBalancerTargets = targets
 	s.loadBalancerSeedTargets = seedTargets
@@ -297,16 +310,7 @@ func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 		Targets:     s.loadBalancerTargets,
 		SeedTargets: s.loadBalancerSeedTargets,
 		SetID:       s.setAPIServerLoadBalancerID,
-		SetAddress: func(ip string, port int32) {
-			if ip == "" {
-				s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
-				return
-			}
-			s.setAPIServerEndpoint(clusterv1.APIEndpoint{
-				Host: ip,
-				Port: port,
-			})
-		},
+		SetAddress:  s.setAPIServerLoadBalancerAddress,
 	}
 }
 

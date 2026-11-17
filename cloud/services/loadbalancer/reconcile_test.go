@@ -558,15 +558,21 @@ func TestServiceReconcileValidation(t *testing.T) {
 }
 
 func TestServiceDelete(t *testing.T) {
-	t.Run("deletes load balancer using ID when provided and clears ID", func(t *testing.T) {
+	t.Run("deletes load balancer using ID when provided and clears ID and address", func(t *testing.T) {
 		var (
-			deletedID string
-			clearedID = "not-cleared"
+			deletedID   string
+			clearedID   = "not-cleared"
+			clearedIP   = "not-cleared"
+			clearedPort = int32(6443)
 		)
 		spec := loadbalancer.LoadBalancerSpec{
 			ID: testLBName,
 			SetID: func(id string) {
 				clearedID = id
+			},
+			SetAddress: func(ip string, port int32) {
+				clearedIP = ip
+				clearedPort = port
 			},
 		}
 
@@ -587,6 +593,9 @@ func TestServiceDelete(t *testing.T) {
 		}
 		if clearedID != "" {
 			t.Fatalf("clearedID = %q, want empty", clearedID)
+		}
+		if clearedIP != "" || clearedPort != 0 {
+			t.Fatalf("cleared address = (%q, %d), want (\"\", 0)", clearedIP, clearedPort)
 		}
 	})
 

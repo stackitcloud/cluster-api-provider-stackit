@@ -64,7 +64,6 @@ type ServerSpec struct {
 	RootVolume       RootVolume
 	DisallowRecreate bool
 	SetServer        func(server *Server, created bool)
-	ClearServer      func()
 }
 
 // Scope is an interface that provides scope data needed for server reconciliation.

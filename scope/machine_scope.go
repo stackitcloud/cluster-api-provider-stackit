@@ -122,7 +122,19 @@ func (s *MachineScope) tags() map[string]string {
 	)
 }
 
-func (s *MachineScope) setInstance(srv *server.Server) {
+func (s *MachineScope) setInstance(srv *server.Server, created bool) {
+	if srv == nil {
+		s.instanceCreated = false
+		s.instancePowerStatus = ""
+		s.StackitMachine.Status.Addresses = nil
+		s.StackitMachine.Status.InstanceID = ""
+		s.StackitMachine.Status.InstanceState = ""
+		s.StackitMachine.Status.AvailabilityZone = ""
+		return
+	}
+	s.instanceCreated = created
+	s.instancePowerStatus = srv.PowerStatus
+	s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
 	providerID := cloud.NewProviderID(srv.ID)
 	s.StackitMachine.Status.InstanceID = srv.ID
 	s.StackitMachine.Status.InstanceState = srv.State
@@ -130,12 +142,6 @@ func (s *MachineScope) setInstance(srv *server.Server) {
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
-}
-
-func (s *MachineScope) clearInstance() {
-	s.StackitMachine.Status.InstanceID = ""
-	s.StackitMachine.Status.InstanceState = ""
-	s.StackitMachine.Status.AvailabilityZone = ""
 }
 
 // availabilityZone returns the resolved availability zone for the machine.
@@ -206,13 +212,7 @@ func (s *MachineScope) ServerSpec() server.ServerSpec {
 		Tags:             s.tags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitMachine.Spec.RootVolume),
 		DisallowRecreate: s.StackitMachine.Status.Initialization.Provisioned,
-		SetServer: func(srv *server.Server, created bool) {
-			s.instanceCreated = created
-			s.instancePowerStatus = srv.PowerStatus
-			s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
-			s.setInstance(srv)
-		},
-		ClearServer: s.clearInstance,
+		SetServer:        s.setInstance,
 	}
 }
 

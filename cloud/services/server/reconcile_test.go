@@ -516,15 +516,19 @@ func TestServiceReconcileValidation(t *testing.T) {
 }
 
 func TestServiceDelete(t *testing.T) {
-	t.Run("deletes server by ID when provided and calls ClearServer", func(t *testing.T) {
+	t.Run("deletes server by ID when provided and clears state via SetServer", func(t *testing.T) {
 		var (
-			deletedID string
-			cleared   bool
+			deletedID      string
+			setServerCalls int
+			clearedServer  *server.Server
+			clearedCreated = true
 		)
 		spec := server.ServerSpec{
 			ID: testServerID,
-			ClearServer: func() {
-				cleared = true
+			SetServer: func(srv *server.Server, created bool) {
+				setServerCalls++
+				clearedServer = srv
+				clearedCreated = created
 			},
 		}
 
@@ -543,8 +547,11 @@ func TestServiceDelete(t *testing.T) {
 		if deletedID != testServerID {
 			t.Fatalf("deletedID = %q, want %q", deletedID, testServerID)
 		}
-		if !cleared {
-			t.Fatal("ClearServer was not called")
+		if setServerCalls != 1 {
+			t.Fatalf("SetServer calls = %d, want 1", setServerCalls)
+		}
+		if clearedServer != nil || clearedCreated {
+			t.Fatalf("SetServer called with (%#v, %v), want (nil, false)", clearedServer, clearedCreated)
 		}
 	})
 
