@@ -17,14 +17,7 @@ import (
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
-// Client is the abstraction over STACKIT cloud APIs used by the controllers.
-//
-// Implementations must:
-//   - return ErrNotFound when a resource does not exist
-//   - return ErrUnauthorized for permanent auth failures
-//   - return ErrInvalidInput for permanent input validation errors
-//   - return ErrConflict for retryable conflict errors
-//   - return ErrTransient for retryable transient errors
+// Client provides the target STACKIT project, region, and SDK API clients.
 type Client interface {
 	ProjectID() string
 

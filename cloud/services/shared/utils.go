@@ -120,7 +120,13 @@ func FindByTags[T any](
 	if err != nil {
 		return zero, err
 	}
-	return findSingle(matched, singular, plural)
+	if len(matched) == 0 {
+		return zero, fmt.Errorf("%w: no %s matching tags", ErrNotFound, singular)
+	}
+	if len(matched) > 1 {
+		return zero, fmt.Errorf("%w: multiple %s matching tags", ErrConflict, plural)
+	}
+	return matched[0], nil
 }
 
 // ResolveExisting looks up an existing resource by ID first (ignoring errors matched by ignoreLookupErr),
@@ -201,18 +207,6 @@ func DeleteByIDOrTags(
 	return deletedIDs, errors.Join(errs...)
 }
 
-// findSingle returns the single item in matched, or ErrNotFound if empty, or ErrConflict if more than one.
-func findSingle[T any](matched []T, singular, plural string) (T, error) {
-	var zero T
-	if len(matched) == 0 {
-		return zero, fmt.Errorf("%w: no %s matching tags", ErrNotFound, singular)
-	}
-	if len(matched) > 1 {
-		return zero, fmt.Errorf("%w: multiple %s matching tags", ErrConflict, plural)
-	}
-	return matched[0], nil
-}
-
 func MapContains(haystack, needle map[string]string) bool {
 	for k, v := range needle {
 		if haystack[k] != v {
@@ -220,15 +214,6 @@ func MapContains(haystack, needle map[string]string) bool {
 		}
 	}
 	return true
-}
-
-func FirstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func labelSelector(tags map[string]string) string {

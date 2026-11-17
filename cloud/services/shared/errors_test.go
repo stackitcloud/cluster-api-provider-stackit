@@ -56,32 +56,6 @@ func TestIsRetryable(t *testing.T) {
 	}
 }
 
-func TestFindSingle(t *testing.T) {
-	t.Run("returns ErrNotFound when empty", func(t *testing.T) {
-		_, err := findSingle([]string{}, "server", "servers")
-		if !IsNotFound(err) {
-			t.Fatalf("findSingle() error = %v, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("returns ErrConflict when multiple", func(t *testing.T) {
-		_, err := findSingle([]string{"a", "b"}, "server", "servers")
-		if !IsConflict(err) {
-			t.Fatalf("findSingle() error = %v, want ErrConflict", err)
-		}
-	})
-
-	t.Run("returns single element", func(t *testing.T) {
-		got, err := findSingle([]string{"a"}, "server", "servers")
-		if err != nil {
-			t.Fatalf("findSingle() error = %v", err)
-		}
-		if got != "a" {
-			t.Fatalf("findSingle() = %q, want %q", got, "a")
-		}
-	})
-}
-
 func TestFindByTags(t *testing.T) {
 	ctx := context.Background()
 	tags := map[string]string{"cluster": "test"}

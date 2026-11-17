@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package loadbalancer
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -230,7 +231,7 @@ func loadBalancerFromSDK(in *lb.LoadBalancer) *LoadBalancer {
 	return &LoadBalancer{
 		ID:   in.GetName(),
 		Name: in.GetName(),
-		IP:   shared.FirstNonEmpty(in.GetExternalAddress(), in.GetPrivateAddress()),
+		IP:   cmp.Or(in.GetExternalAddress(), in.GetPrivateAddress()),
 	}
 }
 
