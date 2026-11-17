@@ -36,15 +36,9 @@ type LoadBalancerClientScope interface {
 	LoadBalancerClient() *lb.APIClient
 }
 
-// labeledItem is implemented by pointers to STACKIT SDK models that carry a label map.
-type labeledItem[T any] interface {
-	*T
-	GetLabels() map[string]any
-}
-
 // ListByTags validates that tags are non-empty, lists SDK items using the tag label selector,
 // filters items whose labels contain all tags, and maps each matching item via convert.
-func ListByTags[T any, PT labeledItem[T], Out any](
+func ListByTags[T any, Out any](
 	tags map[string]string,
 	list func(labelSelector string) ([]T, error),
 	convert func(*T) Out,
@@ -58,7 +52,7 @@ func ListByTags[T any, PT labeledItem[T], Out any](
 	}
 	matched := []Out{}
 	for _, item := range items {
-		if labelsContainTags(PT(&item).GetLabels(), tags) {
+		if itemContainsTags(&item, tags) {
 			matched = append(matched, convert(&item))
 		}
 	}
@@ -207,9 +201,21 @@ func DeleteByIDOrTags(
 	return deletedIDs, errors.Join(errs...)
 }
 
-func MapContains(haystack, needle map[string]string) bool {
-	for k, v := range needle {
-		if haystack[k] != v {
+func itemContainsTags(item any, tags map[string]string) bool {
+	switch labeled := item.(type) {
+	case interface{ GetLabels() map[string]any }:
+		return MapContains(labeled.GetLabels(), tags)
+	case interface{ GetLabels() map[string]string }:
+		return MapContains(labeled.GetLabels(), tags)
+	default:
+		return false
+	}
+}
+
+func MapContains[V any](haystack map[string]V, needle map[string]string) bool {
+	for k, want := range needle {
+		got, ok := haystack[k]
+		if !ok || fmt.Sprint(got) != want {
 			return false
 		}
 	}
@@ -222,16 +228,6 @@ func labelSelector(tags map[string]string) string {
 		parts = append(parts, k+"="+v)
 	}
 	return strings.Join(parts, ",")
-}
-
-func labelsContainTags(labels map[string]any, tags map[string]string) bool {
-	for k, want := range tags {
-		got, ok := labels[k]
-		if !ok || fmt.Sprint(got) != want {
-			return false
-		}
-	}
-	return true
 }
 
 func TagsToSDKLabels(tags map[string]string) map[string]any {

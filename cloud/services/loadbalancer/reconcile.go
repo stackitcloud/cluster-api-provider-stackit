@@ -92,26 +92,17 @@ func (s *Service) findByTags(ctx context.Context, tags map[string]string) (*Load
 
 // listByTags lists STACKIT load balancers matching the given tag selector.
 func (s *Service) listByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error) {
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", shared.ErrInvalidInput)
-	}
-	resp, err := s.scope.LoadBalancerClient().DefaultAPI.ListLoadBalancers(ctx, s.scope.ProjectID(), s.scope.Region()).Execute()
-	if err != nil {
-		err := shared.ClassifySDKError("list load balancers", err)
-		if isLoadBalancerServiceNotEnabled(err) {
-			return nil, nil
+	return shared.ListByTags(Labels(tags), func(_ string) ([]lb.LoadBalancer, error) {
+		resp, err := s.scope.LoadBalancerClient().DefaultAPI.ListLoadBalancers(ctx, s.scope.ProjectID(), s.scope.Region()).Execute()
+		if err != nil {
+			err := shared.ClassifySDKError("list load balancers", err)
+			if isLoadBalancerServiceNotEnabled(err) {
+				return nil, nil
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	matched := []*LoadBalancer{}
-	labels := Labels(tags)
-	for _, candidate := range resp.GetLoadBalancers() {
-		if shared.MapContains(candidate.GetLabels(), labels) {
-			candidate := candidate
-			matched = append(matched, loadBalancerFromSDK(&candidate))
-		}
-	}
-	return matched, nil
+		return resp.GetLoadBalancers(), nil
+	}, loadBalancerFromSDK)
 }
 
 // deleteByID deletes a load balancer by ID, returning true if the load balancer existed and was deleted,
