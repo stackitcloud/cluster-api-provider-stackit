@@ -146,14 +146,14 @@ func deleteBastion(
 	if err := publicip.New(clusterScope).Delete(ctx); err != nil {
 		return err
 	}
-	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
-		return err
-	}
 	if err := server.New(clusterScope).Delete(ctx); err != nil {
 		return err
 	}
 	if hadBastion {
 		record.Event(clusterScope.StackitCluster, "BastionDeleted", "Deleted bastion")
+	}
+	if err := securitygroup.New(clusterScope).Delete(ctx); err != nil {
+		return err
 	}
 	return nil
 }
