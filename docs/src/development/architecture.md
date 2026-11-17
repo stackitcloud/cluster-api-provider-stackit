@@ -2,11 +2,12 @@
 
 ## Overview
 
-The provider has four main areas:
+The provider has five main areas:
 
 - API types and CRDs
 - Controllers
-- Cloud abstraction layer
+- Scopes (`ClusterScope` and `MachineScope`)
+- Cloud client and resource services
 - clusterctl templates and release assets
 
 Key packages:
@@ -14,16 +15,16 @@ Key packages:
 ```text
 api/v1alpha1/             Provider API types
 controller/               Reconciliation logic
-cloud/                    Cloud client interface and SDK implementation
-cloud/fake/               In-memory fake for tests
+scope/                    Per-reconcile state, status patching, and service specs
+cloud/                    Cloud client factory, provider ID helpers, and tag-based cleanup
+cloud/services/           Resource services (availabilityzone, network, loadbalancer, publicip, securitygroup, server, shared)
+cloud/fake/               In-memory fake HTTP transport and client for tests
 util/                     Shared helpers
 templates/                clusterctl templates
 config/                   Kubebuilder manifests
 ```
 
-The controllers do not call the STACKIT SDK directly. They use the cloud client
-interface, which keeps reconciliation testable and allows fake-client envtest
-coverage.
+Controllers construct a `ClusterScope` or `MachineScope` for each reconciliation pass and delegate cloud operations to the resource services under `cloud/services/`. Both the real `SDKClient` and the `fake.Client` implement `cloud.Client` (exposing the configured project ID, region, and STACKIT IaaS / Load Balancer SDK clients), keeping reconciliation testable with envtest and in-memory HTTP fakes.
 
 ## Cluster API Contract
 
@@ -49,49 +50,54 @@ Important contract behavior:
 infrastructure cluster contract when the provider manages the API server load
 balancer endpoint.
 
-## Controllers
+## Controllers and Scopes
+
+`ClusterScope` (`scope/cluster_scope.go`) and `MachineScope` (`scope/machine_scope.go`) hold the Kubernetes objects and cloud client for a single reconcile pass, patch status and conditions on close, and translate Kubernetes spec/status fields into service spec structs (`AvailabilityZoneSpec`, `NetworkSpec`, `LoadBalancerSpec`, `PublicIPSpec`, `SecurityGroupSpecs`, `ServerSpec`).
 
 `StackitClusterReconciler` is responsible for:
 
-- Reading credentials
-- Looking up the configured network
-- Managing the optional API server load balancer
-- Maintaining its target pool from the control-plane machines of the cluster
-- Publishing failure domains
+- Reading credentials and building the cloud client
+- Reconciling availability zones and publishing failure domains
+- Reconciling (validating) the configured network
+- Reconciling the optional API server load balancer and its control-plane target pool
+- Reconciling the optional bastion host (server, security groups, and public IP)
 - Updating readiness and contract status
-- Cleaning up provider-managed load balancers on deletion
+- Cleaning up provider-managed bastion and load balancer resources on deletion
 
 `StackitMachineReconciler` is responsible for:
 
+- Validating the machine's availability zone against cluster failure domains
 - Waiting for bootstrap data
-- Creating STACKIT servers
-- Setting provider IDs and addresses
-- Deleting servers on teardown
+- Reconciling the STACKIT server instance, provider ID, and addresses
+- Reconciling node SSH security group attachment when the bastion is enabled
+- Deleting the server on teardown
 
 Reconciliation must be idempotent. Re-running the same reconcile loop should be
 safe and should not create duplicate cloud resources.
 
-## Cloud Client
+## Cloud Client and Services
 
-The cloud client abstraction hides STACKIT SDK details from controllers.
+`cloud.Client` provides the project ID, region, and configured STACKIT IaaS (`*iaas.APIClient`) and Load Balancer (`*lb.APIClient`) SDK clients.
 
-It covers:
+Cloud resource management is organized into service packages under `cloud/services/`:
 
-- Server create, get, list, and delete
-- Network lookup
-- Load balancer create, list, delete, and target-pool updates
-- Provider ID helpers
-- Error classification
+- `availabilityzone`: Lists availability zones (`Reconcile`)
+- `network`: Looks up and validates the cluster network (`Reconcile`)
+- `loadbalancer`: Creates, adopts by tags, updates target pools, and deletes the API server load balancer (`Reconcile`, `Delete`)
+- `publicip`: Creates, adopts by tags, associates/disassociates, and deletes public IPs (`Reconcile`, `Delete`)
+- `securitygroup`: Creates, adopts by tags, reconciles rules and server attachments, and deletes security groups (`Reconcile`, `Delete`)
+- `server`: Creates, adopts by tags, inspects state/addresses, and deletes servers (`Reconcile`, `Delete`)
+- `shared`: Sentinel errors (`ErrNotFound`, `ErrUnauthorized`, `ErrInvalidInput`, `ErrConflict`, `ErrTransient`), SDK error classification, and tag lookup/deletion helpers
 
-Controllers should handle classified errors differently:
+`cloud.CleanupByTags` uses the `publicip`, `loadbalancer`, `server`, and `securitygroup` services to delete all provider-managed resources matching a tag selector without requiring Kubernetes objects.
 
-- transient errors should be retried
-- terminal validation errors should set clear conditions
-- not-found errors during deletion should be treated as successful cleanup where
-  appropriate
+Controllers and scopes handle classified errors from `cloud/services/shared` differently:
 
-Tests use an in-memory fake cloud client for deterministic reconciliation
-coverage. SDK integration tests are opt-in and require real STACKIT credentials.
+- transient and conflict errors (`shared.IsRetryable`) trigger a requeue
+- terminal validation or credential errors set clear conditions and avoid tight retry loops
+- not-found errors during deletion are treated as successful cleanup
+
+Tests use `cloud/fake.Client` (which backs the STACKIT SDK clients with an in-memory HTTP handler) for deterministic unit and envtest coverage. SDK integration tests are opt-in and require real STACKIT credentials.
 
 ## STACKIT ProviderID Compatibility
 
