@@ -55,15 +55,14 @@ type Target struct {
 
 // LoadBalancerSpec describes the desired state of a STACKIT API server load balancer.
 type LoadBalancerSpec struct {
-	ID          string
-	Name        string
-	NetworkID   string
-	Port        int32
-	Tags        map[string]string
-	Targets     []Target
-	SeedTargets []Target
-	SetID       func(id string)
-	SetAddress  func(ip string, port int32)
+	ID              string
+	Name            string
+	NetworkID       string
+	Port            int32
+	Tags            map[string]string
+	Targets         []Target
+	SeedTargets     []Target
+	SetLoadBalancer func(loadBalancer *LoadBalancer, created bool)
 }
 
 // Scope is an interface that provides scope data needed for load balancer reconciliation.

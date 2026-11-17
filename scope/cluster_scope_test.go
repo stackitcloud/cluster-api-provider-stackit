@@ -137,15 +137,21 @@ func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) 
 	}
 }
 
-func TestLoadBalancerSpecSetIDAndSetAddressClearsOnEmpty(t *testing.T) {
+func TestLoadBalancerSpecSetLoadBalancerClearsOnNil(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
 	}
 
 	spec := clusterScope.LoadBalancerSpec()
-	spec.SetID("lb-1")
-	spec.SetAddress("203.0.113.10", 6443)
+	spec.SetLoadBalancer(&loadbalancer.LoadBalancer{
+		ID:   "lb-1",
+		IP:   "203.0.113.10",
+		Port: 6443,
+	}, true)
 
+	if !clusterScope.APIServerLoadBalancerCreated() {
+		t.Fatal("APIServerLoadBalancerCreated() = false on created load balancer, want true")
+	}
 	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "lb-1" {
 		t.Fatalf("Status.APIServerLoadBalancerID = %q, want lb-1", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
 	}
@@ -157,8 +163,10 @@ func TestLoadBalancerSpecSetIDAndSetAddressClearsOnEmpty(t *testing.T) {
 		t.Fatalf("Status.APIServerEndpoint = %#v, want %#v", clusterScope.StackitCluster.Status.APIServerEndpoint, wantEndpoint)
 	}
 
-	spec.SetID("")
-	spec.SetAddress("", 0)
+	spec.SetLoadBalancer(nil, false)
+	if clusterScope.APIServerLoadBalancerCreated() {
+		t.Fatal("APIServerLoadBalancerCreated() = true after SetLoadBalancer(nil, false), want false")
+	}
 	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "" {
 		t.Fatalf("Status.APIServerLoadBalancerID after clear = %q, want empty", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
 	}

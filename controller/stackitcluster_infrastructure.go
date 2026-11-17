@@ -134,12 +134,11 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		}
 		clusterScope.SetAPIServerLoadBalancerTargets(targets, seed)
 
-		hadLoadBalancerID := stackitCluster.Status.APIServerLoadBalancerID != ""
 		previousEndpointHost := stackitCluster.Status.APIServerEndpoint.Host
 		wasLBReady := meta.IsStatusConditionTrue(stackitCluster.Status.Conditions, infrav1.ClusterLoadBalancerReadyCondition)
 
 		err = loadbalancer.New(clusterScope).Reconcile(ctx)
-		if !hadLoadBalancerID && stackitCluster.Status.APIServerLoadBalancerID != "" {
+		if clusterScope.APIServerLoadBalancerCreated() {
 			record.Eventf(
 				stackitCluster, "LoadBalancerCreated",
 				"Created API server load balancer %s", stackitCluster.Status.APIServerLoadBalancerID,

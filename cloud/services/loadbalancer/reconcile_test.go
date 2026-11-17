@@ -120,10 +120,11 @@ func sdkLoadBalancerJSON(name string, labels map[string]any, targetPools []any) 
 func TestServiceReconcile(t *testing.T) {
 	t.Run("creates load balancer with expected payload and updates target pool", func(t *testing.T) {
 		var (
-			createPayload map[string]any
-			recordedID    string
-			recordedIP    string
-			recordedPort  int32
+			createPayload   map[string]any
+			recordedID      string
+			recordedIP      string
+			recordedPort    int32
+			recordedCreated bool
 		)
 		spec := loadbalancer.LoadBalancerSpec{
 			Name:      testLBName,
@@ -139,12 +140,11 @@ func TestServiceReconcile(t *testing.T) {
 			SeedTargets: []loadbalancer.Target{
 				{Name: "cp-0", IP: "10.0.0.10"},
 			},
-			SetID: func(id string) {
-				recordedID = id
-			},
-			SetAddress: func(ip string, port int32) {
-				recordedIP = ip
-				recordedPort = port
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
+				recordedID = apiServerLB.ID
+				recordedIP = apiServerLB.IP
+				recordedPort = apiServerLB.Port
+				recordedCreated = created
 			},
 		}
 
@@ -182,6 +182,9 @@ func TestServiceReconcile(t *testing.T) {
 		}
 		if recordedIP != testPublicIP || recordedPort != 6443 {
 			t.Fatalf("recorded address = %s:%d, want %s:6443", recordedIP, recordedPort, testPublicIP)
+		}
+		if !recordedCreated {
+			t.Fatal("recordedCreated = false, want true")
 		}
 		if createPayload["name"] != testLBName {
 			t.Fatalf("payload name = %v, want %q", createPayload["name"], testLBName)
@@ -247,15 +250,19 @@ func TestServiceReconcile(t *testing.T) {
 
 func TestServiceReconcileReuseAndErrors(t *testing.T) {
 	t.Run("reuses existing load balancer found by ID without listing by tags", func(t *testing.T) {
-		var recordedID string
+		var (
+			recordedID      string
+			recordedCreated = true
+		)
 		spec := loadbalancer.LoadBalancerSpec{
 			ID:        testLBName,
 			Name:      testLBName,
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetID: func(id string) {
-				recordedID = id
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
+				recordedID = apiServerLB.ID
+				recordedCreated = created
 			},
 		}
 
@@ -273,6 +280,9 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 		if recordedID != testLBName {
 			t.Fatalf("recordedID = %q, want %q", recordedID, testLBName)
 		}
+		if recordedCreated {
+			t.Fatal("recordedCreated = true on reused load balancer, want false")
+		}
 	})
 
 	t.Run("falls back to tag lookup when recorded ID is not found during reconcile", func(t *testing.T) {
@@ -286,8 +296,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetID: func(id string) {
-				recordedID = id
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
+				recordedID = apiServerLB.ID
 			},
 		}
 
@@ -327,8 +337,8 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetID: func(id string) {
-				recordedID = id
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
+				recordedID = apiServerLB.ID
 			},
 		}
 
@@ -384,11 +394,9 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
 			Targets:   []loadbalancer.Target{{Name: "cp-0", IP: "10.0.0.10"}},
-			SetID: func(id string) {
-				recordedID = id
-			},
-			SetAddress: func(ip string, _ int32) {
-				recordedIP = ip
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
+				recordedID = apiServerLB.ID
+				recordedIP = apiServerLB.IP
 			},
 		}
 
@@ -558,21 +566,17 @@ func TestServiceReconcileValidation(t *testing.T) {
 }
 
 func TestServiceDelete(t *testing.T) {
-	t.Run("deletes load balancer using ID when provided and clears ID and address", func(t *testing.T) {
+	t.Run("deletes load balancer using ID when provided and clears state", func(t *testing.T) {
 		var (
-			deletedID   string
-			clearedID   = "not-cleared"
-			clearedIP   = "not-cleared"
-			clearedPort = int32(6443)
+			deletedID      string
+			clearedLB      = &loadbalancer.LoadBalancer{ID: "not-cleared"}
+			clearedCreated = true
 		)
 		spec := loadbalancer.LoadBalancerSpec{
 			ID: testLBName,
-			SetID: func(id string) {
-				clearedID = id
-			},
-			SetAddress: func(ip string, port int32) {
-				clearedIP = ip
-				clearedPort = port
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
+				clearedLB = apiServerLB
+				clearedCreated = created
 			},
 		}
 
@@ -591,11 +595,8 @@ func TestServiceDelete(t *testing.T) {
 		if deletedID != testLBName {
 			t.Fatalf("deletedID = %q, want %q", deletedID, testLBName)
 		}
-		if clearedID != "" {
-			t.Fatalf("clearedID = %q, want empty", clearedID)
-		}
-		if clearedIP != "" || clearedPort != 0 {
-			t.Fatalf("cleared address = (%q, %d), want (\"\", 0)", clearedIP, clearedPort)
+		if clearedLB != nil || clearedCreated {
+			t.Fatalf("cleared state = (%#v, %v), want (nil, false)", clearedLB, clearedCreated)
 		}
 	})
 

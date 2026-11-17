@@ -55,6 +55,7 @@ type ClusterScope struct {
 
 	loadBalancerTargets     []loadbalancer.Target
 	loadBalancerSeedTargets []loadbalancer.Target
+	loadBalancerCreated     bool
 
 	bastionCloudInit         []byte
 	bastionCloudInitHash     string
@@ -311,18 +312,26 @@ func (s *ClusterScope) apiServerLoadBalancerTags() map[string]string {
 	return util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels)
 }
 
-func (s *ClusterScope) setAPIServerLoadBalancerID(id string) {
-	s.StackitCluster.Status.APIServerLoadBalancerID = id
+func (s *ClusterScope) APIServerLoadBalancerCreated() bool {
+	return s.loadBalancerCreated
 }
 
-func (s *ClusterScope) setAPIServerLoadBalancerAddress(ip string, port int32) {
-	if ip == "" {
+func (s *ClusterScope) setAPIServerLoadBalancer(apiServerLB *loadbalancer.LoadBalancer, created bool) {
+	if apiServerLB == nil {
+		s.loadBalancerCreated = false
+		s.StackitCluster.Status.APIServerLoadBalancerID = ""
+		s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
+		return
+	}
+	s.loadBalancerCreated = created
+	s.StackitCluster.Status.APIServerLoadBalancerID = apiServerLB.ID
+	if apiServerLB.IP == "" {
 		s.StackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{}
 		return
 	}
 	s.setAPIServerEndpoint(clusterv1.APIEndpoint{
-		Host: ip,
-		Port: port,
+		Host: apiServerLB.IP,
+		Port: apiServerLB.Port,
 	})
 }
 
@@ -333,15 +342,14 @@ func (s *ClusterScope) SetAPIServerLoadBalancerTargets(targets, seedTargets []lo
 
 func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return loadbalancer.LoadBalancerSpec{
-		ID:          s.StackitCluster.Status.APIServerLoadBalancerID,
-		Name:        s.StackitCluster.Name + "-apiserver",
-		NetworkID:   s.StackitCluster.Spec.Network.ID,
-		Port:        loadbalancer.DefaultAPIServerPort,
-		Tags:        s.apiServerLoadBalancerTags(),
-		Targets:     s.loadBalancerTargets,
-		SeedTargets: s.loadBalancerSeedTargets,
-		SetID:       s.setAPIServerLoadBalancerID,
-		SetAddress:  s.setAPIServerLoadBalancerAddress,
+		ID:              s.StackitCluster.Status.APIServerLoadBalancerID,
+		Name:            s.StackitCluster.Name + "-apiserver",
+		NetworkID:       s.StackitCluster.Spec.Network.ID,
+		Port:            loadbalancer.DefaultAPIServerPort,
+		Tags:            s.apiServerLoadBalancerTags(),
+		Targets:         s.loadBalancerTargets,
+		SeedTargets:     s.loadBalancerSeedTargets,
+		SetLoadBalancer: s.setAPIServerLoadBalancer,
 	}
 }
 

@@ -28,15 +28,13 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	loadBalancer, err := s.ensureLoadBalancer(ctx, spec)
+	loadBalancer, created, err := s.ensureLoadBalancer(ctx, spec)
 	if err != nil {
 		return err
 	}
-	if spec.SetID != nil {
-		spec.SetID(loadBalancer.ID)
-	}
-	if spec.SetAddress != nil {
-		spec.SetAddress(loadBalancer.IP, spec.Port)
+	loadBalancer.Port = spec.Port
+	if spec.SetLoadBalancer != nil {
+		spec.SetLoadBalancer(loadBalancer, created)
 	}
 	if loadBalancer.IP == "" {
 		return nil
@@ -50,7 +48,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(spec.Targets))
 	}
-	log.V(1).Info("Reconciled load balancer resources", "loadBalancerID", loadBalancer.ID)
+	log.V(1).Info("Reconciled load balancer resources", "loadBalancerID", loadBalancer.ID, "created", created)
 	return nil
 }
 
@@ -68,11 +66,8 @@ func (s *Service) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if spec.SetID != nil {
-		spec.SetID("")
-	}
-	if spec.SetAddress != nil {
-		spec.SetAddress("", 0)
+	if spec.SetLoadBalancer != nil {
+		spec.SetLoadBalancer(nil, false)
 	}
 	return nil
 }
@@ -134,13 +129,13 @@ func (s *Service) deleteByID(ctx context.Context, id string) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, error) {
+func (s *Service) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec) (*LoadBalancer, bool, error) {
 	loadBalancer, err := shared.ResolveExisting(ctx, spec.ID, spec.Tags, s.get, s.findByTags, isIgnorableLookupError)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if loadBalancer != nil {
-		return loadBalancer, nil
+		return loadBalancer, false, nil
 	}
 
 	payload := spec.toCreatePayload(s.scope.Region())
@@ -148,11 +143,11 @@ func (s *Service) ensureLoadBalancer(ctx context.Context, spec LoadBalancerSpec)
 		CreateLoadBalancerPayload(payload).
 		Execute()
 	if err != nil {
-		return nil, shared.ClassifySDKError("create load balancer", err)
+		return nil, false, shared.ClassifySDKError("create load balancer", err)
 	}
 	out := loadBalancerFromSDK(lbResp)
 	logf.FromContext(ctx).V(1).Info("Created load balancer", "name", spec.Name, "loadBalancerID", out.ID)
-	return out, nil
+	return out, true, nil
 }
 
 func (s *Service) listIDsByTags(ctx context.Context, tags map[string]string) ([]string, error) {
@@ -236,17 +231,7 @@ func loadBalancerFromSDK(in *lb.LoadBalancer) *LoadBalancer {
 		ID:   in.GetName(),
 		Name: in.GetName(),
 		IP:   shared.FirstNonEmpty(in.GetExternalAddress(), in.GetPrivateAddress()),
-		Port: listenerPort(in.GetListeners()),
 	}
-}
-
-func listenerPort(listeners []lb.Listener) int32 {
-	for _, listener := range listeners {
-		if port := listener.GetPort(); port > 0 {
-			return port
-		}
-	}
-	return 0
 }
 
 func isIgnorableLookupError(err error) bool {

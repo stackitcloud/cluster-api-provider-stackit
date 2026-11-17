@@ -200,8 +200,10 @@ func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string
 				"capistackit-test": "true",
 				"capistackit-name": name,
 			},
-			SetID: func(id string) {
-				scope.spec.ID = id
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
+				if apiServerLB != nil {
+					scope.spec.ID = apiServerLB.ID
+				}
 			},
 		},
 	}
