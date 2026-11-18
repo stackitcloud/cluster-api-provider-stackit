@@ -8,11 +8,11 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-package controller
+package server
 
 import "fmt"
 
-type serverStateInfo struct {
+type stateInfo struct {
 	reason      string
 	description string
 	// warn marks states that do not resolve on their own. Their reason must
@@ -24,7 +24,7 @@ type serverStateInfo struct {
 // serverStates maps the documented STACKIT server states.
 // https://docs.api.stackit.cloud/documentation/iaas/version/v2#tag/Servers/operation/V2GetServer
 // https://github.com/stackitcloud/stackit-sdk-go/blob/services/iaas/v1.14.5/services/iaas/v2api/model_server.go#L63-L64
-var serverStates = map[string]serverStateInfo{
+var serverStates = map[string]stateInfo{
 	"ACTIVE":       {"InstanceActive", "server is active", false},
 	"BACKING-UP":   {"InstanceBusy", "server is temporarily unavailable", false},
 	"CREATING":     {"InstanceStarting", "server is starting", false},
@@ -51,16 +51,16 @@ var serverStates = map[string]serverStateInfo{
 	"UPDATING":     {"InstanceBusy", "server is temporarily unavailable", false},
 }
 
-// serverStateCondition maps a server state and power status to a condition
+// StateCondition maps a server state and power status to a condition
 // reason and message. ready is true when the server can be used.
-func serverStateCondition(state, powerStatus string) (ready bool, reason, message string, warn bool) {
+func StateCondition(state, powerStatus string) (ready bool, reason, message string, warn bool) {
 	if state == "" {
 		ready = true
 		return
 	}
 	info, ok := serverStates[state]
 	if !ok {
-		info = serverStateInfo{"InstanceNotActive", "server is not active", false}
+		info = stateInfo{"InstanceNotActive", "server is not active", false}
 	}
 	ready, warn, reason, description := state == "ACTIVE", info.warn, info.reason, info.description
 	if state == "ACTIVE" {

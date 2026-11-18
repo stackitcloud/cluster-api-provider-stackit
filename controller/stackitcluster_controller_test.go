@@ -28,7 +28,11 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
-	bastionservice "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
 var _ = Describe("StackitCluster Controller", func() {
@@ -51,7 +55,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		credentials = "stackit-credentials-" + clusterName
 		stackitKey = types.NamespacedName{Namespace: namespace, Name: clusterName}
 		request = reconcile.Request{NamespacedName: stackitKey}
-		fakeCloud = cloudfake.New(cloud.Network{ID: testNetworkID, Name: "network"})
+		fakeCloud = cloudfake.New(network.Network{ID: testNetworkID, Name: "network"})
 		reconciler = &StackitClusterReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
@@ -132,7 +136,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = fakeCloud.GetNetwork(ctx, got.Status.Network.ID)
-		Expect(cloud.IsNotFound(err)).To(BeTrue(), "managed network should be deleted on cluster teardown")
+		Expect(shared.IsNotFound(err)).To(BeTrue(), "managed network should be deleted on cluster teardown")
 	})
 
 	It("resolves and deletes managed network via tags even when status.network was lost", func() {
@@ -167,7 +171,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = fakeCloud.GetNetwork(ctx, createdNetID)
-		Expect(cloud.IsNotFound(err)).To(BeTrue(), "network should be deleted via tag fallback")
+		Expect(shared.IsNotFound(err)).To(BeTrue(), "network should be deleted via tag fallback")
 	})
 
 	It("requeues deletion with condition when managed network has attached resources", func() {
@@ -191,7 +195,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
 
 		By("injecting a conflict error on network delete")
-		fakeCloud.FailNextDeleteNetwork = fmt.Errorf("ports still attached: %w", cloud.ErrConflict)
+		fakeCloud.FailNextDeleteNetwork = fmt.Errorf("ports still attached: %w", shared.ErrConflict)
 
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 		result, err := reconciler.Reconcile(ctx, req)
@@ -238,7 +242,33 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(got.Status.Bastion.SecurityGroupID).NotTo(BeEmpty())
 		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
-		Expect(fakeCloud.SecurityGroupCount()).To(Equal(1))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		Expect(fakeCloud.SecurityGroupRules(got.Status.Bastion.SecurityGroupID)).To(ConsistOf(
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionIngress,
+				Protocol:  securitygroup.ProtocolTCP,
+				PortMin:   22,
+				PortMax:   22,
+				IPRange:   "203.0.113.10/32",
+			},
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionEgress,
+			},
+		))
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
+		Expect(fakeCloud.SecurityGroupRules(nodeSG.ID)).To(ConsistOf(
+			securitygroup.Rule{
+				Direction:             securitygroup.DirectionIngress,
+				Protocol:              securitygroup.ProtocolTCP,
+				PortMin:               22,
+				PortMax:               22,
+				RemoteSecurityGroupID: got.Status.Bastion.SecurityGroupID,
+			},
+			securitygroup.Rule{
+				Direction: securitygroup.DirectionEgress,
+			},
+		))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Available")
 	})
 
@@ -272,14 +302,24 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
-		})
-		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
+		stackitMachine := newStackitMachine(got.Name+"-worker-0", got.Namespace, "worker-0")
+		stackitMachine.Spec.SecurityGroups = []string{nodeSG.ID}
+		machineScope, err := scope.NewMachineScope(
+			k8sClient,
+			&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: got.Namespace}},
+			&clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: "worker-0", UID: "uid-1"}},
+			got,
+			stackitMachine,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		machineScope.SetCloudClient(fakeCloud)
+		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		workerServerID := stackitMachine.Status.InstanceID
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
+
 		got.Spec.Bastion.Enabled = false
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
@@ -289,7 +329,8 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeFalse())
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
 		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionTrue, "Skipped")
@@ -305,13 +346,6 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion.PublicIP).NotTo(BeEmpty())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
-		})
-		Expect(err).NotTo(HaveOccurred())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
@@ -354,7 +388,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		got.Status.Bastion = infrav1.StackitBastionStatus{}
 		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
 		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
-		Expect(hasBastionStatus(got.Status.Bastion)).To(BeFalse())
+		Expect(got.Status.Bastion).To(Equal(infrav1.StackitBastionStatus{}))
 		Expect(got.Status.APIServerLoadBalancerID).To(BeEmpty())
 
 		By("deleting the cluster")
@@ -401,6 +435,41 @@ var _ = Describe("StackitCluster Controller", func() {
 		Eventually(func() bool {
 			return apierrors.IsNotFound(k8sClient.Get(ctx, key, &infrav1.StackitCluster{}))
 		}).Should(BeTrue(), "cluster stayed in Terminating because the finalizer was never removed")
+	})
+
+	It("requeues on invalid credentials during deletion and keeps the finalizer until corrected", func() {
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(1))
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
+		}
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(credentialsRetryRequeueAfter))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Ready).To(BeFalse())
+		Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
+		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
+
+		By("correcting the credentials so deletion succeeds")
+		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			return fakeCloud, nil
+		}
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeCloud.LoadBalancerCount()).To(Equal(0))
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, stackitKey, &infrav1.StackitCluster{}))
+		}).Should(BeTrue())
 	})
 
 	It("tears the bastion down when disabled even if its status was never persisted", func() {
@@ -488,14 +557,6 @@ var _ = Describe("StackitCluster Controller", func() {
 			"load balancer leaked because cleanup was gated on spec and status")
 	})
 
-	It("validates bastion specs", func() {
-		spec := validBastionSpec()
-		Expect(validateBastionSpec(spec)).To(Succeed())
-
-		spec.AllowedCIDRs = []string{"not-a-cidr"}
-		Expect(validateBastionSpec(spec)).To(MatchError(ContainSubstring("invalid CIDR")))
-	})
-
 	It("creates the bastion with cloud-init user data from a ConfigMap", func() {
 		expectBastionCloudInit(
 			ctx, reconciler, request, stackitKey, fakeCloud,
@@ -533,7 +594,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterBastionReadyCondition, metav1.ConditionFalse, "CloudInitRefError")
 	})
 
-	It("recreates the bastion and node SSH access when referenced cloud-init changes", func() {
+	It("recreates the bastion without tearing down security groups or public IP when referenced cloud-init changes", func() {
 		got := &infrav1.StackitCluster{}
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		cloudInitName := "bastion-cloud-init-" + clusterName
@@ -552,15 +613,29 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		oldServerID := got.Status.Bastion.ServerID
+		oldBastionSGID := got.Status.Bastion.SecurityGroupID
+		oldPublicIPID := got.Status.Bastion.PublicIPID
 		Expect(oldServerID).NotTo(BeEmpty())
-		_, err = fakeCloud.EnsureNodeSSHAccess(ctx, cloud.NodeSSHAccessInput{
-			Name:                   got.Name + "-node-ssh",
-			ServerID:               got.Status.Bastion.ServerID,
-			BastionSecurityGroupID: got.Status.Bastion.SecurityGroupID,
-			Tags:                   bastionservice.NodeSSHAccessTags(got),
-		})
-		Expect(err).NotTo(HaveOccurred())
+		Expect(oldBastionSGID).NotTo(BeEmpty())
+		Expect(oldPublicIPID).NotTo(BeEmpty())
 		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		nodeSG := fakeCloud.FindSecurityGroupByTags(scope.NodeSSHTags(got))
+		Expect(nodeSG).NotTo(BeNil())
+
+		stackitMachine := newStackitMachine(got.Name+"-worker-0", got.Namespace, "worker-0")
+		stackitMachine.Spec.SecurityGroups = []string{nodeSG.ID}
+		machineScope, err := scope.NewMachineScope(
+			k8sClient,
+			&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: got.Namespace}},
+			&clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: "worker-0", UID: "uid-1"}},
+			got,
+			stackitMachine,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		machineScope.SetCloudClient(fakeCloud)
+		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		workerServerID := stackitMachine.Status.InstanceID
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
 		configMap := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cloudInitName, Namespace: namespace}, configMap)).To(Succeed())
@@ -570,9 +645,10 @@ var _ = Describe("StackitCluster Controller", func() {
 		result, err = reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(fakeCloud.ServerCount()).To(Equal(0))
-		Expect(fakeCloud.PublicIPCount()).To(Equal(0))
-		Expect(fakeCloud.SecurityGroupCount()).To(Equal(0))
+		Expect(fakeCloud.ServerCount()).To(Equal(1))
+		Expect(fakeCloud.PublicIPCount()).To(Equal(1))
+		Expect(fakeCloud.SecurityGroupCount()).To(Equal(2))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
 		result, err = reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -580,6 +656,57 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
+		Expect(got.Status.Bastion.ServerID).NotTo(Equal(oldServerID))
+		Expect(got.Status.Bastion.SecurityGroupID).To(Equal(oldBastionSGID))
+		Expect(got.Status.Bastion.PublicIPID).To(Equal(oldPublicIPID))
+		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
+		Expect(fakeCloud.ServerHasSecurityGroup(got.Status.Bastion.ServerID, oldBastionSGID)).To(BeTrue())
+		Expect(fakeCloud.PublicIPAttachedToServer(oldPublicIPID, got.Status.Bastion.ServerID)).To(BeTrue())
+		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
+		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(configMap.Data["userData"]))
+	})
+
+	It("recreates the bastion when cloud-init changes even after bastion ServerID was lost from status", func() {
+		cloudInitName := "bastion-cloud-init-lost-id-" + clusterName
+		expectBastionCloudInit(
+			ctx, reconciler, request, stackitKey, fakeCloud,
+			"ConfigMap", cloudInitName,
+			"#cloud-config\npackages:\n- htop\n", createCloudInitConfigMap,
+		)
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		oldServerID := got.Status.Bastion.ServerID
+
+		By("losing Status.Bastion.ServerID while cloud-init changes")
+		got.Status.Bastion.ServerID = ""
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		configMap := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cloudInitName, Namespace: namespace}, configMap)).To(Succeed())
+		configMap.Data["userData"] = "#cloud-config\npackages:\n- jq\n"
+		Expect(k8sClient.Update(ctx, configMap)).To(Succeed())
+
+		By("adopting the existing server without overwriting CloudInitHash")
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Bastion.ServerID).To(Equal(oldServerID))
+		Expect(got.Status.Bastion.CloudInitHash).NotTo(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
+
+		By("detecting the cloud-init drift on the subsequent reconcile and recreating the bastion")
+		result, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(fakeCloud.ServerCount()).To(Equal(0))
+
+		result, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Bastion.ServerID).NotTo(Equal(oldServerID))
 		Expect(got.Status.Bastion.CloudInitHash).To(Equal(bastionCloudInitHash([]byte(configMap.Data["userData"]))))
 		Expect(string(fakeCloud.ServerUserData(got.Status.Bastion.ServerID))).To(Equal(configMap.Data["userData"]))
@@ -602,7 +729,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("marks conditions not ready when API server load balancer creation fails", func() {
-		fakeCloud.FailNextEnsureLB = fmt.Errorf("load balancer creation rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextEnsureLB = fmt.Errorf("load balancer creation rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -620,7 +747,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		got.Spec.Bastion = validBastionSpec()
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
-		fakeCloud.FailNextEnsureBastion = fmt.Errorf("bastion creation rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextCreateServer = fmt.Errorf("bastion creation rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -632,7 +759,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	})
 
 	It("requeues when network lookup returns a transient error", func() {
-		fakeCloud.FailNextGetNetwork = fmt.Errorf("temporary network lookup failure: %w", cloud.ErrTransient)
+		fakeCloud.FailNextGetNetwork = fmt.Errorf("temporary network lookup failure: %w", shared.ErrTransient)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -648,7 +775,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	// enqueues the cluster once the credentials are rejected.
 	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-			return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
+			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 		}
 
 		result, err := reconciler.Reconcile(ctx, request)
@@ -751,7 +878,7 @@ var _ = Describe("StackitCluster Controller", func() {
 
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
-		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer timeout: %w", cloud.ErrTransient)
+		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer timeout: %w", shared.ErrTransient)
 
 		_, err = reconciler.Reconcile(ctx, request)
 		Expect(err).To(HaveOccurred())
@@ -842,7 +969,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.APIServerLoadBalancerID).NotTo(BeEmpty())
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
-		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer: %w", cloud.ErrTransient)
+		fakeCloud.FailNextDeleteLB = fmt.Errorf("delete load balancer: %w", shared.ErrTransient)
 
 		_, err = reconciler.Reconcile(ctx, request)
 		Expect(err).To(HaveOccurred())
@@ -959,7 +1086,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(got.Status.Ready).To(BeTrue())
 
-		fakeCloud.FailNextSetTargets = fmt.Errorf("update target pool timeout: %w", cloud.ErrTransient)
+		fakeCloud.FailNextSetTargets = fmt.Errorf("update target pool timeout: %w", shared.ErrTransient)
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
@@ -975,7 +1102,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	It("requeues when the first target pool update fails permanently", func() {
 		// Without the requeue nothing would drive another reconcile.
 		createControlPlaneMachine(ctx, "cp-0-"+clusterName, clusterName, "10.0.0.11")
-		fakeCloud.FailNextSetTargets = fmt.Errorf("target pool rejected: %w", cloud.ErrInvalidInput)
+		fakeCloud.FailNextSetTargets = fmt.Errorf("target pool rejected: %w", shared.ErrInvalidInput)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -1089,8 +1216,25 @@ var _ = Describe("StackitCluster Controller", func() {
 		}))
 	})
 
+	It("creates the bastion host in a single availability zone and not in metro (-m)", func() {
+		fakeCloud.AvailabilityZones = []string{"eu01-m", "eu01-3", "eu01-2"}
+
+		got := &infrav1.StackitCluster{}
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		got.Spec.Bastion = validBastionSpec()
+		Expect(k8sClient.Update(ctx, got)).To(Succeed())
+
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		Expect(fakeCloud.LastCreateServerInput.AvailabilityZone).To(Equal("eu01-2"))
+		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+		Expect(got.Status.Bastion.ServerID).NotTo(BeEmpty())
+	})
+
 	It("reports an error condition when listing availability zones fails", func() {
-		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", cloud.ErrTransient)
+		fakeCloud.FailNextListAZ = fmt.Errorf("cloud failure: %w", shared.ErrTransient)
 
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())

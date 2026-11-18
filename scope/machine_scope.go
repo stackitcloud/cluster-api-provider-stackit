@@ -12,9 +12,11 @@ package scope
 
 import (
 	"context"
-	"slices"
+	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -22,16 +24,23 @@ import (
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 )
 
 // MachineScope holds the per-reconcile state for a StackitMachine.
 type MachineScope struct {
-	Client         client.Client
-	Cluster        *clusterv1.Cluster
 	Machine        *clusterv1.Machine
 	StackitCluster *infrav1.StackitCluster
 	StackitMachine *infrav1.StackitMachine
+	cluster        *clusterv1.Cluster
+	cloudClient    cloud.Client
+
+	bootstrapData       []byte
+	instancePowerStatus string
+	instanceCreated     bool
 
 	patchHelper *patch.Helper
 }
@@ -50,11 +59,10 @@ func NewMachineScope(
 		return nil, err
 	}
 	return &MachineScope{
-		Client:         k8sClient,
-		Cluster:        cluster,
 		Machine:        machine,
 		StackitCluster: stackitCluster,
 		StackitMachine: stackitMachine,
+		cluster:        cluster,
 		patchHelper:    patchHelper,
 	}, nil
 }
@@ -71,7 +79,11 @@ func (s *MachineScope) PatchObject(ctx context.Context) error {
 }
 
 func (s *MachineScope) SetConditions(status metav1.ConditionStatus, reason, message string, conditionTypes ...string) {
-	util.SetConditions(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, status, reason, message, conditionTypes...)
+	setConditions(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, status, reason, message, conditionTypes...)
+}
+
+func (s *MachineScope) SetPausedCondition(paused bool, message string) {
+	setPausedCondition(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, paused, message)
 }
 
 func (s *MachineScope) SetReady() {
@@ -84,34 +96,60 @@ func (s *MachineScope) SetNotReady(reason, message string, conditionTypes ...str
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
 }
 
-func (s *MachineScope) Tags() map[string]string {
+// CredentialFailureResult records the failure and decides how to retry.
+func (s *MachineScope) CredentialFailureResult(
+	err error,
+	requeueAfter time.Duration,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady("CredentialsInvalid", err.Error(), conditionTypes...)
+	return credentialFailureResult(err, requeueAfter)
+}
+
+func (s *MachineScope) CloudFailureResult(
+	reason string,
+	err error,
+	requeueAfter time.Duration,
+	returnError bool,
+	conditionTypes ...string,
+) (ctrl.Result, error) {
+	s.SetNotReady(reason, err.Error(), conditionTypes...)
+	return cloudFailureResult(err, requeueAfter, returnError)
+}
+
+func (s *MachineScope) tags() map[string]string {
 	return util.MachineTags(
-		s.Cluster.Name,
-		s.Cluster.Namespace,
+		s.cluster.Name,
+		s.cluster.Namespace,
 		s.Machine.Name,
 		string(s.Machine.UID),
 		s.StackitMachine.Spec.AdditionalLabels,
 	)
 }
 
-func (s *MachineScope) SetInstance(server *cloud.Server) string {
-	providerID := cloud.NewProviderID(s.StackitCluster.Spec.ProjectID, s.StackitCluster.Spec.Region, server.ID)
-	s.StackitMachine.Status.InstanceID = server.ID
-	s.StackitMachine.Status.InstanceState = server.State
-	s.StackitMachine.Status.AvailabilityZone = server.AvailabilityZone
+func (s *MachineScope) setInstance(srv *server.Server, created bool) {
+	if srv == nil {
+		s.instanceCreated = false
+		s.instancePowerStatus = ""
+		s.StackitMachine.Status.Addresses = nil
+		s.StackitMachine.Status.InstanceID = ""
+		s.StackitMachine.Status.InstanceState = ""
+		s.StackitMachine.Status.AvailabilityZone = ""
+		return
+	}
+	s.instanceCreated = created
+	s.instancePowerStatus = srv.PowerStatus
+	s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
+	providerID := fmt.Sprintf("stackit://%s", srv.ID)
+	s.StackitMachine.Status.InstanceID = srv.ID
+	s.StackitMachine.Status.InstanceState = srv.State
+	s.StackitMachine.Status.AvailabilityZone = srv.AvailabilityZone
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
-	return providerID
 }
 
-func (s *MachineScope) ClearInstance() {
-	s.StackitMachine.Status.InstanceID = ""
-	s.StackitMachine.Status.InstanceState = ""
-	s.StackitMachine.Status.AvailabilityZone = ""
-}
-
-// AvailabilityZone returns the resolved availability zone for the machine.
+// availabilityZone returns the resolved availability zone for the machine.
 // Following Cluster API conventions:
 //  1. If Machine.Spec.FailureDomain is set (e.g. by KCP spreading control plane nodes or MachineDeployment),
 //     it is used.
@@ -119,7 +157,7 @@ func (s *MachineScope) ClearInstance() {
 //  3. Otherwise, if neither is set, it defaults to the first available failure domain
 //     from StackitCluster.Status.FailureDomains (sorted alphabetically). This prevents the STACKIT IaaS
 //     API from defaulting to the expensive metro zone (eu01-m).
-func (s *MachineScope) AvailabilityZone() string {
+func (s *MachineScope) availabilityZone() string {
 	if s.Machine != nil && s.Machine.Spec.FailureDomain != "" {
 		return s.Machine.Spec.FailureDomain
 	}
@@ -128,20 +166,87 @@ func (s *MachineScope) AvailabilityZone() string {
 		return s.StackitMachine.Spec.AvailabilityZone
 	}
 
-	if s.StackitCluster != nil && len(s.StackitCluster.Status.FailureDomains) > 0 {
-		zones := make([]string, 0, len(s.StackitCluster.Status.FailureDomains))
-		for _, fd := range s.StackitCluster.Status.FailureDomains {
-			zones = append(zones, fd.Name)
+	return defaultAvailabilityZone(s.StackitCluster)
+}
+
+func (s *MachineScope) SetCloudClient(cloudClient cloud.Client) {
+	s.cloudClient = cloudClient
+}
+
+func (s *MachineScope) ProjectID() string {
+	if s.StackitCluster.Spec.ProjectID != "" {
+		return s.StackitCluster.Spec.ProjectID
+	}
+	return s.cloudClient.ProjectID()
+}
+
+func (s *MachineScope) Region() string {
+	if s.StackitCluster.Spec.Region != "" {
+		return s.StackitCluster.Spec.Region
+	}
+	return s.cloudClient.Region()
+}
+
+func (s *MachineScope) IaaSClient() *iaas.APIClient {
+	return s.cloudClient.IaaSClient()
+}
+
+func (s *MachineScope) SetBootstrapData(data []byte) {
+	s.bootstrapData = data
+}
+
+func (s *MachineScope) InstancePowerStatus() string {
+	return s.instancePowerStatus
+}
+
+func (s *MachineScope) InstanceCreated() bool {
+	return s.instanceCreated
+}
+
+func (s *MachineScope) ServerSpec() server.ServerSpec {
+	return server.ServerSpec{
+		ID:               s.StackitMachine.Status.InstanceID,
+		Name:             s.StackitMachine.Name,
+		ImageID:          s.StackitMachine.Spec.ImageID,
+		MachineType:      s.StackitMachine.Spec.MachineType,
+		AvailabilityZone: s.availabilityZone(),
+		SSHKeyName:       s.StackitMachine.Spec.SSHKeyName,
+		NetworkID:        s.NetworkID(),
+		SecurityGroups:   s.StackitMachine.Spec.SecurityGroups,
+		UserData:         s.bootstrapData,
+		Tags:             s.tags(),
+		RootVolume:       rootVolumeFromSpec(s.StackitMachine.Spec.RootVolume),
+		DisallowRecreate: s.StackitMachine.Status.Initialization.Provisioned,
+		SetServer:        s.setInstance,
+	}
+}
+
+func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	if !s.StackitCluster.Spec.Bastion.Enabled {
+		return nil
+	}
+	return []securitygroup.SecurityGroupSpec{
+		nodeSSHSecurityGroupSpec(
+			s.StackitCluster,
+			s.StackitCluster.Status.Bastion.SecurityGroupID,
+			s.StackitMachine.Status.InstanceID,
+		),
+	}
+}
+
+func machineAddressesFromServer(in []server.Address) []clusterv1.MachineAddress {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]clusterv1.MachineAddress, len(in))
+	for i, address := range in {
+		out[i] = clusterv1.MachineAddress{
+			Type:    clusterv1.MachineAddressType(address.Type),
+			Address: address.Address,
 		}
-		slices.Sort(zones)
-		return zones[0]
 	}
-
-	if s.StackitCluster != nil && s.StackitCluster.Spec.Region != "" {
-		return s.StackitCluster.Spec.Region + "-1"
-	}
-
-	return ""
+	return out
 }
 
 // NetworkID returns the network ID for this machine, resolving in order:

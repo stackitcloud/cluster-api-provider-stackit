@@ -20,6 +20,9 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
 const (
@@ -34,16 +37,15 @@ const (
 func TestSDKClientCredentialsIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 
-	_, err := client.FindServerByTags(context.Background(), map[string]string{
+	ids, err := shared.ListServerIDsByTags(context.Background(), client, map[string]string{
 		"capistackit-test": "credential-check",
 	})
-	if IsNotFound(err) {
-		return
-	}
 	if err != nil {
-		t.Fatalf("FindServerByTags() error = %v", err)
+		t.Fatalf("ListServerIDsByTags() error = %v", err)
 	}
-	t.Fatal("FindServerByTags() unexpectedly found a server matching integration-test tags")
+	if len(ids) > 0 {
+		t.Fatal("ListServerIDsByTags() unexpectedly found a server matching integration-test tags")
+	}
 }
 
 func TestSDKClientListNetworksIntegration(t *testing.T) {
@@ -66,13 +68,13 @@ func TestSDKClientLoadBalancerCreateDeleteIntegration(t *testing.T) {
 	client := newIntegrationClient(t)
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
-	loadBalancer := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
+	scope := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   targetIP,
 	})
 
-	if err := client.DeleteAPIServerLoadBalancer(context.Background(), loadBalancer.ID); err != nil {
-		t.Fatalf("DeleteAPIServerLoadBalancer() error = %v", err)
+	if err := loadbalancer.New(scope).Delete(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Delete() error = %v", err)
 	}
 }
 
@@ -81,25 +83,23 @@ func TestSDKClientLoadBalancerTargetIntegration(t *testing.T) {
 	networkID := requiredIntegrationEnv(t, envIntegrationNetworkID)
 	targetIP := requiredIntegrationEnv(t, envIntegrationTargetIP)
 	initialIP := integrationInitialTargetIP(targetIP)
-	loadBalancer := createIntegrationLoadBalancer(t, client, networkID, LoadBalancerTargetInput{
+	scope := createIntegrationLoadBalancer(t, client, networkID, loadbalancer.Target{
 		Name: "capistackit-initial-target",
 		IP:   initialIP,
 	})
-	t.Cleanup(func() {
-		if err := client.DeleteAPIServerLoadBalancer(context.Background(), loadBalancer.ID); err != nil && !IsNotFound(err) {
-			t.Logf("DeleteAPIServerLoadBalancer() cleanup error = %v", err)
-		}
-	})
 
-	targets := []LoadBalancerTargetInput{
+	targets := []loadbalancer.Target{
 		{Name: "capistackit-initial-target", IP: initialIP},
 		{Name: "capistackit-integration-target", IP: targetIP},
 	}
-	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), loadBalancer.ID, 6443, targets); err != nil {
-		t.Fatalf("SetAPIServerLoadBalancerTargets() error = %v", err)
+	scope.spec.Targets = targets
+	svc := loadbalancer.New(scope)
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
 	}
-	if err := client.SetAPIServerLoadBalancerTargets(context.Background(), loadBalancer.ID, 6443, targets[:1]); err != nil {
-		t.Fatalf("SetAPIServerLoadBalancerTargets() shrink error = %v", err)
+	scope.spec.Targets = targets[:1]
+	if err := svc.Reconcile(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() shrink error = %v", err)
 	}
 }
 
@@ -175,42 +175,51 @@ func serviceAccountProjectID(t *testing.T, serviceAccountJSON []byte) string {
 	return key.ProjectID
 }
 
-func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target LoadBalancerTargetInput) *LoadBalancer {
+type integrationLBScope struct {
+	Client
+	spec loadbalancer.LoadBalancerSpec
+}
+
+func (s *integrationLBScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
+	return s.spec
+}
+
+func createIntegrationLoadBalancer(t *testing.T, client Client, networkID string, target loadbalancer.Target) *integrationLBScope {
 	t.Helper()
 
 	name := fmt.Sprintf("capistackit-it-%d", time.Now().UnixNano())
-	loadBalancer, err := client.EnsureAPIServerLoadBalancer(context.Background(), LoadBalancerInput{
-		Name:      name,
-		Region:    integrationRegion(),
-		NetworkID: networkID,
-		Port:      6443,
-		Targets:   []LoadBalancerTargetInput{target},
-		Tags: map[string]string{
-			"capistackit-test": "true",
-			"capistackit-name": name,
+	var scope *integrationLBScope
+	scope = &integrationLBScope{
+		Client: client,
+		spec: loadbalancer.LoadBalancerSpec{
+			Name:        name,
+			NetworkID:   networkID,
+			Port:        6443,
+			SeedTargets: []loadbalancer.Target{target},
+			Tags: map[string]string{
+				"capistackit-test": "true",
+				"capistackit-name": name,
+			},
+			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
+				if apiServerLB != nil {
+					scope.spec.ID = apiServerLB.ID
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
 	}
-	if loadBalancer == nil || loadBalancer.ID == "" {
-		t.Fatalf("EnsureAPIServerLoadBalancer() = %#v, want load balancer with ID", loadBalancer)
+	if err := loadbalancer.New(scope).Reconcile(context.Background()); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
+	}
+	if scope.spec.ID == "" {
+		t.Fatal("loadbalancer.Reconcile() did not record a load balancer ID")
 	}
 	t.Cleanup(func() {
-		if err := client.DeleteAPIServerLoadBalancer(context.Background(), loadBalancer.ID); err != nil &&
-			!IsNotFound(err) &&
-			!errors.Is(err, ErrInvalidInput) {
-			t.Logf("DeleteAPIServerLoadBalancer() cleanup error = %v", err)
+		if err := loadbalancer.New(scope).Delete(context.Background()); err != nil &&
+			!errors.Is(err, shared.ErrInvalidInput) {
+			t.Logf("loadbalancer.Delete() cleanup error = %v", err)
 		}
 	})
-	return loadBalancer
-}
-
-func integrationRegion() string {
-	if region := os.Getenv(envIntegrationRegion); region != "" {
-		return region
-	}
-	return "eu01"
+	return scope
 }
 
 func integrationInitialTargetIP(targetIP string) string {

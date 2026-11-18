@@ -14,17 +14,25 @@ package fake
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
-)
-
-const (
-	bootstrapTargetName = "capi-bootstrap-placeholder"
-	bootstrapTargetIP   = "10.0.0.1"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
+	"github.com/stackitcloud/stackit-sdk-go/core/config"
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
 )
 
 // Client is an in-memory implementation of cloud.Client.
@@ -36,33 +44,38 @@ type Client struct {
 	publicIPs      map[string]*publicIPEntry
 	securityGroups map[string]*securityGroupEntry
 	networks       map[string]*networkEntry
+	iaasClient     *iaas.APIClient
+	lbClient       *lb.APIClient
 
 	nextID int
 
 	// failure injection: if non-nil, the next call returns this error and the
 	// field is cleared.
-	FailNextCreateServer  error
-	FailNextDeleteServer  error
-	FailNextGetServer     error
-	FailNextFindServer    error
-	FailNextEnsureLB      error
-	FailNextDeleteLB      error
-	FailNextSetTargets    error
-	FailNextGetNetwork    error
-	FailNextCreateNetwork error
-	FailNextDeleteNetwork error
-	FailNextEnsureBastion error
-	FailNextDeleteBastion error
-	FailNextEnsureNodeSSH error
-	FailNextDeleteNodeSSH error
-	FailNextListAZ        error
+	FailNextCreateServer     error
+	FailNextDeleteServer     error
+	FailNextGetServer        error
+	FailNextFindServer       error
+	FailNextEnsureLB         error
+	FailNextDeleteLB         error
+	FailNextSetTargets       error
+	FailNextGetNetwork       error
+	FailNextCreateNetwork    error
+	FailNextDeleteNetwork    error
+	FailNextAddSecurityGroup error
+	FailNextListAZ           error
+	FailNextGetPublicIP      error
+	FailNextListPublicIPs    error
+	FailNextCreatePublicIP   error
+	FailNextDeletePublicIP   error
+	FailNextAddPublicIP      error
+	FailNextRemovePublicIP   error
 
 	// AvailabilityZones is returned by ListAvailabilityZones if non-empty.
 	// Defaults to eu01-1, eu01-2, eu01-3.
 	AvailabilityZones []string
 
-	// LastCreateServerInput records the most recent input passed to CreateServer.
-	LastCreateServerInput cloud.CreateServerInput
+	// LastCreateServerInput records the most recent spec passed to CreateServer.
+	LastCreateServerInput server.ServerSpec
 
 	// Before* hooks, if non-nil, run before the call they belong to. They let a
 	// test observe API server state at the exact moment a cloud call would
@@ -72,43 +85,47 @@ type Client struct {
 
 	// CreateServerCalls counts successful CreateServer calls (for idempotency
 	// assertions).
-	CreateServerCalls  int
-	EnsureBastionCalls int
-	EnsureNodeSSHCalls int
+	CreateServerCalls     int
+	AddSecurityGroupCalls int
 }
 
 type serverEntry struct {
-	server         *cloud.Server
+	server         *server.Server
 	tags           map[string]string
 	securityGroups map[string]struct{}
 	userData       []byte
 }
 
 type lbEntry struct {
-	lb      *cloud.LoadBalancer
+	lb      *loadbalancer.LoadBalancer
 	tags    map[string]string
 	targets map[string]string
 }
 
 type publicIPEntry struct {
-	publicIP *cloud.PublicIP
+	publicIP *publicip.PublicIP
 	tags     map[string]string
 }
 
+type securityGroupRuleEntry struct {
+	id string
+	securitygroup.Rule
+}
+
 type securityGroupEntry struct {
-	securityGroup        *cloud.SecurityGroup
-	tags                 map[string]string
-	allowedCIDRs         []string
-	remoteSecurityGroups []string
+	securityGroup *securitygroup.SecurityGroup
+	description   string
+	tags          map[string]string
+	rules         map[string]*securityGroupRuleEntry
 }
 
 type networkEntry struct {
-	network *cloud.Network
+	network *network.Network
 	tags    map[string]string
 }
 
 // New returns a Client preconfigured with the given networks.
-func New(networks ...cloud.Network) *Client {
+func New(networks ...network.Network) *Client {
 	c := &Client{
 		servers:        make(map[string]*serverEntry),
 		loadBalancers:  make(map[string]*lbEntry),
@@ -122,7 +139,42 @@ func New(networks ...cloud.Network) *Client {
 			network: &n,
 		}
 	}
+	iaasClient, err := iaas.NewAPIClient(
+		config.WithoutAuthentication(),
+		config.WithHTTPClient(&http.Client{Transport: roundTripperFunc(c.roundTripIaaS)}),
+		config.WithEndpoint("http://stackit.fake.local"),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("create fake iaas client: %v", err))
+	}
+	c.iaasClient = iaasClient
+
+	lbClient, err := lb.NewAPIClient(
+		config.WithoutAuthentication(),
+		config.WithHTTPClient(&http.Client{Transport: roundTripperFunc(c.roundTripLB)}),
+		config.WithEndpoint("http://stackit.fake.local"),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("create fake loadbalancer client: %v", err))
+	}
+	c.lbClient = lbClient
 	return c
+}
+
+func (c *Client) ProjectID() string {
+	return "00000000-0000-0000-0000-000000000000"
+}
+
+func (c *Client) Region() string {
+	return "eu01"
+}
+
+func (c *Client) IaaSClient() *iaas.APIClient {
+	return c.iaasClient
+}
+
+func (c *Client) LoadBalancerClient() *lb.APIClient {
+	return c.lbClient
 }
 
 func consume(p *error) error {
@@ -136,513 +188,147 @@ func consume(p *error) error {
 
 func (c *Client) genID() string {
 	c.nextID++
-	return fmt.Sprintf("fake-%d", c.nextID)
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", c.nextID)
 }
 
-func (c *Client) GetServer(_ context.Context, id string) (*cloud.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextGetServer); err != nil {
-		return nil, err
-	}
-	entry, ok := c.servers[id]
-	if !ok {
-		return nil, fmt.Errorf("server %q: %w", id, cloud.ErrNotFound)
-	}
-	return cloneServer(entry.server), nil
-}
-
-func (c *Client) FindServerByTags(_ context.Context, tags map[string]string) (*cloud.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextFindServer); err != nil {
-		return nil, err
-	}
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrNotFound)
-	}
-	for _, entry := range c.servers {
-		if mapContains(entry.tags, tags) {
-			return cloneServer(entry.server), nil
-		}
-	}
-	return nil, fmt.Errorf("no server matching tags: %w", cloud.ErrNotFound)
-}
-
-func (c *Client) ListServersByTags(_ context.Context, tags map[string]string) ([]*cloud.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
-	}
-	servers := []*cloud.Server{}
-	for _, entry := range c.servers {
-		if mapContains(entry.tags, tags) {
-			servers = append(servers, cloneServer(entry.server))
-		}
-	}
-	return servers, nil
-}
-
-// CreateServer creates a server. To satisfy spec section 20 (idempotency),
-// it returns the existing server if one with matching tags already exists.
-func (c *Client) CreateServer(_ context.Context, input cloud.CreateServerInput) (*cloud.Server, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.BeforeCreateServer != nil {
-		c.BeforeCreateServer()
-	}
-	if err := consume(&c.FailNextCreateServer); err != nil {
-		return nil, err
-	}
-	for _, entry := range c.servers {
-		if len(input.Tags) > 0 && mapContains(entry.tags, input.Tags) {
-			return cloneServer(entry.server), nil
-		}
-	}
-
+func (c *Client) createServerEntry(input server.ServerSpec) *serverEntry {
 	id := c.genID()
 	c.LastCreateServerInput = input
 	zone := input.AvailabilityZone
 	if zone == "" {
 		zone = "eu01-1"
 	}
-	server := &cloud.Server{
+	srv := &server.Server{
 		ID:               id,
 		Name:             input.Name,
 		State:            "ACTIVE",
 		AvailabilityZone: zone,
-		Addresses: []cloud.Address{
+		Addresses: []server.Address{
 			{Type: "InternalIP", Address: "10.0.0.10"},
 		},
 	}
-	c.servers[id] = &serverEntry{
-		server:         server,
+	entry := &serverEntry{
+		server:         srv,
 		tags:           copyTags(input.Tags),
 		securityGroups: securityGroupSet(input.SecurityGroups),
 		userData:       append([]byte(nil), input.UserData...),
 	}
+	c.servers[id] = entry
 	c.CreateServerCalls++
-	return cloneServer(server), nil
+	return entry
 }
 
-// DeleteServer removes a server. It returns nil if the server is already gone.
-func (c *Client) DeleteServer(_ context.Context, id string) error {
+func (c *Client) GetNetwork(_ context.Context, id string) (*network.Network, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteServer); err != nil {
-		return err
-	}
-	delete(c.servers, id)
-	return nil
-}
-
-func (c *Client) GetNetwork(_ context.Context, id string) (*cloud.Network, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.BeforeGetNetwork != nil {
+		c.mu.Unlock()
 		c.BeforeGetNetwork()
+		c.mu.Lock()
 	}
+	defer c.mu.Unlock()
+
 	if err := consume(&c.FailNextGetNetwork); err != nil {
 		return nil, err
 	}
 	entry, ok := c.networks[id]
 	if !ok {
-		return nil, fmt.Errorf("network %q: %w", id, cloud.ErrNotFound)
+		return nil, fmt.Errorf("network %q: %w", id, shared.ErrNotFound)
 	}
 	out := *entry.network
 	return &out, nil
 }
 
-func (c *Client) FindNetworkByTags(_ context.Context, tags map[string]string) (*cloud.Network, error) {
+func (c *Client) getPublicIP(_ context.Context, id string) (*publicip.PublicIP, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	matched := c.networksByTags(tags)
-	if len(matched) == 0 {
-		return nil, fmt.Errorf("%w: no network matching tags", cloud.ErrNotFound)
-	}
-	if len(matched) > 1 {
-		return nil, fmt.Errorf("%w: multiple networks matching tags", cloud.ErrConflict)
-	}
-	out := *matched[0]
-	return &out, nil
-}
-
-func (c *Client) ListNetworksByTags(_ context.Context, tags map[string]string) ([]*cloud.Network, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("%w: empty tag selector", cloud.ErrInvalidInput)
-	}
-	matched := c.networksByTags(tags)
-	out := make([]*cloud.Network, 0, len(matched))
-	for _, n := range matched {
-		copy := *n
-		out = append(out, &copy)
-	}
-	return out, nil
-}
-
-func (c *Client) networksByTags(tags map[string]string) []*cloud.Network {
-	var matched []*cloud.Network
-	for _, entry := range c.networks {
-		if mapContains(entry.tags, tags) {
-			matched = append(matched, entry.network)
-		}
-	}
-	return matched
-}
-
-func (c *Client) CreateNetwork(_ context.Context, input cloud.CreateNetworkInput) (*cloud.Network, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextCreateNetwork); err != nil {
+	if err := consume(&c.FailNextGetPublicIP); err != nil {
 		return nil, err
 	}
-	if input.Name == "" {
-		return nil, fmt.Errorf("%w: network name is required", cloud.ErrInvalidInput)
+	if id == "" {
+		return nil, fmt.Errorf("public IP ID is empty: %w", shared.ErrInvalidInput)
 	}
-
-	// Idempotency check matching SDK client behavior
-	if len(input.Tags) > 0 {
-		matched := c.networksByTags(input.Tags)
-		if len(matched) > 1 {
-			return nil, fmt.Errorf("%w: multiple networks matching tags", cloud.ErrConflict)
-		}
-		if len(matched) == 1 {
-			out := *matched[0]
-			return &out, nil
-		}
-	}
-
-	prefixes := []string{}
-	if input.IPv4Prefix != "" {
-		prefixes = []string{input.IPv4Prefix}
-	}
-	net := &cloud.Network{
-		ID:           c.genID(),
-		Name:         input.Name,
-		IPv4Prefixes: prefixes,
-	}
-	c.networks[net.ID] = &networkEntry{
-		network: net,
-		tags:    maps.Clone(input.Tags),
-	}
-	out := *net
-	return &out, nil
-}
-
-func (c *Client) DeleteNetwork(_ context.Context, id string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteNetwork); err != nil {
-		return err
-	}
-	if _, ok := c.networks[id]; !ok {
-		return fmt.Errorf("network %q: %w", id, cloud.ErrNotFound)
-	}
-	delete(c.networks, id)
-	return nil
-}
-
-func (c *Client) EnsureBastion(_ context.Context, input cloud.BastionInput) (*cloud.Bastion, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextEnsureBastion); err != nil {
-		return nil, err
-	}
-	for _, serverEntry := range c.servers {
-		if len(input.Tags) > 0 && mapContains(serverEntry.tags, input.Tags) {
-			publicIP := c.publicIPByTags(input.Tags)
-			securityGroup := c.securityGroupByTags(input.Tags)
-			return &cloud.Bastion{
-				ServerID:          serverEntry.server.ID,
-				ServerState:       serverEntry.server.State,
-				ServerPowerStatus: serverEntry.server.PowerStatus,
-				PublicIPID:        idOfPublicIP(publicIP),
-				PublicIP:          ipOfPublicIP(publicIP),
-				SecurityGroupID:   idOfSecurityGroup(securityGroup),
-			}, nil
-		}
-	}
-
-	securityGroupID := c.genID()
-	securityGroup := &cloud.SecurityGroup{
-		ID:   securityGroupID,
-		Name: input.Name + "-ssh",
-	}
-	c.securityGroups[securityGroupID] = &securityGroupEntry{
-		securityGroup: securityGroup,
-		tags:          copyTags(input.Tags),
-		allowedCIDRs:  append([]string(nil), input.AllowedCIDRs...),
-	}
-
-	serverID := c.genID()
-	server := &cloud.Server{
-		ID:    serverID,
-		Name:  input.Name,
-		State: "ACTIVE",
-		Addresses: []cloud.Address{
-			{Type: "InternalIP", Address: "10.0.0.20"},
-		},
-	}
-	c.servers[serverID] = &serverEntry{
-		server:         server,
-		tags:           copyTags(input.Tags),
-		securityGroups: securityGroupSet([]string{securityGroupID}),
-		userData:       append([]byte(nil), input.CloudInit...),
-	}
-
-	publicIPID := c.genID()
-	publicIP := &cloud.PublicIP{
-		ID:                 publicIPID,
-		IP:                 "203.0.113.22",
-		NetworkInterfaceID: "fake-nic-" + serverID,
-	}
-	c.publicIPs[publicIPID] = &publicIPEntry{publicIP: publicIP, tags: copyTags(input.Tags)}
-
-	c.EnsureBastionCalls++
-	return &cloud.Bastion{
-		ServerID:        serverID,
-		ServerState:     server.State,
-		PublicIPID:      publicIPID,
-		PublicIP:        publicIP.IP,
-		SecurityGroupID: securityGroupID,
-	}, nil
-}
-
-func (c *Client) DeleteBastion(_ context.Context, input cloud.BastionInput, status cloud.Bastion) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextDeleteBastion); err != nil {
-		return err
-	}
-	if status.ServerID != "" {
-		delete(c.servers, status.ServerID)
-	}
-	if status.PublicIPID != "" {
-		delete(c.publicIPs, status.PublicIPID)
-	}
-	if status.SecurityGroupID != "" {
-		delete(c.securityGroups, status.SecurityGroupID)
-	}
-	for id, entry := range c.servers {
-		if mapContains(entry.tags, input.Tags) {
-			delete(c.servers, id)
-		}
-	}
-	for id, entry := range c.publicIPs {
-		if mapContains(entry.tags, input.Tags) {
-			delete(c.publicIPs, id)
-		}
-	}
-	for id, entry := range c.securityGroups {
-		if mapContains(entry.tags, input.Tags) {
-			delete(c.securityGroups, id)
-		}
-	}
-	return nil
-}
-
-func (c *Client) EnsureNodeSSHAccess(_ context.Context, input cloud.NodeSSHAccessInput) (*cloud.SecurityGroup, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextEnsureNodeSSH); err != nil {
-		return nil, err
-	}
-	serverEntry, ok := c.servers[input.ServerID]
+	entry, ok := c.publicIPs[id]
 	if !ok {
-		return nil, fmt.Errorf("server %q: %w", input.ServerID, cloud.ErrNotFound)
+		return nil, fmt.Errorf("public IP %q: %w", id, shared.ErrNotFound)
 	}
-	securityGroup := c.securityGroupByTags(input.Tags)
-	if securityGroup == nil {
-		securityGroup = &cloud.SecurityGroup{
-			ID:   c.genID(),
-			Name: input.Name,
-		}
-		c.securityGroups[securityGroup.ID] = &securityGroupEntry{
-			securityGroup:        securityGroup,
-			tags:                 copyTags(input.Tags),
-			remoteSecurityGroups: []string{input.BastionSecurityGroupID},
-		}
-	} else {
-		entry := c.securityGroups[securityGroup.ID]
-		if !containsString(entry.remoteSecurityGroups, input.BastionSecurityGroupID) {
-			entry.remoteSecurityGroups = append(entry.remoteSecurityGroups, input.BastionSecurityGroupID)
-		}
-	}
-	if serverEntry.securityGroups == nil {
-		serverEntry.securityGroups = map[string]struct{}{}
-	}
-	serverEntry.securityGroups[securityGroup.ID] = struct{}{}
-	c.EnsureNodeSSHCalls++
-	out := *securityGroup
+	out := *entry.publicIP
 	return &out, nil
 }
 
-func (c *Client) DeleteNodeSSHAccess(_ context.Context, tags map[string]string) error {
+func (c *Client) createPublicIP(_ context.Context, tags map[string]string) (*publicip.PublicIP, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := consume(&c.FailNextDeleteNodeSSH); err != nil {
-		return err
-	}
-	for id, entry := range c.securityGroups {
-		if mapContains(entry.tags, tags) {
-			delete(c.securityGroups, id)
-			for _, server := range c.servers {
-				delete(server.securityGroups, id)
-			}
-		}
-	}
-	return nil
-}
-
-func (c *Client) ListPublicIPsByTags(_ context.Context, tags map[string]string) ([]*cloud.PublicIP, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
-	}
-	publicIPs := []*cloud.PublicIP{}
-	for _, entry := range c.publicIPs {
-		if mapContains(entry.tags, tags) {
-			out := *entry.publicIP
-			publicIPs = append(publicIPs, &out)
-		}
-	}
-	return publicIPs, nil
-}
-
-func (c *Client) ListSecurityGroupsByTags(_ context.Context, tags map[string]string) ([]*cloud.SecurityGroup, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
-	}
-	securityGroups := []*cloud.SecurityGroup{}
-	for _, entry := range c.securityGroups {
-		if mapContains(entry.tags, tags) {
-			out := *entry.securityGroup
-			securityGroups = append(securityGroups, &out)
-		}
-	}
-	return securityGroups, nil
-}
-
-func (c *Client) EnsureAPIServerLoadBalancer(
-	_ context.Context,
-	input cloud.LoadBalancerInput,
-) (*cloud.LoadBalancer, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextEnsureLB); err != nil {
+	if err := consume(&c.FailNextCreatePublicIP); err != nil {
 		return nil, err
-	}
-	for _, entry := range c.loadBalancers {
-		if len(input.Tags) > 0 && mapContains(entry.tags, input.Tags) {
-			out := *entry.lb
-			return &out, nil
-		}
 	}
 	id := c.genID()
-	lb := &cloud.LoadBalancer{
-		ID:   id,
-		Name: input.Name,
-		IP:   "203.0.113.10",
-		Port: input.Port,
+	publicIP := &publicip.PublicIP{
+		ID: id,
+		IP: "203.0.113.22",
 	}
-	targets := map[string]string{}
-	if len(input.Targets) == 0 {
-		targets[bootstrapTargetName] = bootstrapTargetIP
-	} else {
-		for _, target := range input.Targets {
-			targets[target.Name] = target.IP
-		}
+	c.publicIPs[id] = &publicIPEntry{
+		publicIP: publicIP,
+		tags:     copyTags(tags),
 	}
-	c.loadBalancers[id] = &lbEntry{lb: lb, tags: copyTags(input.Tags), targets: targets}
-	out := *lb
+	out := *publicIP
 	return &out, nil
 }
 
-func (c *Client) ListAPIServerLoadBalancersByTags(
-	_ context.Context,
-	tags map[string]string,
-) ([]*cloud.LoadBalancer, error) {
+func (c *Client) deletePublicIP(_ context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("empty tags: %w", cloud.ErrInvalidInput)
-	}
-	loadBalancers := []*cloud.LoadBalancer{}
-	for _, entry := range c.loadBalancers {
-		if mapContains(entry.tags, tags) {
-			out := *entry.lb
-			loadBalancers = append(loadBalancers, &out)
-		}
-	}
-	return loadBalancers, nil
-}
-
-func (c *Client) SetAPIServerLoadBalancerTargets(
-	_ context.Context,
-	loadBalancerID string,
-	port int32,
-	targets []cloud.LoadBalancerTargetInput,
-) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := consume(&c.FailNextSetTargets); err != nil {
+	if err := consume(&c.FailNextDeletePublicIP); err != nil {
 		return err
 	}
-	if loadBalancerID == "" || port <= 0 {
-		return fmt.Errorf("load balancer ID and target port are required: %w", cloud.ErrInvalidInput)
+	if id == "" {
+		return fmt.Errorf("public IP ID is empty: %w", shared.ErrInvalidInput)
 	}
-	if len(targets) == 0 {
-		return fmt.Errorf("at least one target is required: %w", cloud.ErrInvalidInput)
+	if _, ok := c.publicIPs[id]; !ok {
+		return fmt.Errorf("public IP %q: %w", id, shared.ErrNotFound)
 	}
-	entry, ok := c.loadBalancers[loadBalancerID]
-	if !ok {
-		return fmt.Errorf("load balancer %q: %w", loadBalancerID, cloud.ErrNotFound)
-	}
-	replaced := make(map[string]string, len(targets))
-	for _, target := range targets {
-		// The real API rejects these; accepting them would hide a regression.
-		if target.Name == "" || target.IP == "" {
-			return fmt.Errorf("target name and target IP are required: %w", cloud.ErrInvalidInput)
-		}
-		replaced[target.Name] = target.IP
-	}
-	entry.targets = replaced
+	delete(c.publicIPs, id)
 	return nil
 }
 
-func (c *Client) DeleteAPIServerLoadBalancer(_ context.Context, id string) error {
+func (c *Client) addPublicIPToServer(_ context.Context, serverID, publicIPID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := consume(&c.FailNextDeleteLB); err != nil {
+	if err := consume(&c.FailNextAddPublicIP); err != nil {
 		return err
 	}
-	delete(c.loadBalancers, id)
+	if serverID == "" || publicIPID == "" {
+		return fmt.Errorf("server ID and public IP ID are required: %w", shared.ErrInvalidInput)
+	}
+	if _, ok := c.servers[serverID]; !ok {
+		return fmt.Errorf("server %q: %w", serverID, shared.ErrNotFound)
+	}
+	entry, ok := c.publicIPs[publicIPID]
+	if !ok {
+		return fmt.Errorf("public IP %q: %w", publicIPID, shared.ErrNotFound)
+	}
+	entry.publicIP.NetworkInterfaceID = "fake-nic-" + serverID
+	return nil
+}
+
+func (c *Client) removePublicIPFromServer(_ context.Context, serverID, publicIPID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextRemovePublicIP); err != nil {
+		return err
+	}
+	if serverID == "" || publicIPID == "" {
+		return fmt.Errorf("server ID and public IP ID are required: %w", shared.ErrInvalidInput)
+	}
+	entry, ok := c.publicIPs[publicIPID]
+	if !ok {
+		return fmt.Errorf("public IP %q: %w", publicIPID, shared.ErrNotFound)
+	}
+	entry.publicIP.NetworkInterfaceID = ""
 	return nil
 }
 
@@ -666,6 +352,17 @@ func (c *Client) PublicIPCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.publicIPs)
+}
+
+// PublicIPAttachedToServer reports whether the public IP is attached to the server (test helper).
+func (c *Client) PublicIPAttachedToServer(publicIPID, serverID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.publicIPs[publicIPID]
+	if !ok {
+		return false
+	}
+	return entry.publicIP.NetworkInterfaceID == "fake-nic-"+serverID
 }
 
 // SecurityGroupCount returns the number of currently tracked security groups.
@@ -709,16 +406,59 @@ func (c *Client) ServerUserData(serverID string) []byte {
 	return append([]byte(nil), entry.userData...)
 }
 
-// SecurityGroupRemoteSources returns the remote security groups allowed by the
-// fake security group rules.
-func (c *Client) SecurityGroupRemoteSources(securityGroupID string) []string {
+// FindSecurityGroupByTags returns the single security group matching tags (test helper).
+func (c *Client) FindSecurityGroupByTags(tags map[string]string) *securitygroup.SecurityGroup {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.securityGroups {
+		if shared.MapContains(entry.tags, tags) {
+			out := *entry.securityGroup
+			return &out
+		}
+	}
+	return nil
+}
+
+// NetworkCount returns the number of currently tracked networks (test helper).
+func (c *Client) NetworkCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.networks)
+}
+
+// FindNetworkByTags returns the single network matching tags (test helper).
+func (c *Client) FindNetworkByTags(tags map[string]string) *network.Network {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.networks {
+		if shared.MapContains(entry.tags, tags) {
+			out := *entry.network
+			return &out
+		}
+	}
+	return nil
+}
+
+// DeleteServer removes a server from the fake store by ID (test helper).
+func (c *Client) DeleteServer(serverID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.servers, serverID)
+}
+
+// SecurityGroupRules returns the rules currently stored on a fake security group.
+func (c *Client) SecurityGroupRules(securityGroupID string) []securitygroup.Rule {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.securityGroups[securityGroupID]
 	if !ok {
 		return nil
 	}
-	return append([]string(nil), entry.remoteSecurityGroups...)
+	rules := make([]securitygroup.Rule, 0, len(entry.rules))
+	for _, r := range entry.rules {
+		rules = append(rules, r.Rule)
+	}
+	return rules
 }
 
 // LoadBalancerTargetCount returns the number of targets in one load balancer
@@ -753,15 +493,6 @@ func (c *Client) SetLoadBalancerIP(id, ip string) {
 	}
 }
 
-func mapContains(haystack, needle map[string]string) bool {
-	for k, v := range needle {
-		if haystack[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
 func copyTags(in map[string]string) map[string]string {
 	if in == nil {
 		return nil
@@ -784,51 +515,6 @@ func securityGroupSet(ids []string) map[string]struct{} {
 	return out
 }
 
-func containsString(values []string, needle string) bool {
-	return slices.Contains(values, needle)
-}
-
-func (c *Client) publicIPByTags(tags map[string]string) *cloud.PublicIP {
-	for _, entry := range c.publicIPs {
-		if mapContains(entry.tags, tags) {
-			out := *entry.publicIP
-			return &out
-		}
-	}
-	return nil
-}
-
-func (c *Client) securityGroupByTags(tags map[string]string) *cloud.SecurityGroup {
-	for _, entry := range c.securityGroups {
-		if mapContains(entry.tags, tags) {
-			out := *entry.securityGroup
-			return &out
-		}
-	}
-	return nil
-}
-
-func idOfPublicIP(publicIP *cloud.PublicIP) string {
-	if publicIP == nil {
-		return ""
-	}
-	return publicIP.ID
-}
-
-func ipOfPublicIP(publicIP *cloud.PublicIP) string {
-	if publicIP == nil {
-		return ""
-	}
-	return publicIP.IP
-}
-
-func idOfSecurityGroup(securityGroup *cloud.SecurityGroup) string {
-	if securityGroup == nil {
-		return ""
-	}
-	return securityGroup.ID
-}
-
 func (c *Client) ListAvailabilityZones(_ context.Context) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -841,11 +527,1145 @@ func (c *Client) ListAvailabilityZones(_ context.Context) ([]string, error) {
 	return []string{"eu01-1", "eu01-2", "eu01-3"}, nil
 }
 
-func cloneServer(s *cloud.Server) *cloud.Server {
-	out := *s
-	if s.Addresses != nil {
-		out.Addresses = make([]cloud.Address, len(s.Addresses))
-		copy(out.Addresses, s.Addresses)
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+
+	if c.handlePublicIPRequest(rec, r) ||
+		c.handleSecurityGroupRequest(rec, r) ||
+		c.handleServerRequest(rec, r) ||
+		c.handleNetworkRequest(rec, r) ||
+		c.handleAvailabilityZoneRequest(rec, r) {
+		return rec.Result(), nil
 	}
-	return &out
+
+	rec.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
+	return rec.Result(), nil
+}
+
+func (c *Client) handleNetworkRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/networks"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listNetworkItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/networks"):
+		var body struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+			IPv4   *struct {
+				Prefix string `json:"prefix"`
+			} `json:"ipv4"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		var prefix string
+		if body.IPv4 != nil {
+			prefix = body.IPv4.Prefix
+		}
+		created, err := c.createNetwork(body.Name, prefix, body.Labels)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/networks/"):
+		id := path[strings.LastIndex(path, "/networks/")+len("/networks/"):]
+		got, err := c.getNetworkItem(r.Context(), id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/networks/"):
+		id := path[strings.LastIndex(path, "/networks/")+len("/networks/"):]
+		writeFakeStatus(rec, c.deleteNetwork(id))
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) getNetworkItem(ctx context.Context, id string) (map[string]any, error) {
+	n, err := c.GetNetwork(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.networks[id]; ok {
+		return fakeNetworkMap(entry), nil
+	}
+	return fakeNetworkMap(&networkEntry{network: n}), nil
+}
+
+func (c *Client) listNetworkItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
+	}
+	items := make([]map[string]any, 0, len(c.networks))
+	for _, entry := range c.networks {
+		if shared.MapContains(entry.tags, tags) {
+			items = append(items, fakeNetworkMap(entry))
+		}
+	}
+	return items, nil
+}
+
+func (c *Client) createNetwork(name, prefix string, tags map[string]string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextCreateNetwork); err != nil {
+		return nil, err
+	}
+	if name == "" {
+		return nil, fmt.Errorf("network name is empty: %w", shared.ErrInvalidInput)
+	}
+	var prefixes []string
+	if prefix != "" {
+		prefixes = []string{prefix}
+	}
+	net := &network.Network{
+		ID:           c.genID(),
+		Name:         name,
+		IPv4Prefixes: prefixes,
+	}
+	entry := &networkEntry{
+		network: net,
+		tags:    copyTags(tags),
+	}
+	c.networks[net.ID] = entry
+	return fakeNetworkMap(entry), nil
+}
+
+func (c *Client) deleteNetwork(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteNetwork); err != nil {
+		return err
+	}
+	if _, ok := c.networks[id]; !ok {
+		return fmt.Errorf("network %q: %w", id, shared.ErrNotFound)
+	}
+	delete(c.networks, id)
+	return nil
+}
+
+func fakeNetworkMap(entry *networkEntry) map[string]any {
+	m := map[string]any{
+		"id":     entry.network.ID,
+		"name":   entry.network.Name,
+		"status": "CREATED",
+		"routed": true,
+	}
+	if len(entry.network.IPv4Prefixes) > 0 {
+		m["ipv4"] = map[string]any{
+			"prefixes": slices.Clone(entry.network.IPv4Prefixes),
+		}
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func (c *Client) handleAvailabilityZoneRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/availability-zones") {
+		return false
+	}
+	zones, err := c.ListAvailabilityZones(r.Context())
+	if err != nil {
+		writeFakeError(rec, err)
+		return true
+	}
+	_ = json.NewEncoder(rec).Encode(map[string]any{"items": zones})
+	return true
+}
+
+func (c *Client) roundTripLB(r *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+
+	if c.handleLoadBalancerRequest(rec, r) {
+		return rec.Result(), nil
+	}
+
+	rec.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(rec).Encode(map[string]any{"message": "not found"})
+	return rec.Result(), nil
+}
+
+type fakeTargetJSON struct {
+	DisplayName string `json:"displayName"`
+	IP          string `json:"ip"`
+}
+
+func toLoadBalancerTargets(in []fakeTargetJSON) []loadbalancer.Target {
+	out := make([]loadbalancer.Target, 0, len(in))
+	for _, t := range in {
+		out = append(out, loadbalancer.Target{Name: t.DisplayName, IP: t.IP})
+	}
+	return out
+}
+
+func (c *Client) handleLoadBalancerRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):
+		items, err := c.listLoadBalancerItems()
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"loadBalancers": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/load-balancers"):
+		var body struct {
+			Name        string            `json:"name"`
+			Labels      map[string]string `json:"labels"`
+			TargetPools []struct {
+				Name       string           `json:"name"`
+				TargetPort int32            `json:"targetPort"`
+				Targets    []fakeTargetJSON `json:"targets"`
+			} `json:"targetPools"`
+			Listeners []struct {
+				Port int32 `json:"port"`
+			} `json:"listeners"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		var port int32 = 6443
+		if len(body.Listeners) > 0 && body.Listeners[0].Port > 0 {
+			port = body.Listeners[0].Port
+		}
+		var targets []loadbalancer.Target
+		if len(body.TargetPools) > 0 {
+			targets = toLoadBalancerTargets(body.TargetPools[0].Targets)
+		}
+		created, err := c.createLoadBalancer(body.Name, port, body.Labels, targets)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodPut && strings.Contains(path, "/load-balancers/") && strings.Contains(path, "/target-pools/"):
+		sub := path[strings.Index(path, "/load-balancers/")+len("/load-balancers/"):]
+		parts := strings.SplitN(sub, "/target-pools/", 2)
+		lbID := parts[0]
+		var body struct {
+			Name       string           `json:"name"`
+			TargetPort int32            `json:"targetPort"`
+			Targets    []fakeTargetJSON `json:"targets"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		pool, err := c.updateLoadBalancerTargetPool(lbID, body.TargetPort, toLoadBalancerTargets(body.Targets))
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(pool)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/load-balancers/"):
+		id := path[strings.LastIndex(path, "/load-balancers/")+len("/load-balancers/"):]
+		got, err := c.getLoadBalancerItem(id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/load-balancers/"):
+		id := path[strings.LastIndex(path, "/load-balancers/")+len("/load-balancers/"):]
+		if err := c.deleteLoadBalancer(id); err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{})
+		}
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) listLoadBalancerItems() ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	items := make([]map[string]any, 0, len(c.loadBalancers))
+	for _, entry := range c.loadBalancers {
+		items = append(items, fakeLoadBalancerMap(entry))
+	}
+	return items, nil
+}
+
+func (c *Client) getLoadBalancerItem(id string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.loadBalancers[id]
+	if !ok {
+		return nil, fmt.Errorf("load balancer %q: %w", id, shared.ErrNotFound)
+	}
+	item := fakeLoadBalancerMap(entry)
+	// Force SetTargets to see a target diff and issue UpdateTargetPool so
+	// FailNextSetTargets is consumed on the target update call rather than Get.
+	if c.FailNextSetTargets != nil {
+		bootstrap := loadbalancer.BootstrapTarget("")
+		item["targetPools"] = []any{
+			map[string]any{
+				"name":       "apiserver",
+				"targetPort": entry.lb.Port,
+				"targets": []any{
+					map[string]any{
+						"displayName": bootstrap.Name,
+						"ip":          bootstrap.IP,
+					},
+				},
+			},
+		}
+	}
+	return item, nil
+}
+
+func (c *Client) createLoadBalancer(name string, port int32, labels map[string]string, targets []loadbalancer.Target) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextEnsureLB); err != nil {
+		return nil, err
+	}
+	entry, err := c.createLoadBalancerEntry(name, port, labels, targets)
+	if err != nil {
+		return nil, err
+	}
+	return fakeLoadBalancerMap(entry), nil
+}
+
+func (c *Client) createLoadBalancerEntry(name string, port int32, labels map[string]string, targets []loadbalancer.Target) (*lbEntry, error) {
+	if name == "" {
+		return nil, fmt.Errorf("load balancer name is empty: %w", shared.ErrInvalidInput)
+	}
+	if port <= 0 {
+		port = 6443
+	}
+	lbObj := &loadbalancer.LoadBalancer{
+		ID:   name,
+		Name: name,
+		IP:   "203.0.113.10",
+		Port: port,
+	}
+	targetMap := map[string]string{}
+	if len(targets) == 0 {
+		bootstrap := loadbalancer.BootstrapTarget("")
+		targetMap[bootstrap.Name] = bootstrap.IP
+	} else {
+		for _, target := range targets {
+			targetMap[target.Name] = target.IP
+		}
+	}
+	entry := &lbEntry{
+		lb:      lbObj,
+		tags:    copyTags(labels),
+		targets: targetMap,
+	}
+	c.loadBalancers[name] = entry
+	return entry, nil
+}
+
+func (c *Client) updateLoadBalancerTargetPool(id string, port int32, targets []loadbalancer.Target) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextSetTargets); err != nil {
+		return nil, err
+	}
+	if id == "" || port <= 0 {
+		return nil, fmt.Errorf("load balancer ID and target port are required: %w", shared.ErrInvalidInput)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("at least one target is required: %w", shared.ErrInvalidInput)
+	}
+	entry, ok := c.loadBalancers[id]
+	if !ok {
+		return nil, fmt.Errorf("load balancer %q: %w", id, shared.ErrNotFound)
+	}
+	replaced := make(map[string]string, len(targets))
+	for _, target := range targets {
+		if target.Name == "" || target.IP == "" {
+			return nil, fmt.Errorf("target name and target IP are required: %w", shared.ErrInvalidInput)
+		}
+		replaced[target.Name] = target.IP
+	}
+	entry.targets = replaced
+	entry.lb.Port = port
+	return fakeTargetPoolMap(entry), nil
+}
+
+func (c *Client) deleteLoadBalancer(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteLB); err != nil {
+		return err
+	}
+	delete(c.loadBalancers, id)
+	return nil
+}
+
+func fakeLoadBalancerMap(entry *lbEntry) map[string]any {
+	m := map[string]any{
+		"name":            entry.lb.Name,
+		"externalAddress": entry.lb.IP,
+		"listeners": []any{
+			map[string]any{
+				"displayName": "apiserver",
+				"port":        entry.lb.Port,
+				"targetPool":  "apiserver",
+			},
+		},
+		"targetPools": []any{
+			fakeTargetPoolMap(entry),
+		},
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func fakeTargetPoolMap(entry *lbEntry) map[string]any {
+	targets := make([]any, 0, len(entry.targets))
+	for name, ip := range entry.targets {
+		targets = append(targets, map[string]any{
+			"displayName": name,
+			"ip":          ip,
+		})
+	}
+	return map[string]any{
+		"name":       "apiserver",
+		"targetPort": entry.lb.Port,
+		"targets":    targets,
+	}
+}
+
+func (c *Client) handlePublicIPRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case strings.Contains(path, "/servers/") && strings.Contains(path, "/public-ips/"):
+		parts := strings.Split(path, "/servers/")
+		sub := strings.Split(parts[1], "/public-ips/")
+		serverID, publicIPID := sub[0], sub[1]
+		var err error
+		switch r.Method {
+		case http.MethodPut:
+			err = c.addPublicIPToServer(r.Context(), serverID, publicIPID)
+		case http.MethodDelete:
+			err = c.removePublicIPFromServer(r.Context(), serverID, publicIPID)
+		default:
+			err = shared.ErrInvalidInput
+		}
+		writeFakeStatus(rec, err)
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/public-ips"):
+		var body struct {
+			Labels map[string]string `json:"labels"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		created, err := c.createPublicIP(r.Context(), body.Labels)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(fakePublicIPMap(created, body.Labels))
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listPublicIPItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/public-ips/"):
+		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
+		got, err := c.getPublicIP(r.Context(), id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(fakePublicIPMap(got, nil))
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/public-ips/"):
+		id := path[strings.LastIndex(path, "/public-ips/")+len("/public-ips/"):]
+		writeFakeStatus(rec, c.deletePublicIP(r.Context(), id))
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) handleSecurityGroupRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case strings.Contains(path, "/servers/") && strings.Contains(path, "/security-groups/"):
+		parts := strings.Split(path, "/servers/")
+		sub := strings.Split(parts[1], "/security-groups/")
+		serverID, securityGroupID := sub[0], sub[1]
+		var err error
+		switch r.Method {
+		case http.MethodPut:
+			err = c.addSecurityGroupToServer(serverID, securityGroupID)
+		case http.MethodDelete:
+			err = c.removeSecurityGroupFromServer(serverID, securityGroupID)
+		default:
+			err = shared.ErrInvalidInput
+		}
+		writeFakeStatus(rec, err)
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/security-groups"):
+		var body struct {
+			Name        string            `json:"name"`
+			Description string            `json:"description"`
+			Labels      map[string]string `json:"labels"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		created, err := c.createSecurityGroup(body.Name, body.Description, body.Labels)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listSecurityGroupItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.HasSuffix(path, "/rules") && r.Method == http.MethodGet:
+		sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+		sgID := strings.TrimSuffix(sub, "/rules")
+		items, err := c.listSecurityGroupRuleItems(sgID)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.HasSuffix(path, "/rules") && r.Method == http.MethodPost:
+		c.handleCreateSecurityGroupRule(rec, r)
+		return true
+
+	case strings.Contains(path, "/security-groups/") && strings.Contains(path, "/rules/") && r.Method == http.MethodDelete:
+		sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+		parts := strings.SplitN(sub, "/rules/", 2)
+		writeFakeStatus(rec, c.deleteSecurityGroupRule(parts[0], parts[1]))
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/security-groups/"):
+		id := path[strings.LastIndex(path, "/security-groups/")+len("/security-groups/"):]
+		got, err := c.getSecurityGroupItem(id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/security-groups/"):
+		id := path[strings.LastIndex(path, "/security-groups/")+len("/security-groups/"):]
+		writeFakeStatus(rec, c.deleteSecurityGroup(id))
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) handleCreateSecurityGroupRule(rec *httptest.ResponseRecorder, r *http.Request) {
+	path := r.URL.Path
+	sub := path[strings.Index(path, "/security-groups/")+len("/security-groups/"):]
+	sgID := strings.TrimSuffix(sub, "/rules")
+	var body struct {
+		Direction string `json:"direction"`
+		Protocol  string `json:"protocol"`
+		PortRange *struct {
+			Min int64 `json:"min"`
+			Max int64 `json:"max"`
+		} `json:"portRange"`
+		IPRange               string `json:"ipRange"`
+		RemoteSecurityGroupID string `json:"remoteSecurityGroupId"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	var portMin, portMax int64
+	if body.PortRange != nil {
+		portMin = body.PortRange.Min
+		portMax = body.PortRange.Max
+	}
+	created, err := c.createSecurityGroupRule(sgID, securityGroupRuleEntry{
+		Rule: securitygroup.Rule{
+			Direction:             securitygroup.Direction(body.Direction),
+			Protocol:              securitygroup.Protocol(body.Protocol),
+			PortMin:               portMin,
+			PortMax:               portMax,
+			IPRange:               body.IPRange,
+			RemoteSecurityGroupID: body.RemoteSecurityGroupID,
+		},
+	})
+	if err != nil {
+		writeFakeError(rec, err)
+	} else {
+		_ = json.NewEncoder(rec).Encode(created)
+	}
+}
+
+func writeFakeStatus(rec *httptest.ResponseRecorder, err error) {
+	if err != nil {
+		writeFakeError(rec, err)
+	} else {
+		rec.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (c *Client) listPublicIPItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextListPublicIPs); err != nil {
+		return nil, err
+	}
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
+	}
+	items := make([]map[string]any, 0, len(c.publicIPs))
+	for _, entry := range c.publicIPs {
+		if shared.MapContains(entry.tags, tags) {
+			items = append(items, fakePublicIPMap(entry.publicIP, entry.tags))
+		}
+	}
+	return items, nil
+}
+
+func fakePublicIPMap(p *publicip.PublicIP, tags map[string]string) map[string]any {
+	m := map[string]any{
+		"id": p.ID,
+		"ip": p.IP,
+	}
+	if p.NetworkInterfaceID != "" {
+		m["networkInterface"] = p.NetworkInterfaceID
+	}
+	if len(tags) > 0 {
+		labels := make(map[string]any, len(tags))
+		for k, v := range tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func (c *Client) addSecurityGroupToServer(serverID, securityGroupID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextAddSecurityGroup); err != nil {
+		return err
+	}
+	serverEntry, ok := c.servers[serverID]
+	if !ok {
+		return fmt.Errorf("server %q: %w", serverID, shared.ErrNotFound)
+	}
+	if _, ok := c.securityGroups[securityGroupID]; !ok {
+		return fmt.Errorf("security group %q: %w", securityGroupID, shared.ErrNotFound)
+	}
+	if serverEntry.securityGroups == nil {
+		serverEntry.securityGroups = map[string]struct{}{}
+	}
+	serverEntry.securityGroups[securityGroupID] = struct{}{}
+	c.AddSecurityGroupCalls++
+	return nil
+}
+
+func (c *Client) handleServerRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
+	path := r.URL.Path
+
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/servers"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listServerItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/servers"):
+		c.handleCreateServer(rec, r)
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/servers/") && strings.HasSuffix(path, "/nics"):
+		sub := path[strings.Index(path, "/servers/")+len("/servers/"):]
+		serverID := strings.TrimSuffix(sub, "/nics")
+		items, err := c.listServerNICItems(serverID)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/servers/"):
+		serverID := path[strings.LastIndex(path, "/servers/")+len("/servers/"):]
+		item, err := c.getServerItem(serverID)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(item)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/servers/"):
+		serverID := path[strings.LastIndex(path, "/servers/")+len("/servers/"):]
+		writeFakeStatus(rec, c.deleteServerHTTP(serverID))
+		return true
+
+	default:
+		return false
+	}
+}
+
+func (c *Client) deleteServerHTTP(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteServer); err != nil {
+		return err
+	}
+	if _, ok := c.servers[id]; !ok {
+		return fmt.Errorf("server %q: %w", id, shared.ErrNotFound)
+	}
+	for _, entry := range c.publicIPs {
+		if entry.publicIP.NetworkInterfaceID == "fake-nic-"+id {
+			entry.publicIP.NetworkInterfaceID = ""
+		}
+	}
+	delete(c.servers, id)
+	return nil
+}
+
+func (c *Client) handleCreateServer(rec *httptest.ResponseRecorder, r *http.Request) {
+	var body struct {
+		Name             string            `json:"name"`
+		MachineType      string            `json:"machineType"`
+		ImageID          string            `json:"imageId"`
+		AvailabilityZone string            `json:"availabilityZone"`
+		KeypairName      string            `json:"keypairName"`
+		SecurityGroups   []string          `json:"securityGroups"`
+		UserData         string            `json:"userData"`
+		Labels           map[string]string `json:"labels"`
+		Networking       *struct {
+			NetworkID string `json:"networkId"`
+		} `json:"networking"`
+		BootVolume *struct {
+			Size                int    `json:"size"`
+			PerformanceClass    string `json:"performanceClass"`
+			DeleteOnTermination bool   `json:"deleteOnTermination"`
+			Source              *struct {
+				ID string `json:"id"`
+			} `json:"source"`
+		} `json:"bootVolume"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	var userData []byte
+	if body.UserData != "" {
+		userData, _ = base64.StdEncoding.DecodeString(body.UserData)
+	}
+	var networkID string
+	if body.Networking != nil {
+		networkID = body.Networking.NetworkID
+	}
+	imageID := body.ImageID
+	var rootVolume server.RootVolume
+	if body.BootVolume != nil {
+		rootVolume = server.RootVolume{
+			SizeGiB:             body.BootVolume.Size,
+			PerformanceClass:    body.BootVolume.PerformanceClass,
+			DeleteOnTermination: body.BootVolume.DeleteOnTermination,
+		}
+		if imageID == "" && body.BootVolume.Source != nil {
+			imageID = body.BootVolume.Source.ID
+		}
+	}
+	spec := server.ServerSpec{
+		Name:             body.Name,
+		MachineType:      body.MachineType,
+		ImageID:          imageID,
+		AvailabilityZone: body.AvailabilityZone,
+		SSHKeyName:       body.KeypairName,
+		NetworkID:        networkID,
+		SecurityGroups:   body.SecurityGroups,
+		UserData:         userData,
+		Tags:             body.Labels,
+		RootVolume:       rootVolume,
+	}
+
+	c.mu.Lock()
+	if c.BeforeCreateServer != nil {
+		c.mu.Unlock()
+		c.BeforeCreateServer()
+		c.mu.Lock()
+	}
+	if err := consume(&c.FailNextCreateServer); err != nil {
+		c.mu.Unlock()
+		writeFakeError(rec, err)
+		return
+	}
+	entry := c.createServerEntry(spec)
+	item := fakeServerMap(entry)
+	c.mu.Unlock()
+
+	_ = json.NewEncoder(rec).Encode(item)
+}
+
+func (c *Client) getServerItem(id string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextGetServer); err != nil {
+		return nil, err
+	}
+	entry, ok := c.servers[id]
+	if !ok {
+		return nil, fmt.Errorf("server %q: %w", id, shared.ErrNotFound)
+	}
+	return fakeServerMap(entry), nil
+}
+
+func (c *Client) listServerNICItems(serverID string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.servers[serverID]
+	if !ok {
+		return nil, fmt.Errorf("server %q: %w", serverID, shared.ErrNotFound)
+	}
+	items := make([]map[string]any, 0, len(entry.server.Addresses))
+	for _, addr := range entry.server.Addresses {
+		items = append(items, map[string]any{"ipv4": addr.Address})
+	}
+	return items, nil
+}
+
+func (c *Client) listServerItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextFindServer); err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(c.servers))
+	for _, entry := range c.servers {
+		if len(tags) > 0 && !shared.MapContains(entry.tags, tags) {
+			continue
+		}
+		items = append(items, fakeServerMap(entry))
+	}
+	return items, nil
+}
+
+func fakeServerMap(entry *serverEntry) map[string]any {
+	m := map[string]any{
+		"id":               entry.server.ID,
+		"name":             entry.server.Name,
+		"machineType":      "c2i.1",
+		"status":           entry.server.State,
+		"availabilityZone": entry.server.AvailabilityZone,
+	}
+	if entry.server.PowerStatus != "" {
+		m["powerStatus"] = entry.server.PowerStatus
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func (c *Client) removeSecurityGroupFromServer(serverID, securityGroupID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	serverEntry, ok := c.servers[serverID]
+	if !ok {
+		return fmt.Errorf("server %q: %w", serverID, shared.ErrNotFound)
+	}
+	delete(serverEntry.securityGroups, securityGroupID)
+	return nil
+}
+
+func (c *Client) createSecurityGroup(name, description string, tags map[string]string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, err := c.createSecurityGroupEntry(name, description, tags)
+	if err != nil {
+		return nil, err
+	}
+	return fakeSecurityGroupMap(entry), nil
+}
+
+func (c *Client) createSecurityGroupEntry(name, description string, tags map[string]string) (*securityGroupEntry, error) {
+	if name == "" {
+		return nil, fmt.Errorf("security group name is empty: %w", shared.ErrInvalidInput)
+	}
+	id := c.genID()
+	sg := &securitygroup.SecurityGroup{
+		ID:   id,
+		Name: name,
+	}
+	entry := &securityGroupEntry{
+		securityGroup: sg,
+		description:   description,
+		tags:          copyTags(tags),
+		rules:         make(map[string]*securityGroupRuleEntry),
+	}
+	c.securityGroups[id] = entry
+	return entry, nil
+}
+
+func (c *Client) getSecurityGroupItem(id string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if id == "" {
+		return nil, fmt.Errorf("security group ID is empty: %w", shared.ErrInvalidInput)
+	}
+	entry, ok := c.securityGroups[id]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", id, shared.ErrNotFound)
+	}
+	return fakeSecurityGroupMap(entry), nil
+}
+
+func (c *Client) listSecurityGroupItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
+	}
+	items := make([]map[string]any, 0, len(c.securityGroups))
+	for _, entry := range c.securityGroups {
+		if shared.MapContains(entry.tags, tags) {
+			items = append(items, fakeSecurityGroupMap(entry))
+		}
+	}
+	return items, nil
+}
+
+func (c *Client) listSecurityGroupRuleItems(sgID string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", sgID, shared.ErrNotFound)
+	}
+	items := make([]map[string]any, 0, len(entry.rules))
+	for _, rule := range entry.rules {
+		items = append(items, fakeSecurityGroupRuleMap(rule))
+	}
+	return items, nil
+}
+
+func (c *Client) createSecurityGroupRule(sgID string, rule securityGroupRuleEntry) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return nil, fmt.Errorf("security group %q: %w", sgID, shared.ErrNotFound)
+	}
+	if entry.rules == nil {
+		entry.rules = make(map[string]*securityGroupRuleEntry)
+	}
+	rule.id = c.genID()
+	stored := rule
+	entry.rules[rule.id] = &stored
+	return fakeSecurityGroupRuleMap(&stored), nil
+}
+
+func (c *Client) deleteSecurityGroupRule(sgID, ruleID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.securityGroups[sgID]
+	if !ok {
+		return fmt.Errorf("security group %q: %w", sgID, shared.ErrNotFound)
+	}
+	if entry.rules == nil {
+		return fmt.Errorf("rule %q: %w", ruleID, shared.ErrNotFound)
+	}
+	if _, ok := entry.rules[ruleID]; !ok {
+		return fmt.Errorf("rule %q: %w", ruleID, shared.ErrNotFound)
+	}
+	delete(entry.rules, ruleID)
+	return nil
+}
+
+func (c *Client) deleteSecurityGroup(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if id == "" {
+		return fmt.Errorf("security group ID is empty: %w", shared.ErrInvalidInput)
+	}
+	if _, ok := c.securityGroups[id]; !ok {
+		return fmt.Errorf("security group %q: %w", id, shared.ErrNotFound)
+	}
+	for serverID, srv := range c.servers {
+		if _, attached := srv.securityGroups[id]; attached {
+			return fmt.Errorf("security group %q is still attached to server %q: %w", id, serverID, shared.ErrConflict)
+		}
+	}
+	delete(c.securityGroups, id)
+	return nil
+}
+
+func fakeSecurityGroupMap(entry *securityGroupEntry) map[string]any {
+	m := map[string]any{
+		"id":   entry.securityGroup.ID,
+		"name": entry.securityGroup.Name,
+	}
+	if entry.description != "" {
+		m["description"] = entry.description
+	}
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
+}
+
+func fakeSecurityGroupRuleMap(rule *securityGroupRuleEntry) map[string]any {
+	m := map[string]any{
+		"id":        rule.id,
+		"direction": string(rule.Direction),
+	}
+	if rule.Protocol != "" {
+		m["protocol"] = map[string]any{"name": string(rule.Protocol)}
+	}
+	if rule.PortMin > 0 || rule.PortMax > 0 {
+		m["portRange"] = map[string]any{"min": rule.PortMin, "max": rule.PortMax}
+	}
+	if rule.IPRange != "" {
+		m["ipRange"] = rule.IPRange
+	}
+	if rule.RemoteSecurityGroupID != "" {
+		m["remoteSecurityGroupId"] = rule.RemoteSecurityGroupID
+	}
+	return m
+}
+
+func parseLabelSelector(selector string) map[string]string {
+	if selector == "" {
+		return nil
+	}
+	tags := make(map[string]string)
+	for part := range strings.SplitSeq(selector, ",") {
+		if k, v, ok := strings.Cut(part, "="); ok && k != "" {
+			tags[k] = v
+		}
+	}
+	return tags
+}
+
+func writeFakeError(rec *httptest.ResponseRecorder, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case shared.IsNotFound(err):
+		status = http.StatusNotFound
+	case shared.IsConflict(err):
+		status = http.StatusConflict
+	case shared.IsInvalidInput(err):
+		status = http.StatusBadRequest
+	case shared.IsUnauthorized(err):
+		status = http.StatusUnauthorized
+	}
+	rec.WriteHeader(status)
+	_ = json.NewEncoder(rec).Encode(map[string]any{"message": err.Error()})
 }

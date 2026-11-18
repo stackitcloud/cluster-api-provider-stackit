@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -47,14 +46,6 @@ func ReconciliationPaused(cluster *clusterv1.Cluster, obj client.Object) (bool, 
 		return false, ""
 	}
 	return true, strings.Join(reasons, ", ")
-}
-
-func SetPausedCondition(conditions *[]metav1.Condition, generation int64, paused bool, message string) {
-	if paused {
-		SetConditions(conditions, generation, metav1.ConditionTrue, clusterv1.PausedReason, message, clusterv1.PausedCondition)
-		return
-	}
-	SetConditions(conditions, generation, metav1.ConditionFalse, clusterv1.NotPausedReason, "", clusterv1.PausedCondition)
 }
 
 func BuildCloudClient(

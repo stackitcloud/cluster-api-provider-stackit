@@ -12,62 +12,86 @@ package cloud
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"maps"
-	"strings"
+
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
+
+type cleanupScope struct {
+	Client
+	tags map[string]string
+}
 
 // CleanupByTags deletes provider-managed cloud resources matching tags without
 // relying on Kubernetes objects. Load balancers are deleted before servers so
-// server deletion is not blocked by target attachments.
+// server deletion is not blocked by target attachments, servers are deleted
+// before security groups so attached servers do not block security group
+// deletion if server detachment fails or lags, and networks are deleted last.
 func CleanupByTags(ctx context.Context, client Client, tags map[string]string) error {
 	if len(tags) == 0 {
-		return fmt.Errorf("%w: empty cleanup tag selector", ErrInvalidInput)
+		return fmt.Errorf("%w: empty cleanup tag selector", shared.ErrInvalidInput)
 	}
 
-	var errs []string
-	bastionTags := make(map[string]string, len(tags)+1)
-	maps.Copy(bastionTags, tags)
-	bastionTags["cluster-api-provider-stackit/resource-role"] = "bastion"
-	if err := client.DeleteBastion(ctx, BastionInput{Tags: bastionTags}, Bastion{}); err != nil && !IsNotFound(err) {
-		errs = append(errs, fmt.Sprintf("delete bastion resources: %v", err))
+	scope := &cleanupScope{
+		Client: client,
+		tags:   tags,
 	}
-
-	loadBalancers, err := client.ListAPIServerLoadBalancersByTags(ctx, tags)
-	if err != nil {
-		errs = append(errs, err.Error())
-	} else {
-		for _, loadBalancer := range loadBalancers {
-			if err := client.DeleteAPIServerLoadBalancer(ctx, loadBalancer.ID); err != nil && !IsNotFound(err) {
-				errs = append(errs, fmt.Sprintf("delete load balancer %q: %v", loadBalancer.ID, err))
-			}
-		}
-	}
-
-	servers, err := client.ListServersByTags(ctx, tags)
-	if err != nil {
-		errs = append(errs, err.Error())
-	} else {
-		for _, server := range servers {
-			if err := client.DeleteServer(ctx, server.ID); err != nil && !IsNotFound(err) {
-				errs = append(errs, fmt.Sprintf("delete server %q: %v", server.ID, err))
-			}
-		}
-	}
-
-	networks, err := client.ListNetworksByTags(ctx, tags)
-	if err != nil {
-		errs = append(errs, err.Error())
-	} else {
-		for _, net := range networks {
-			if err := client.DeleteNetwork(ctx, net.ID); err != nil && !IsNotFound(err) {
-				errs = append(errs, fmt.Sprintf("delete network %q: %v", net.ID, err))
-			}
+	var errs []error
+	for _, deleteFn := range []func(context.Context) error{
+		publicip.New(scope).Delete,
+		loadbalancer.New(scope).Delete,
+		server.New(scope).Delete,
+		securitygroup.New(scope).Delete,
+		network.New(scope).Delete,
+	} {
+		if err := deleteFn(ctx); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("%w: %s", ErrTransient, strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %w", shared.ErrTransient, errors.Join(errs...))
 	}
 	return nil
+}
+
+func (s *cleanupScope) PublicIPSpec() publicip.PublicIPSpec {
+	return publicip.PublicIPSpec{
+		Tags:           s.tags,
+		ServerSelector: s.tags,
+	}
+}
+
+func (s *cleanupScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
+	return loadbalancer.LoadBalancerSpec{
+		Tags: s.tags,
+	}
+}
+
+func (s *cleanupScope) ServerSpec() server.ServerSpec {
+	return server.ServerSpec{
+		Tags: s.tags,
+	}
+}
+
+func (s *cleanupScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	return []securitygroup.SecurityGroupSpec{
+		{
+			Tags:           s.tags,
+			ServerSelector: s.tags,
+		},
+	}
+}
+
+func (s *cleanupScope) NetworkSpec() network.NetworkSpec {
+	return network.NetworkSpec{
+		Tags:    s.tags,
+		Managed: true,
+	}
 }
