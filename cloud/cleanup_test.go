@@ -19,6 +19,7 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
@@ -27,10 +28,15 @@ import (
 
 type testResourceScope struct {
 	cloud.Client
+	networkSpec       network.NetworkSpec
 	serverSpec        server.ServerSpec
 	publicIPSpec      publicip.PublicIPSpec
 	loadBalancerSpec  loadbalancer.LoadBalancerSpec
 	securityGroupSpec []securitygroup.SecurityGroupSpec
+}
+
+func (s *testResourceScope) NetworkSpec() network.NetworkSpec {
+	return s.networkSpec
 }
 
 func (s *testResourceScope) ServerSpec() server.ServerSpec {
@@ -53,6 +59,22 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 	t.Helper()
 	ctx := context.Background()
 
+	var networkID string
+	if err := network.New(&testResourceScope{
+		Client: client,
+		networkSpec: network.NetworkSpec{
+			Name:       prefix + "-net",
+			IPv4Prefix: network.DefaultNetworkPrefix,
+			Tags:       tags,
+			Managed:    true,
+			SetNetwork: func(net *network.Network, _ bool) {
+				networkID = net.ID
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("network.Reconcile() error = %v", err)
+	}
+
 	var workerServerID, bastionServerID string
 	if err := server.New(&testResourceScope{
 		Client: client,
@@ -60,7 +82,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 			Name:        prefix + "-worker",
 			ImageID:     "22222222-2222-4222-8222-222222222222",
 			MachineType: "c2i.2",
-			NetworkID:   "11111111-1111-4111-8111-111111111111",
+			NetworkID:   networkID,
 			Tags:        tags,
 			SetServer: func(srv *server.Server, _ bool) {
 				workerServerID = srv.ID
@@ -79,7 +101,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 			Name:        prefix + "-bastion",
 			ImageID:     "22222222-2222-4222-8222-222222222222",
 			MachineType: "c2i.2",
-			NetworkID:   "11111111-1111-4111-8111-111111111111",
+			NetworkID:   networkID,
 			Tags:        bastionTags,
 			SetServer: func(srv *server.Server, _ bool) {
 				bastionServerID = srv.ID
@@ -133,7 +155,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 		Client: client,
 		loadBalancerSpec: loadbalancer.LoadBalancerSpec{
 			Name:      prefix + "-apiserver",
-			NetworkID: "11111111-1111-4111-8111-111111111111",
+			NetworkID: networkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      tags,
 		},
@@ -179,6 +201,15 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	if sg := client.FindSecurityGroupByTags(otherTags); sg == nil {
 		t.Fatal("expected other security group to remain")
 	}
+	if got := client.NetworkCount(); got != 1 {
+		t.Fatalf("remaining network count = %d, want 1", got)
+	}
+	if net := client.FindNetworkByTags(tags); net != nil {
+		t.Fatalf("unexpected remaining matched network: %+v", net)
+	}
+	if net := client.FindNetworkByTags(otherTags); net == nil {
+		t.Fatal("expected other network to remain")
+	}
 }
 
 func TestCleanupByTagsContinuesWhenIndividualDeletesFail(t *testing.T) {
@@ -192,8 +223,8 @@ func TestCleanupByTagsContinuesWhenIndividualDeletesFail(t *testing.T) {
 	createTestResources(t, client, "matched", tags)
 
 	// Inject a transient failure on the first server delete; the remaining
-	// server, load balancer, public IP, and unattached security group should
-	// still be cleaned up in the same pass.
+	// server, load balancer, public IP, unattached security group, and network
+	// should still be cleaned up in the same pass.
 	client.FailNextDeleteServer = fmt.Errorf("injected server delete failure")
 
 	if err := cloud.CleanupByTags(ctx, client, tags); err == nil {
@@ -211,5 +242,8 @@ func TestCleanupByTagsContinuesWhenIndividualDeletesFail(t *testing.T) {
 	}
 	if got := client.SecurityGroupCount(); got != 0 {
 		t.Fatalf("remaining security group count = %d, want 0", got)
+	}
+	if got := client.NetworkCount(); got != 0 {
+		t.Fatalf("remaining network count = %d, want 0", got)
 	}
 }

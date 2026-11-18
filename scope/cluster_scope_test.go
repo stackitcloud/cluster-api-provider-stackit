@@ -396,7 +396,7 @@ func TestBootstrapTargetIP(t *testing.T) {
 	clusterScope.NetworkSpec().SetNetwork(&network.Network{
 		ID:           "net-1",
 		IPv4Prefixes: []string{"192.168.10.0/24"},
-	})
+	}, false)
 	if got := clusterScope.BootstrapTargetIP(); got != "192.168.10.10" {
 		t.Fatalf("BootstrapTargetIP() with /24 network = %q, want %q", got, "192.168.10.10")
 	}
@@ -404,7 +404,7 @@ func TestBootstrapTargetIP(t *testing.T) {
 	clusterScope.NetworkSpec().SetNetwork(&network.Network{
 		ID:           "net-2",
 		IPv4Prefixes: []string{"invalid"},
-	})
+	}, false)
 	if got := clusterScope.BootstrapTargetIP(); got != loadbalancer.DefaultBootstrapTargetIP {
 		t.Fatalf("BootstrapTargetIP() with invalid prefix = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
 	}

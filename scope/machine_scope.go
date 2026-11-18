@@ -210,7 +210,7 @@ func (s *MachineScope) ServerSpec() server.ServerSpec {
 		MachineType:      s.StackitMachine.Spec.MachineType,
 		AvailabilityZone: s.availabilityZone(),
 		SSHKeyName:       s.StackitMachine.Spec.SSHKeyName,
-		NetworkID:        s.StackitMachine.Spec.Network.ID,
+		NetworkID:        s.NetworkID(),
 		SecurityGroups:   s.StackitMachine.Spec.SecurityGroups,
 		UserData:         s.bootstrapData,
 		Tags:             s.tags(),
@@ -246,4 +246,21 @@ func machineAddressesFromServer(in []server.Address) []clusterv1.MachineAddress 
 		}
 	}
 	return out
+}
+
+// NetworkID returns the network ID for this machine, resolving in order:
+// 1. StackitMachine.Spec.Network.ID (machine-level override)
+// 2. StackitCluster.Spec.Network.ID (BYO cluster network)
+// 3. StackitCluster.Status.Network.ID (managed cluster network)
+func (s *MachineScope) NetworkID() string {
+	if s.StackitMachine != nil && s.StackitMachine.Spec.Network.ID != "" {
+		return s.StackitMachine.Spec.Network.ID
+	}
+	if s.StackitCluster != nil {
+		if s.StackitCluster.Spec.Network.ID != "" {
+			return s.StackitCluster.Spec.Network.ID
+		}
+		return s.StackitCluster.Status.Network.ID
+	}
+	return ""
 }

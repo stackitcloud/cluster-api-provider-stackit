@@ -1,7 +1,16 @@
-# Cluster Template
+# Cluster Templates
 
-`templates/cluster-template.yaml` is the default clusterctl template for a
-non-topology workload cluster. It renders:
+CAPSTK provides clusterctl templates under `templates/` for various workload cluster configurations:
+
+- `templates/cluster-template.yaml`: Default template using a pre-existing (Bring-Your-Own / BYO) STACKIT network.
+- `templates/cluster-template-managed-network.yaml`: Managed network template where CAPSTK automatically creates and manages a dedicated `/24` STACKIT network.
+- `templates/cluster-template-bastion.yaml`: Enables an optional provider-managed SSH bastion host.
+- `templates/cluster-template-flatcar-workers.yaml`: Mixed OS cluster with Flatcar Linux worker nodes.
+- `templates/cluster-template-topology.yaml`: ClusterClass topology-based cluster.
+
+## Resource Manifest Breakdown
+
+The classic templates (`cluster-template.yaml` and `cluster-template-managed-network.yaml`) render:
 
 - `Cluster`
 - `StackitCluster`
@@ -11,7 +20,11 @@ non-topology workload cluster. It renders:
 - worker `StackitMachineTemplate`
 - worker `KubeadmConfigTemplate`
 - `MachineHealthCheck` for control-plane and worker Machines
-- `ClusterResourceSet` and resource-set `Secret` for `cloud-provider-stackit`
+- `ClusterResourceSet` for `cloud-provider-stackit`
+
+## Deploying with a Bring-Your-Own (BYO) Network
+
+In the BYO network flow, `STACKIT_NETWORK_ID` is known upfront. The template embeds both the `ClusterResourceSet` and the resource-set `Secret` with the pre-rendered `cloud-provider-stackit.yaml`.
 
 Render a cluster:
 
@@ -30,15 +43,29 @@ Apply the rendered manifest:
 kubectl apply -f "${CLUSTER_NAME}.yaml"
 ```
 
-The template configures kubeadm for an external cloud provider by setting
+## Deploying with a Managed Network
+
+When using `templates/cluster-template-managed-network.yaml`, `STACKIT_NETWORK_ID` is omitted. CAPSTK automatically provisions a dedicated `/24` network during `StackitCluster` reconciliation and publishes its ID to `StackitCluster.status.network.id`.
+
+Render and apply the cluster:
+
+```sh
+clusterctl generate cluster "${CLUSTER_NAME}" \
+  --from templates/cluster-template-managed-network.yaml \
+  --kubernetes-version "${KUBERNETES_VERSION}" \
+  --control-plane-machine-count "${CONTROL_PLANE_MACHINE_COUNT}" \
+  --worker-machine-count "${WORKER_MACHINE_COUNT}" \
+  | kubectl apply -f -
+```
+
+Because the network ID is generated at runtime, the template creates the `ClusterResourceSet` but omits the Secret. Once CAPSTK provisions the network, you retrieve the network ID and supply the `cloud-provider-stackit` Secret or apply the addon directly. See [Workload Addons](addons.md#managed-networks-and-cloud-provider-stackit) for the full procedure.
+
+## External Cloud Provider Wiring
+
+The templates configure kubeadm for an external cloud provider by setting
 `cloud-provider=external` on kubelet and controller-manager.
 
-The template also installs `cloud-provider-stackit` into the workload cluster
-through Cluster API `ClusterResourceSet`. The management cluster must have the
-ClusterResourceSet feature enabled before applying the generated cluster. For
-local validation, `hack/clusterctl-local.yaml` sets `CLUSTER_RESOURCE_SET=true`.
-The topology ClusterClass template follows the same pattern and also includes
-the cloud-provider addon wiring.
+The management cluster must have the ClusterResourceSet feature enabled before applying templates that use it. For local validation, `hack/clusterctl-local.yaml` sets `CLUSTER_RESOURCE_SET=true`.
 
 Set `STACKIT_SERVICE_ACCOUNT_JSON_B64` to a single-line base64 encoding of the
 STACKIT service account JSON. Set `STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE` to a
@@ -47,11 +74,12 @@ STACKIT service account JSON. Set `STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE` to a
 v1.36.x. Use `hack/validate-stackit-versions.sh` before rendering to catch
 unsupported or mismatched versions.
 
-The template installs the cloud controller manager, not a CNI. After the
+The templates install or prepare the cloud controller manager, not a CNI. After the
 workload API is reachable, install a CNI that matches the configured pod/service
 CIDRs and network policy expectations before expecting Nodes to become Ready.
-For a reproducible development path, use the helper documented in
-[Workload CNI](cni.md).
+See [Workload CNI](cni.md) and [Workload Addons](addons.md).
+
+## Machine Health Checks and Remediation
 
 The MachineHealthChecks remediate Machines whose Node does not register within
 10 minutes or reports `Ready=False` or `Ready=Unknown` for 10 minutes. The

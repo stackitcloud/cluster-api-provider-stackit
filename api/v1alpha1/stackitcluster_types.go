@@ -47,10 +47,10 @@ type StackitClusterSpec struct {
 	// +required
 	CredentialsSecretRef corev1.SecretReference `json:"credentialsSecretRef"`
 
-	// network references the existing STACKIT network the cluster will use.
-	// For MVP the network must already exist.
-	// +required
-	Network StackitClusterNetworkSpec `json:"network"`
+	// network references the STACKIT network the cluster will use.
+	// Omitting the ID will create a managed dedicated network for your cluster.
+	// +optional
+	Network StackitClusterNetworkSpec `json:"network,omitempty"`
 
 	// apiServerLoadBalancer configures the load balancer in front of the
 	// Kubernetes API server.
@@ -73,13 +73,13 @@ type StackitClusterSpec struct {
 	AdditionalLabels map[string]string `json:"additionalLabels,omitempty"`
 }
 
-// StackitClusterNetworkSpec references an existing STACKIT network.
+// StackitClusterNetworkSpec references the network for a StackitCluster.
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
-	// +required
-	// +kubebuilder:validation:MinLength=1
+	// Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
-	ID string `json:"id"`
+	// +optional
+	ID string `json:"id,omitempty"`
 }
 
 // StackitAPIServerLoadBalancerSpec configures an optional load balancer for
@@ -160,6 +160,10 @@ type StackitClusterStatus struct {
 	// +optional
 	Initialization StackitClusterInitializationStatus `json:"initialization,omitempty"`
 
+	// network stores observed provider-managed network resources.
+	// +optional
+	Network StackitNetworkStatus `json:"network,omitempty"`
+
 	// apiServerEndpoint is the endpoint the Kubernetes API server is reachable at.
 	// +optional
 	APIServerEndpoint clusterv1.APIEndpoint `json:"apiServerEndpoint,omitempty,omitzero"`
@@ -217,6 +221,16 @@ type StackitBastionStatus struct {
 	CloudInitHash string `json:"cloudInitHash,omitempty"`
 }
 
+// StackitNetworkStatus tracks the network used by the cluster (BYO or managed).
+type StackitNetworkStatus struct {
+	// id is the STACKIT network ID.
+	// +optional
+	ID string `json:"id,omitempty"`
+	// managed indicates whether the network is managed (created and owned) by CAPSTK.
+	// +optional
+	Managed bool `json:"managed,omitempty"`
+}
+
 // Condition types maintained by the StackitClusterReconciler.
 const (
 	ClusterReadyCondition             = "Ready"
@@ -234,7 +248,7 @@ const (
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=".status.apiServerEndpoint.host"
 // +kubebuilder:printcolumn:name="Bastion IP",type=string,JSONPath=".status.bastion.publicIP"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".spec.network.id",priority=1
+// +kubebuilder:printcolumn:name="Network ID",type=string,JSONPath=".status.network.id",priority=1
 // +kubebuilder:printcolumn:name="Project ID",type=string,JSONPath=".spec.projectID",priority=1
 // +kubebuilder:storageversion
 

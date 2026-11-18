@@ -79,23 +79,45 @@ func (r *StackitClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	}
 
 	if err := network.New(clusterScope).Reconcile(ctx); err != nil {
-		log.Error(err, "Failed to get network",
-			"networkID", stackitCluster.Spec.Network.ID,
+		if stackitCluster.Spec.Network.ID != "" {
+			log.Error(err, "Failed to get network",
+				"networkID", stackitCluster.Spec.Network.ID,
+				"region", stackitCluster.Spec.Region,
+			)
+			record.Warnf(
+				stackitCluster, "FailedGetNetwork",
+				"Failed to get network %s in region %s: %v",
+				stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
+			)
+			return clusterScope.CloudFailureResult(
+				"NetworkNotFound",
+				err,
+				retryableErrorRequeueAfter,
+				false,
+				infrav1.ClusterNetworkReadyCondition,
+				infrav1.ClusterReadyCondition,
+			)
+		}
+		log.Error(err, "Failed to reconcile managed network",
+			"cluster", stackitCluster.Name,
 			"region", stackitCluster.Spec.Region,
 		)
 		record.Warnf(
-			stackitCluster, "FailedGetNetwork",
-			"Failed to get network %s in region %s: %v",
-			stackitCluster.Spec.Network.ID, stackitCluster.Spec.Region, err,
+			stackitCluster, "FailedCreateNetwork",
+			"Failed to reconcile managed network in region %s: %v",
+			stackitCluster.Spec.Region, err,
 		)
 		return clusterScope.CloudFailureResult(
-			"NetworkNotFound",
+			"NetworkCreateError",
 			err,
 			retryableErrorRequeueAfter,
 			false,
 			infrav1.ClusterNetworkReadyCondition,
 			infrav1.ClusterReadyCondition,
 		)
+	}
+	if clusterScope.NetworkCreated() {
+		record.Eventf(stackitCluster, "NetworkCreated", "Created managed network %s", stackitCluster.Status.Network.ID)
 	}
 	clusterScope.SetConditions(
 		metav1.ConditionTrue,
@@ -272,8 +294,8 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 
 	// Cleanup runs unconditionally: neither spec nor status is a trustworthy
 	// record of what exists in the cloud. The load balancer, public IP,
-	// security group, and server services fall back to tag lookups and tolerate
-	// NotFound.
+	// security group, server, and network services fall back to tag lookups and
+	// tolerate NotFound.
 	cloudClient, err := util.BuildCloudClient(ctx, r.Client, r.CloudClientFactory, stackitCluster)
 	if err != nil {
 		// A missing credentials Secret cannot be recovered from and commonly
@@ -316,6 +338,34 @@ func (r *StackitClusterReconciler) reconcileDelete(ctx context.Context, clusterS
 		record.Warnf(stackitCluster, "FailedDeleteBastion",
 			"Failed to delete bastion: %v", err)
 		return ctrl.Result{}, err
+	}
+	networkID := stackitCluster.Status.Network.ID
+	if err := network.New(clusterScope).Delete(ctx); err != nil {
+		if shared.IsConflict(err) {
+			log.Info("Managed network still has resources attached; requeueing deletion",
+				"cluster", stackitCluster.Name,
+				"networkID", networkID,
+			)
+			clusterScope.SetConditions(
+				metav1.ConditionFalse,
+				"NetworkInUse",
+				err.Error(),
+				infrav1.ClusterNetworkReadyCondition,
+			)
+			record.Warnf(stackitCluster, "NetworkInUse",
+				"Managed network %s still has active resources attached; retrying deletion: %v", networkID, err)
+			return ctrl.Result{RequeueAfter: deleteRequeueAfter}, nil
+		}
+		log.Error(err, "Failed to delete managed network",
+			"cluster", stackitCluster.Name,
+			"networkID", networkID,
+		)
+		record.Warnf(stackitCluster, "FailedDeleteNetwork",
+			"Failed to delete managed network %s: %v", networkID, err)
+		return ctrl.Result{}, err
+	}
+	if networkID != "" && stackitCluster.Spec.Network.ID == "" {
+		record.Eventf(stackitCluster, "NetworkDeleted", "Deleted managed network %s", networkID)
 	}
 	controllerutil.RemoveFinalizer(stackitCluster, infrav1.ClusterFinalizer)
 	return ctrl.Result{}, nil

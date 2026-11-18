@@ -15,12 +15,9 @@ Kubernetes-native declarative infrastructure for STACKIT.
 
 > ### ⚠️ WARNING ⚠️ 
 > 
-> **`cluster-api-provider-stackit` is not an officially supported STACKIT project and is still in active development.**
+> **`cluster-api-provider-stackit` is still in active development.**
 > 
-> The implementation is validated through end-to-end tests, but it has not yet received the same level of quality reviews, production hardening, or long-term operational validation as a mature provider or officially supported STACKIT projects.
-> 
-> Use at your own risk. Please review the code carefully before using it in production environments.
-
+> Use at your own risk.
 
 ## What is the Cluster API Provider STACKIT
 

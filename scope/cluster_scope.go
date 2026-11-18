@@ -51,7 +51,8 @@ type ClusterScope struct {
 	StackitCluster *infrav1.StackitCluster
 	cloudClient    cloud.Client
 
-	network *network.Network
+	network        *network.Network
+	networkCreated bool
 
 	loadBalancerTargets     []loadbalancer.Target
 	loadBalancerSeedTargets []loadbalancer.Target
@@ -227,7 +228,7 @@ func (s *ClusterScope) ServerSpec() server.ServerSpec {
 		AvailabilityZone: defaultAvailabilityZone(s.StackitCluster),
 		SSHKeyName:       s.StackitCluster.Spec.Bastion.SSHKeyName,
 		RequireSSHKey:    true,
-		NetworkID:        s.StackitCluster.Spec.Network.ID,
+		NetworkID:        s.NetworkID(),
 		UserData:         s.bastionCloudInit,
 		Tags:             s.bastionTags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitCluster.Spec.Bastion.RootVolume),
@@ -348,7 +349,7 @@ func (s *ClusterScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return loadbalancer.LoadBalancerSpec{
 		ID:              s.StackitCluster.Status.APIServerLoadBalancerID,
 		Name:            s.StackitCluster.Name + "-apiserver",
-		NetworkID:       s.StackitCluster.Spec.Network.ID,
+		NetworkID:       s.NetworkID(),
 		Port:            loadbalancer.DefaultAPIServerPort,
 		Tags:            s.apiServerLoadBalancerTags(),
 		Targets:         s.loadBalancerTargets,
@@ -365,12 +366,39 @@ func (s *ClusterScope) AvailabilityZoneSpec() availabilityzone.AvailabilityZoneS
 	}
 }
 
+func (s *ClusterScope) NetworkCreated() bool {
+	return s.networkCreated
+}
+
+func (s *ClusterScope) setNetwork(net *network.Network, created bool) {
+	if net == nil {
+		s.network = nil
+		s.networkCreated = false
+		s.StackitCluster.Status.Network = infrav1.StackitNetworkStatus{}
+		return
+	}
+	s.network = net
+	s.networkCreated = created
+	s.StackitCluster.Status.Network = infrav1.StackitNetworkStatus{
+		ID:      net.ID,
+		Managed: s.StackitCluster.Spec.Network.ID == "",
+	}
+}
+
 func (s *ClusterScope) NetworkSpec() network.NetworkSpec {
+	if s.StackitCluster.Spec.Network.ID != "" {
+		return network.NetworkSpec{
+			ID:         s.StackitCluster.Spec.Network.ID,
+			SetNetwork: s.setNetwork,
+		}
+	}
 	return network.NetworkSpec{
-		ID: s.StackitCluster.Spec.Network.ID,
-		SetNetwork: func(net *network.Network) {
-			s.network = net
-		},
+		ID:         s.StackitCluster.Status.Network.ID,
+		Name:       s.StackitCluster.Name + "-network",
+		IPv4Prefix: network.DefaultNetworkPrefix,
+		Tags:       util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels),
+		Managed:    true,
+		SetNetwork: s.setNetwork,
 	}
 }
 
@@ -539,4 +567,15 @@ func nodeSSHSecurityGroupSpec(stackitCluster *infrav1.StackitCluster, remoteSecu
 			},
 		},
 	}
+}
+
+// NetworkID returns the cluster network ID (from spec if BYO, or status if managed).
+func (s *ClusterScope) NetworkID() string {
+	if s.StackitCluster == nil {
+		return ""
+	}
+	if s.StackitCluster.Spec.Network.ID != "" {
+		return s.StackitCluster.Spec.Network.ID
+	}
+	return s.StackitCluster.Status.Network.ID
 }

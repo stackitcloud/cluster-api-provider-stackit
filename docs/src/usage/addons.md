@@ -3,60 +3,177 @@
 This provider supports a tested addon flow for unmanaged STACKIT workload
 clusters:
 
-- `cloud-provider-stackit` is rendered into the workload cluster by the cluster
-  template through a Cluster API `ClusterResourceSet`.
-- The CNI is installed after the workload API server is reachable.
-- The default tested CNI path uses Cilium with the checked-in values in
+- `cloud-provider-stackit` (the Cloud Controller Manager or CCM) runs in the workload
+  cluster to manage node lifecycles, provider IDs, and STACKIT Service Load Balancers.
+- A CNI (such as Cilium or Calico) is installed after the workload API server is reachable.
+- The default tested CNI path uses Cilium with preconfigured values in
   `templates/addons/cilium-values.yaml`.
 
-This split is intentional. The cloud provider must run early so Kubernetes
-Nodes get STACKIT provider IDs and the external cloud-provider taint is cleared.
-The CNI is a cluster operator choice because routing, network policy, MTU,
-IPAM, and upgrade strategy are environment-specific.
+This split is intentional:
+1. The cloud provider must run early so Kubernetes Nodes get STACKIT provider IDs
+   and the external cloud-provider taint (`node.cloudprovider.kubernetes.io/uninitialized`)
+   is cleared.
+2. The CNI is a cluster operator choice because routing, network policy, MTU,
+   IPAM, and upgrade strategy are environment-specific.
 
-## Cloud Provider
+## Cloud Controller Manager (`cloud-provider-stackit`)
 
-The classic and topology cluster templates include a
-`stackit-workload-cloud-provider-stackit` `ClusterResourceSet` and Secret. The
-resource set applies `templates/addons/cloud-provider-stackit.yaml` into the
-workload cluster.
+The STACKIT Cloud Controller Manager runs inside the workload cluster in the `kube-system` namespace.
+Its manifest is defined in `templates/addons/cloud-provider-stackit.yaml` and sets up:
 
-The addon template installs:
+- ServiceAccount, RBAC roles, and ClusterRoleBindings for `stackit-cloud-controller-manager`
+- `stackit-cloud-config` ConfigMap containing `cloud.yaml` with the STACKIT project ID, region, and load balancer network ID
+- `stackit-cloud-secret` Secret containing the service account JSON key (`sa_key.json`)
+- Deployment running `stackit-cloud-controller-manager` with controllers:
+  - `cloud-node-controller`: initializes Node objects and sets `spec.providerID` to `stackit://<server-id>`
+  - `cloud-node-lifecycle-controller`: cleans up Node objects when servers are deleted in STACKIT
+  - `service-lb-controller`: provisions and configures STACKIT Network Load Balancers for Kubernetes `Service` objects with `type: LoadBalancer`
 
-- the `stackit-cloud-controller-manager` ServiceAccount, RBAC, ConfigMap,
-  Secret, and Deployment in `kube-system`
-- the `--cloud-provider=stackit` controller configuration
-- the `cloud-node-controller`, `cloud-node-lifecycle-controller`, and
-  `service-lb-controller`
-- tolerations required to run before Nodes are initialized
+### Configuration Variables
 
-The kubeadm templates configure the control plane and kubelets for an external
-cloud provider. When `cloud-provider-stackit` is healthy, it sets STACKIT
-provider IDs on Nodes and removes the
-`node.cloudprovider.kubernetes.io/uninitialized` taint.
+The manifest `templates/addons/cloud-provider-stackit.yaml` expects these environment variables:
 
-Before creating the cluster, ensure the management cluster has
-`ClusterResourceSet` enabled. The local clusterctl configuration in
-`hack/clusterctl-local.yaml` enables it with `CLUSTER_RESOURCE_SET=true`.
+| Variable | Description |
+| --- | --- |
+| `STACKIT_PROJECT_ID` | Target STACKIT project UUID |
+| `STACKIT_REGION` | Target STACKIT region (e.g. `eu01`) |
+| `STACKIT_NETWORK_ID` | STACKIT network UUID for Service load balancers |
+| `STACKIT_SERVICE_ACCOUNT_JSON_B64` | Base64-encoded STACKIT service account JSON key |
+| `STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE` | CCM image matching the workload Kubernetes minor version (e.g. `ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7`) |
+| `CLUSTER_NAME` | Name of the workload cluster |
 
-Set the cloud provider inputs before rendering the template:
+Set your credentials and CCM image:
 
 ```sh
 export STACKIT_SERVICE_ACCOUNT_JSON_FILE=./.stackit/cluster-api-provider-stackit-serviceaccount.json
 export STACKIT_SERVICE_ACCOUNT_JSON_B64="$(base64 < "${STACKIT_SERVICE_ACCOUNT_JSON_FILE}" | tr -d '\n')"
-export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE="ghcr.io/stackitcloud/cloud-provider-stackit:<version>"
+export STACKIT_CLOUD_CONTROLLER_MANAGER_IMAGE="ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.35.7"
 ```
 
-The cloud-provider image minor version must match the Kubernetes minor version
-of the workload cluster. Use the version helper before rendering:
+> **Important:** The `cloud-provider-stackit` image minor version must match the Kubernetes minor version of the workload cluster (e.g. v1.35.x CCM for v1.35.x Kubernetes). Use `hack/validate-stackit-versions.sh` before deployment to verify compatibility.
+
+---
+
+## Deploying CCM with BYO Networks
+
+When using `templates/cluster-template.yaml` or `templates/cluster-template-topology.yaml`, you provide `STACKIT_NETWORK_ID` up front. The cluster template generates:
+
+1. A Cluster API `ClusterResourceSet` named `${CLUSTER_NAME}-cloud-provider-stackit`
+2. A companion `Secret` containing the pre-rendered `cloud-provider-stackit.yaml`
+
+As soon as the workload cluster API server is reachable, Cluster API automatically applies the CCM manifest into the workload cluster. No manual intervention is needed.
+
+---
+
+## Managed Networks and `cloud-provider-stackit`
+
+When deploying a cluster with a managed network using `templates/cluster-template-managed-network.yaml`, `spec.network.id` is omitted. CAPSTK creates a dedicated `/24` network in STACKIT during cluster reconciliation.
+
+Because the network ID does not exist when `clusterctl generate` is executed, the template creates the `ClusterResourceSet` but **does not include the Secret**. The STACKIT CCM requires this network ID in `stackit-cloud-config` to manage Service load balancers.
+
+### Step 1: Retrieve the Provisioned Network ID
+
+Wait for CAPSTK to create the network and populate `StackitCluster.status.network.id`:
 
 ```sh
-hack/validate-stackit-versions.sh
+export STACKIT_NETWORK_ID=$(kubectl get stackitcluster "${CLUSTER_NAME}" \
+  --namespace "${NAMESPACE}" \
+  -o jsonpath='{.status.network.id}')
+
+echo "Managed Network ID: ${STACKIT_NETWORK_ID}"
 ```
 
-## CNI
+### Step 2: Deploy CCM
 
-After the workload API server is reachable, retrieve the kubeconfig:
+You can provide the CCM manifest using either of two methods:
+
+#### Method A: Via ClusterResourceSet Secret (Recommended)
+
+Since `cluster-template-managed-network.yaml` already defined a `ClusterResourceSet` looking for a Secret named `${CLUSTER_NAME}-cloud-provider-stackit`, create that Secret in the management cluster. The ClusterResourceSet controller will automatically push it to the workload cluster:
+
+```sh
+# Render the addon manifest using envsubst and create the CRS Secret
+kubectl create secret generic "${CLUSTER_NAME}-cloud-provider-stackit" \
+  --namespace "${NAMESPACE}" \
+  --type=addons.cluster.x-k8s.io/resource-set \
+  --from-literal=cloud-provider-stackit.yaml="$(envsubst < templates/addons/cloud-provider-stackit.yaml)"
+```
+
+To verify the ClusterResourceSet applied the resources:
+
+```sh
+kubectl get clusterresourcesetbinding -n "${NAMESPACE}"
+```
+
+#### Method B: Direct Apply to the Workload Cluster
+
+Alternatively, retrieve the workload cluster kubeconfig and apply the rendered addon directly:
+
+```sh
+clusterctl get kubeconfig "${CLUSTER_NAME}" \
+  --namespace "${NAMESPACE}" \
+  > "${CLUSTER_NAME}.kubeconfig"
+
+envsubst < templates/addons/cloud-provider-stackit.yaml \
+  | kubectl --kubeconfig "${CLUSTER_NAME}.kubeconfig" apply -f -
+```
+
+---
+
+## CNI Installation
+
+After CCM is deployed and the workload API server is reachable, retrieve the kubeconfig if you have not already:
+
+```sh
+clusterctl get kubeconfig "${CLUSTER_NAME}" \
+  --namespace "${NAMESPACE}" \
+  > "${CLUSTER_NAME}.kubeconfig"
+```
+
+Nodes remain in `NotReady` status until a CNI is installed.
+
+### Installing Cilium (Default Tested Path)
+
+Install Cilium using the checked-in values matching the cluster template's pod CIDR:
+
+```sh
+make install-workload-cni \
+  WORKLOAD_KUBECONFIG="${CLUSTER_NAME}.kubeconfig"
+```
+
+Alternatively, install with the Cilium CLI or Helm using `templates/addons/cilium-values.yaml`:
+
+```sh
+cilium install \
+  --kubeconfig "${CLUSTER_NAME}.kubeconfig" \
+  --values templates/addons/cilium-values.yaml
+```
+
+### Installing Calico
+
+To install Calico instead:
+
+```sh
+make install-workload-cni \
+  WORKLOAD_KUBECONFIG="${CLUSTER_NAME}.kubeconfig" \
+  STACKIT_WORKLOAD_CNI=calico
+```
+
+### Installing a Custom CNI
+
+To apply an arbitrary CNI manifest:
+
+```sh
+make install-workload-cni \
+  WORKLOAD_KUBECONFIG="${CLUSTER_NAME}.kubeconfig" \
+  CNI_MANIFEST=./my-cni.yaml
+```
+
+---
+
+## Verification
+
+Verify that the cloud provider Deployment rolled out:
 
 ```sh
 clusterctl get kubeconfig "${CLUSTER_NAME}" \

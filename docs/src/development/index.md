@@ -150,6 +150,9 @@ make run
 `make run` connects to the active management cluster. When you stop it, rebuild,
 load, and deploy the image again with the commands in the previous section.
 
+For a live-reload development loop that automatically rebuilds and redeploys the
+controller on Go code changes, see [Development with Tilt](tilt-setup.md).
+
 ## Cleanup
 
 To fully delete a workload cluster and its cloud infrastructure:

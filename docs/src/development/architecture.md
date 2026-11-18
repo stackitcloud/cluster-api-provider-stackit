@@ -68,12 +68,12 @@ Kubernetes spec/status fields into service spec structs
 
 - Reading credentials and building the cloud client
 - Reconciling availability zones and publishing failure domains
-- Reconciling (validating) the configured network
+- Reconciling the cluster network (validating a BYO network or creating a managed network)
 - Reconciling the optional API server load balancer and its control-plane
   target pool
 - Reconciling the optional bastion host (server, security groups, and public IP)
 - Updating readiness and contract status
-- Cleaning up provider-managed bastion and load balancer resources on deletion
+- Cleaning up provider-managed bastion, load balancer, and network resources on deletion
 
 `StackitMachineReconciler` is responsible for:
 
@@ -95,7 +95,8 @@ Cloud resource management is organized into service packages under
 `cloud/services/`:
 
 - `availabilityzone`: Lists availability zones (`Reconcile`)
-- `network`: Looks up and validates the cluster network (`Reconcile`)
+- `network`: Validates BYO networks or creates, adopts by tags, and deletes
+  managed cluster networks (`Reconcile`, `Delete`)
 - `loadbalancer`: Creates, adopts by tags, updates target pools, and deletes
   the API server load balancer (`Reconcile`, `Delete`)
 - `publicip`: Creates, adopts by tags, associates/disassociates, and deletes
@@ -108,9 +109,9 @@ Cloud resource management is organized into service packages under
   `ErrInvalidInput`, `ErrConflict`, `ErrTransient`), SDK error classification,
   and tag lookup/deletion helpers
 
-`cloud.CleanupByTags` uses the `publicip`, `loadbalancer`, `server`, and
-`securitygroup` services to delete all provider-managed resources matching a
-tag selector without requiring Kubernetes objects.
+`cloud.CleanupByTags` uses the `publicip`, `loadbalancer`, `server`,
+`securitygroup`, and `network` services to delete all provider-managed
+resources matching a tag selector without requiring Kubernetes objects.
 
 Controllers and scopes handle classified errors from `cloud/services/shared`
 differently:

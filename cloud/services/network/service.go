@@ -12,17 +12,24 @@ package network
 
 import "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 
-// Network describes an existing STACKIT virtual network referenced by the provider.
+// DefaultNetworkPrefix is the default IPv4 CIDR block used when creating a managed network.
+const DefaultNetworkPrefix = "10.0.0.0/24"
+
+// Network describes a STACKIT virtual network.
 type Network struct {
 	ID           string
 	Name         string
 	IPv4Prefixes []string
 }
 
-// NetworkSpec describes the desired STACKIT network to resolve.
+// NetworkSpec describes the desired state of a STACKIT network.
 type NetworkSpec struct {
 	ID         string
-	SetNetwork func(network *Network)
+	Name       string
+	IPv4Prefix string
+	Tags       map[string]string
+	Managed    bool
+	SetNetwork func(network *Network, created bool)
 }
 
 // Scope is an interface that provides scope data needed for network reconciliation.

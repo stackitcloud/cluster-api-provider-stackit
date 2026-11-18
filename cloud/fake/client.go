@@ -43,7 +43,7 @@ type Client struct {
 	loadBalancers  map[string]*lbEntry
 	publicIPs      map[string]*publicIPEntry
 	securityGroups map[string]*securityGroupEntry
-	networks       map[string]*network.Network
+	networks       map[string]*networkEntry
 	iaasClient     *iaas.APIClient
 	lbClient       *lb.APIClient
 
@@ -59,6 +59,8 @@ type Client struct {
 	FailNextDeleteLB         error
 	FailNextSetTargets       error
 	FailNextGetNetwork       error
+	FailNextCreateNetwork    error
+	FailNextDeleteNetwork    error
 	FailNextAddSecurityGroup error
 	FailNextListAZ           error
 	FailNextGetPublicIP      error
@@ -117,6 +119,11 @@ type securityGroupEntry struct {
 	rules         map[string]*securityGroupRuleEntry
 }
 
+type networkEntry struct {
+	network *network.Network
+	tags    map[string]string
+}
+
 // New returns a Client preconfigured with the given networks.
 func New(networks ...network.Network) *Client {
 	c := &Client{
@@ -124,11 +131,13 @@ func New(networks ...network.Network) *Client {
 		loadBalancers:  make(map[string]*lbEntry),
 		publicIPs:      make(map[string]*publicIPEntry),
 		securityGroups: make(map[string]*securityGroupEntry),
-		networks:       make(map[string]*network.Network),
+		networks:       make(map[string]*networkEntry),
 	}
 	for i := range networks {
 		n := networks[i]
-		c.networks[n.ID] = &n
+		c.networks[n.ID] = &networkEntry{
+			network: &n,
+		}
 	}
 	iaasClient, err := iaas.NewAPIClient(
 		config.WithoutAuthentication(),
@@ -221,11 +230,11 @@ func (c *Client) GetNetwork(_ context.Context, id string) (*network.Network, err
 	if err := consume(&c.FailNextGetNetwork); err != nil {
 		return nil, err
 	}
-	n, ok := c.networks[id]
+	entry, ok := c.networks[id]
 	if !ok {
 		return nil, fmt.Errorf("network %q: %w", id, shared.ErrNotFound)
 	}
-	out := *n
+	out := *entry.network
 	return &out, nil
 }
 
@@ -410,6 +419,26 @@ func (c *Client) FindSecurityGroupByTags(tags map[string]string) *securitygroup.
 	return nil
 }
 
+// NetworkCount returns the number of currently tracked networks (test helper).
+func (c *Client) NetworkCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.networks)
+}
+
+// FindNetworkByTags returns the single network matching tags (test helper).
+func (c *Client) FindNetworkByTags(tags map[string]string) *network.Network {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.networks {
+		if shared.MapContains(entry.tags, tags) {
+			out := *entry.network
+			return &out
+		}
+	}
+	return nil
+}
+
 // DeleteServer removes a server from the fake store by ID (test helper).
 func (c *Client) DeleteServer(serverID string) {
 	c.mu.Lock()
@@ -522,28 +551,152 @@ func (c *Client) roundTripIaaS(r *http.Request) (*http.Response, error) {
 }
 
 func (c *Client) handleNetworkRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
-	if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/networks/") {
+	path := r.URL.Path
+
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/networks"):
+		tags := parseLabelSelector(r.URL.Query().Get("label_selector"))
+		items, err := c.listNetworkItems(tags)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(map[string]any{"items": items})
+		}
+		return true
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/networks"):
+		var body struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+			IPv4   *struct {
+				Prefix string `json:"prefix"`
+			} `json:"ipv4"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		var prefix string
+		if body.IPv4 != nil {
+			prefix = body.IPv4.Prefix
+		}
+		created, err := c.createNetwork(body.Name, prefix, body.Labels)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(created)
+		}
+		return true
+
+	case r.Method == http.MethodGet && strings.Contains(path, "/networks/"):
+		id := path[strings.LastIndex(path, "/networks/")+len("/networks/"):]
+		got, err := c.getNetworkItem(r.Context(), id)
+		if err != nil {
+			writeFakeError(rec, err)
+		} else {
+			_ = json.NewEncoder(rec).Encode(got)
+		}
+		return true
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/networks/"):
+		id := path[strings.LastIndex(path, "/networks/")+len("/networks/"):]
+		writeFakeStatus(rec, c.deleteNetwork(id))
+		return true
+
+	default:
 		return false
 	}
-	id := r.URL.Path[strings.LastIndex(r.URL.Path, "/networks/")+len("/networks/"):]
-	n, err := c.GetNetwork(r.Context(), id)
+}
+
+func (c *Client) getNetworkItem(ctx context.Context, id string) (map[string]any, error) {
+	n, err := c.GetNetwork(ctx, id)
 	if err != nil {
-		writeFakeError(rec, err)
-		return true
+		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.networks[id]; ok {
+		return fakeNetworkMap(entry), nil
+	}
+	return fakeNetworkMap(&networkEntry{network: n}), nil
+}
+
+func (c *Client) listNetworkItems(tags map[string]string) ([]map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("empty tags: %w", shared.ErrInvalidInput)
+	}
+	items := make([]map[string]any, 0, len(c.networks))
+	for _, entry := range c.networks {
+		if shared.MapContains(entry.tags, tags) {
+			items = append(items, fakeNetworkMap(entry))
+		}
+	}
+	return items, nil
+}
+
+func (c *Client) createNetwork(name, prefix string, tags map[string]string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextCreateNetwork); err != nil {
+		return nil, err
+	}
+	if name == "" {
+		return nil, fmt.Errorf("network name is empty: %w", shared.ErrInvalidInput)
+	}
+	var prefixes []string
+	if prefix != "" {
+		prefixes = []string{prefix}
+	}
+	net := &network.Network{
+		ID:           c.genID(),
+		Name:         name,
+		IPv4Prefixes: prefixes,
+	}
+	entry := &networkEntry{
+		network: net,
+		tags:    copyTags(tags),
+	}
+	c.networks[net.ID] = entry
+	return fakeNetworkMap(entry), nil
+}
+
+func (c *Client) deleteNetwork(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := consume(&c.FailNextDeleteNetwork); err != nil {
+		return err
+	}
+	if _, ok := c.networks[id]; !ok {
+		return fmt.Errorf("network %q: %w", id, shared.ErrNotFound)
+	}
+	delete(c.networks, id)
+	return nil
+}
+
+func fakeNetworkMap(entry *networkEntry) map[string]any {
 	m := map[string]any{
-		"id":     n.ID,
-		"name":   n.Name,
+		"id":     entry.network.ID,
+		"name":   entry.network.Name,
 		"status": "CREATED",
 		"routed": true,
 	}
-	if len(n.IPv4Prefixes) > 0 {
+	if len(entry.network.IPv4Prefixes) > 0 {
 		m["ipv4"] = map[string]any{
-			"prefixes": slices.Clone(n.IPv4Prefixes),
+			"prefixes": slices.Clone(entry.network.IPv4Prefixes),
 		}
 	}
-	_ = json.NewEncoder(rec).Encode(m)
-	return true
+	if len(entry.tags) > 0 {
+		labels := make(map[string]any, len(entry.tags))
+		for k, v := range entry.tags {
+			labels[k] = v
+		}
+		m["labels"] = labels
+	}
+	return m
 }
 
 func (c *Client) handleAvailabilityZoneRequest(rec *httptest.ResponseRecorder, r *http.Request) bool {
