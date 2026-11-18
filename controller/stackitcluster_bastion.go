@@ -108,7 +108,7 @@ func (r *StackitClusterReconciler) reconcileBastion(
 		return ctrl.Result{}, false, err
 	}
 	state, powerStatus := clusterScope.BastionServerState()
-	if ready, reason, message, warn := serverStateCondition(state, powerStatus); !ready {
+	if ready, reason, message, warn := server.StateCondition(state, powerStatus); !ready {
 		previousReason := ""
 		if previous := meta.FindStatusCondition(stackitCluster.Status.Conditions, infrav1.ClusterBastionReadyCondition); previous != nil {
 			previousReason = previous.Reason
