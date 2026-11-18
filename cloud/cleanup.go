@@ -28,6 +28,39 @@ type cleanupScope struct {
 	tags map[string]string
 }
 
+// CleanupByTags deletes provider-managed cloud resources matching tags without
+// relying on Kubernetes objects. Load balancers are deleted before servers so
+// server deletion is not blocked by target attachments, servers are deleted
+// before security groups so attached servers do not block security group
+// deletion if server detachment fails or lags, and networks are deleted last.
+func CleanupByTags(ctx context.Context, client Client, tags map[string]string) error {
+	if len(tags) == 0 {
+		return fmt.Errorf("%w: empty cleanup tag selector", shared.ErrInvalidInput)
+	}
+
+	scope := &cleanupScope{
+		Client: client,
+		tags:   tags,
+	}
+	var errs []error
+	for _, deleteFn := range []func(context.Context) error{
+		publicip.New(scope).Delete,
+		loadbalancer.New(scope).Delete,
+		server.New(scope).Delete,
+		securitygroup.New(scope).Delete,
+		network.New(scope).Delete,
+	} {
+		if err := deleteFn(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("%w: %w", shared.ErrTransient, errors.Join(errs...))
+	}
+	return nil
+}
+
 func (s *cleanupScope) PublicIPSpec() publicip.PublicIPSpec {
 	return publicip.PublicIPSpec{
 		Tags:           s.tags,
@@ -61,37 +94,4 @@ func (s *cleanupScope) NetworkSpec() network.NetworkSpec {
 		Tags:    s.tags,
 		Managed: true,
 	}
-}
-
-// CleanupByTags deletes provider-managed cloud resources matching tags without
-// relying on Kubernetes objects. Load balancers are deleted before servers so
-// server deletion is not blocked by target attachments, servers are deleted
-// before security groups so attached servers do not block security group
-// deletion if server detachment fails or lags, and networks are deleted last.
-func CleanupByTags(ctx context.Context, client Client, tags map[string]string) error {
-	if len(tags) == 0 {
-		return fmt.Errorf("%w: empty cleanup tag selector", shared.ErrInvalidInput)
-	}
-
-	scope := &cleanupScope{
-		Client: client,
-		tags:   tags,
-	}
-	var errs []error
-	for _, deleteFn := range []func(context.Context) error{
-		publicip.New(scope).Delete,
-		loadbalancer.New(scope).Delete,
-		server.New(scope).Delete,
-		securitygroup.New(scope).Delete,
-		network.New(scope).Delete,
-	} {
-		if err := deleteFn(ctx); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("%w: %w", shared.ErrTransient, errors.Join(errs...))
-	}
-	return nil
 }

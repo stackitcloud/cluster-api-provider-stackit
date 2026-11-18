@@ -12,6 +12,7 @@ package scope
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -139,7 +140,7 @@ func (s *MachineScope) setInstance(srv *server.Server, created bool) {
 	s.instanceCreated = created
 	s.instancePowerStatus = srv.PowerStatus
 	s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
-	providerID := cloud.NewProviderID(srv.ID)
+	providerID := fmt.Sprintf("stackit://%s", srv.ID)
 	s.StackitMachine.Status.InstanceID = srv.ID
 	s.StackitMachine.Status.InstanceState = srv.State
 	s.StackitMachine.Status.AvailabilityZone = srv.AvailabilityZone
