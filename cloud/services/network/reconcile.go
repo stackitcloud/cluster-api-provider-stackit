@@ -15,16 +15,19 @@ import (
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.NetworkSpec()
 	if err := spec.validate(); err != nil {
-		return err
+		return s.handleReconcileError(ctx, spec, err)
 	}
 
 	var (
@@ -38,23 +41,70 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		net, err = s.get(ctx, spec.ID)
 	}
 	if err != nil {
-		return err
+		return s.handleReconcileError(ctx, spec, err)
 	}
-	if spec.SetNetwork != nil {
-		spec.SetNetwork(net, created)
+	s.scope.SetNetwork(net)
+	if created {
+		s.scope.Eventf("NetworkCreated", "Created managed network %s", net.ID)
 	}
+	s.scope.SetConditions(
+		metav1.ConditionTrue,
+		"Available",
+		"",
+		infrav1.ClusterNetworkReadyCondition,
+	)
 	log.V(1).Info("Reconciled network resources", "networkID", net.ID, "created", created)
-	return nil
+	return ctrl.Result{}, nil
 }
 
-func (s *Service) Delete(ctx context.Context) error {
+func (s *Service) handleReconcileError(ctx context.Context, spec NetworkSpec, err error) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if !spec.Managed {
+		log.Error(err, "Failed to get network",
+			"networkID", spec.ID,
+			"region", s.scope.Region(),
+		)
+		s.scope.Warnf(
+			"FailedGetNetwork",
+			"Failed to get network %s in region %s: %v",
+			spec.ID, s.scope.Region(), err,
+		)
+		return s.scope.CloudFailureResult(
+			"NetworkNotFound",
+			err,
+			shared.RetryableErrorRequeueAfter,
+			false,
+			infrav1.ClusterNetworkReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+	}
+	log.Error(err, "Failed to reconcile managed network",
+		"cluster", s.scope.Name(),
+		"region", s.scope.Region(),
+	)
+	s.scope.Warnf(
+		"FailedCreateNetwork",
+		"Failed to reconcile managed network in region %s: %v",
+		s.scope.Region(), err,
+	)
+	return s.scope.CloudFailureResult(
+		"NetworkCreateError",
+		err,
+		shared.RetryableErrorRequeueAfter,
+		false,
+		infrav1.ClusterNetworkReadyCondition,
+		infrav1.ClusterReadyCondition,
+	)
+}
+
+func (s *Service) Delete(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.NetworkSpec()
 	if !spec.Managed {
-		return nil
+		return ctrl.Result{}, nil
 	}
 	if spec.ID == "" && len(spec.Tags) == 0 {
-		return fmt.Errorf("%w: network ID or tags are required", shared.ErrInvalidInput)
+		return ctrl.Result{}, fmt.Errorf("%w: network ID or tags are required", shared.ErrInvalidInput)
 	}
 
 	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.deleteByID, s.listIDsByTags)
@@ -62,12 +112,34 @@ func (s *Service) Delete(ctx context.Context) error {
 		log.V(1).Info("Deleted network", "networkID", deletedID)
 	}
 	if err != nil {
-		return err
+		if shared.IsConflict(err) {
+			log.Info("Managed network still has resources attached; requeueing deletion",
+				"cluster", s.scope.Name(),
+				"networkID", spec.ID,
+			)
+			s.scope.SetConditions(
+				metav1.ConditionFalse,
+				"NetworkInUse",
+				err.Error(),
+				infrav1.ClusterNetworkReadyCondition,
+			)
+			s.scope.Warnf("NetworkInUse",
+				"Managed network %s still has active resources attached; retrying deletion: %v", spec.ID, err)
+			return ctrl.Result{RequeueAfter: shared.DeleteRequeueAfter}, nil
+		}
+		log.Error(err, "Failed to delete managed network",
+			"cluster", s.scope.Name(),
+			"networkID", spec.ID,
+		)
+		s.scope.Warnf("FailedDeleteNetwork",
+			"Failed to delete managed network %s: %v", spec.ID, err)
+		return ctrl.Result{}, err
 	}
-	if spec.SetNetwork != nil {
-		spec.SetNetwork(nil, false)
+	s.scope.SetNetwork(nil)
+	if spec.ID != "" {
+		s.scope.Eventf("NetworkDeleted", "Deleted managed network %s", spec.ID)
 	}
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // get retrieves a STACKIT network by ID.

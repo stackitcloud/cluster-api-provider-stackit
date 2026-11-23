@@ -14,23 +14,32 @@ import (
 	"context"
 	"fmt"
 
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	zones, err := s.list(ctx)
 	if err != nil {
-		return err
+		return s.scope.CloudFailureResult(
+			"AvailabilityZonesError",
+			err,
+			shared.RetryableErrorRequeueAfter,
+			true,
+			infrav1.ClusterReadyCondition,
+		)
 	}
-	spec := s.scope.AvailabilityZoneSpec()
-	if spec.SetZones != nil {
-		spec.SetZones(zones)
-	}
+	s.scope.SetZones(zones)
 	log.V(1).Info("Reconciled availability zones", "count", len(zones))
-	return nil
+	return ctrl.Result{}, nil
+}
+
+func (s *Service) Delete(_ context.Context) (ctrl.Result, error) {
+	return ctrl.Result{}, nil
 }
 
 // list retrieves the availability zones for the configured region.

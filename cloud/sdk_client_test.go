@@ -11,7 +11,6 @@ You may obtain a copy of the License at
 package cloud
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -26,7 +25,7 @@ const (
 
 func TestNewClientValidation(t *testing.T) {
 	t.Run("rejects empty project ID", func(t *testing.T) {
-		_, err := NewClient(context.Background(), Credentials{
+		_, err := NewClient(Credentials{
 			Region:             testSDKRegion,
 			ServiceAccountJSON: []byte(`{}`),
 		})
@@ -36,7 +35,7 @@ func TestNewClientValidation(t *testing.T) {
 	})
 
 	t.Run("rejects empty region", func(t *testing.T) {
-		_, err := NewClient(context.Background(), Credentials{
+		_, err := NewClient(Credentials{
 			ProjectID:          testSDKProjectID,
 			ServiceAccountJSON: []byte(`{}`),
 		})
@@ -47,7 +46,7 @@ func TestNewClientValidation(t *testing.T) {
 
 	t.Run("rejects empty service account JSON when STACKIT_NO_AUTH is not true", func(t *testing.T) {
 		t.Setenv(stackitNoAuthEnv, "false")
-		_, err := NewClient(context.Background(), Credentials{
+		_, err := NewClient(Credentials{
 			ProjectID: testSDKProjectID,
 			Region:    testSDKRegion,
 		})
@@ -58,7 +57,7 @@ func TestNewClientValidation(t *testing.T) {
 
 	t.Run("creates SDKClient when STACKIT_NO_AUTH is true", func(t *testing.T) {
 		t.Setenv(stackitNoAuthEnv, testBoolTrue)
-		client, err := NewClient(context.Background(), Credentials{
+		client, err := NewClient(Credentials{
 			ProjectID: testSDKProjectID,
 			Region:    testSDKRegion,
 		})

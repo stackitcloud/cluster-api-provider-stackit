@@ -49,7 +49,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	client, err := cloud.NewClient(ctx, cloud.Credentials{
+	client, err := cloud.NewClient(cloud.Credentials{
 		ProjectID:          projectID,
 		Region:             region,
 		ServiceAccountJSON: serviceAccountJSON,

@@ -14,32 +14,110 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	spec := s.scope.ServerSpec()
+	srv, created, err := s.ReconcilePrimitive(ctx)
+	if IsServerGone(err) {
+		s.scope.SetNotReady(
+			"InstanceNotFound",
+			err.Error(),
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
+		s.scope.Warnf(
+			"InstanceNotFound",
+			"Server %s no longer exists; the Machine must be replaced", spec.ID,
+		)
+		return s.scope.ServerGoneResult(err)
+	}
+	if err != nil {
+		log.Error(err, "Failed to create server",
+			"machine", s.scope.Name(),
+			"imageID", spec.ImageID,
+			"networkID", spec.NetworkID,
+			"region", s.scope.Region(),
+		)
+		s.scope.Warnf(
+			"FailedCreateInstance",
+			"Failed to create server %s (imageID: %s, networkID: %s, region: %s): %v",
+			s.scope.Name(), spec.ImageID, spec.NetworkID, s.scope.Region(), err,
+		)
+		return s.scope.CloudFailureResult(
+			"InstanceError",
+			err,
+			shared.RetryableErrorRequeueAfter,
+			true,
+			infrav1.MachineInstanceReadyCondition,
+			infrav1.MachineReadyCondition,
+		)
+	}
+	if created {
+		s.scope.Eventf("InstanceCreated", "Created instance %s", srv.ID)
+	}
+
+	if ready, reason, message, warn := StateCondition(srv.State, srv.PowerStatus); !ready {
+		previousReason := ""
+		if previous := s.scope.FindCondition(infrav1.MachineInstanceReadyCondition); previous != nil {
+			previousReason = previous.Reason
+		}
+		s.scope.SetNotReady(reason, message, infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
+		// Only warn on entering the state, not on every requeue.
+		if warn && previousReason != reason {
+			s.scope.Warnf(reason, "Server %s: %s", srv.ID, message)
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (s *Service) Delete(ctx context.Context) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	instanceID := s.scope.ServerSpec().ID
+	if err := s.DeletePrimitive(ctx); err != nil {
+		log.Error(err, "Failed to delete server", "machine", s.scope.Name(), "instanceID", instanceID)
+		s.scope.Warnf("FailedDeleteInstance",
+			"Failed to delete server %s: %v", instanceID, err)
+		return ctrl.Result{}, err
+	}
+	if instanceID != "" {
+		s.scope.Eventf("InstanceDeleted", "Deleted instance %s", instanceID)
+	}
+	return ctrl.Result{}, nil
+}
+
+// ReconcilePrimitive reconciles the server and updates the scope without setting
+// StackitMachine-specific conditions or events.
+func (s *Service) ReconcilePrimitive(ctx context.Context) (*Server, bool, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.ServerSpec()
 	if err := spec.validate(); err != nil {
-		return err
+		return nil, false, err
 	}
 
 	srv, created, err := s.ensureServer(ctx, spec)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	if spec.SetServer != nil {
-		spec.SetServer(srv, created)
-	}
+	s.scope.SetServer(srv, created)
 	log.V(1).Info("Reconciled server resources", "serverID", srv.ID, "created", created)
-	return nil
+	return srv, created, nil
 }
 
-func (s *Service) Delete(ctx context.Context) error {
+// DeletePrimitive deletes the server matching ServerSpec without emitting
+// StackitMachine-specific events.
+func (s *Service) DeletePrimitive(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	spec := s.scope.ServerSpec()
 	if spec.ID == "" && len(spec.Tags) == 0 {
@@ -55,9 +133,7 @@ func (s *Service) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if spec.SetServer != nil {
-		spec.SetServer(nil, false)
-	}
+	s.scope.SetServer(nil, false)
 	return nil
 }
 

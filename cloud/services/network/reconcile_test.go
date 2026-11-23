@@ -34,10 +34,13 @@ const (
 )
 
 type testScope struct {
-	projectID  string
-	region     string
-	iaasClient *iaas.APIClient
-	spec       network.NetworkSpec
+	shared.NoOpReconcileScope
+	projectID   string
+	region      string
+	iaasClient  *iaas.APIClient
+	spec        network.NetworkSpec
+	setNetwork  func(network *network.Network)
+	eventReason string
 }
 
 func (s *testScope) ProjectID() string {
@@ -56,6 +59,16 @@ func (s *testScope) NetworkSpec() network.NetworkSpec {
 	return s.spec
 }
 
+func (s *testScope) SetNetwork(net *network.Network) {
+	if s.setNetwork != nil {
+		s.setNetwork(net)
+	}
+}
+
+func (s *testScope) Eventf(reason, _ string, _ ...any) {
+	s.eventReason = reason
+}
+
 func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	t.Helper()
 
@@ -72,15 +85,24 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestService(t *testing.T, spec network.NetworkSpec, handler http.Handler) *network.Service {
+func newTestServiceWithScope(t *testing.T, spec network.NetworkSpec, setNetwork func(*network.Network), handler http.Handler) (*network.Service, *testScope) {
 	t.Helper()
 
-	return network.New(&testScope{
+	scope := &testScope{
 		projectID:  testProjectID,
 		region:     testRegion,
 		iaasClient: newTestIaaSClient(t, handler),
 		spec:       spec,
-	})
+		setNetwork: setNetwork,
+	}
+	return network.New(scope), scope
+}
+
+func newTestService(t *testing.T, spec network.NetworkSpec, handler http.Handler) *network.Service {
+	t.Helper()
+
+	svc, _ := newTestServiceWithScope(t, spec, nil, handler)
+	return svc
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
@@ -93,19 +115,14 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 
 func TestServiceReconcile(t *testing.T) {
 	t.Run("fetches network and records IPv4 prefixes via SetNetwork", func(t *testing.T) {
-		var (
-			recorded *network.Network
-			created  bool
-		)
+		var recorded *network.Network
 		spec := network.NetworkSpec{
 			ID: testNetworkID,
-			SetNetwork: func(n *network.Network, c bool) {
-				recorded = n
-				created = c
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, scope := newTestServiceWithScope(t, spec, func(n *network.Network) {
+			recorded = n
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks/"+testNetworkID) {
 				writeJSON(t, w, map[string]any{
 					"id":     testNetworkID,
@@ -121,14 +138,14 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recorded == nil || recorded.ID != testNetworkID || recorded.Name != "cluster-net" {
 			t.Fatalf("recorded = %#v, want ID=%s Name=cluster-net", recorded, testNetworkID)
 		}
-		if created {
-			t.Fatal("created = true, want false for unmanaged network")
+		if scope.eventReason != "" {
+			t.Fatalf("eventReason = %q, want empty for unmanaged network", scope.eventReason)
 		}
 		if !slices.Equal(recorded.IPv4Prefixes, []string{"10.20.0.0/24"}) {
 			t.Fatalf("recorded.IPv4Prefixes = %v, want [10.20.0.0/24]", recorded.IPv4Prefixes)
@@ -145,7 +162,7 @@ func TestServiceReconcile(t *testing.T) {
 			writeJSON(t, w, map[string]any{"message": "not found"})
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrNotFound) {
 			t.Fatalf("Reconcile() error = %v, want ErrNotFound", err)
 		}
@@ -156,7 +173,7 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 		}
@@ -165,7 +182,6 @@ func TestServiceReconcile(t *testing.T) {
 	t.Run("creates managed network when none exists", func(t *testing.T) {
 		var (
 			recorded       *network.Network
-			created        bool
 			createdPayload map[string]any
 		)
 		spec := network.NetworkSpec{
@@ -173,13 +189,11 @@ func TestServiceReconcile(t *testing.T) {
 			IPv4Prefix: network.DefaultNetworkPrefix,
 			Tags:       map[string]string{"cluster": "test-cluster"},
 			Managed:    true,
-			SetNetwork: func(n *network.Network, c bool) {
-				recorded = n
-				created = c
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, scope := newTestServiceWithScope(t, spec, func(n *network.Network) {
+			recorded = n
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
 				writeJSON(t, w, map[string]any{"items": []any{}})
 				return
@@ -201,14 +215,14 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recorded == nil || recorded.ID != testNetworkID {
 			t.Fatalf("recorded = %#v, want ID=%s", recorded, testNetworkID)
 		}
-		if !created {
-			t.Fatal("created = false, want true")
+		if scope.eventReason != "NetworkCreated" {
+			t.Fatalf("eventReason = %q, want NetworkCreated", scope.eventReason)
 		}
 		if createdPayload["name"] != "test-network" {
 			t.Fatalf("payload name = %v, want test-network", createdPayload["name"])
@@ -216,22 +230,17 @@ func TestServiceReconcile(t *testing.T) {
 	})
 
 	t.Run("adopts existing managed network by tags without creating duplicate", func(t *testing.T) {
-		var (
-			recorded *network.Network
-			created  bool
-		)
+		var recorded *network.Network
 		spec := network.NetworkSpec{
 			Name:       "existing-network",
 			IPv4Prefix: network.DefaultNetworkPrefix,
 			Tags:       map[string]string{"cluster": "test-cluster"},
 			Managed:    true,
-			SetNetwork: func(n *network.Network, c bool) {
-				recorded = n
-				created = c
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, scope := newTestServiceWithScope(t, spec, func(n *network.Network) {
+			recorded = n
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
 				writeJSON(t, w, map[string]any{
 					"items": []any{
@@ -253,14 +262,14 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recorded == nil || recorded.ID != testNetworkID {
 			t.Fatalf("recorded = %#v, want ID=%s", recorded, testNetworkID)
 		}
-		if created {
-			t.Fatal("created = true, want false when adopting existing network")
+		if scope.eventReason != "" {
+			t.Fatalf("eventReason = %q, want empty when adopting existing network", scope.eventReason)
 		}
 	})
 }
@@ -274,7 +283,7 @@ func TestServiceDelete(t *testing.T) {
 		svc := newTestService(t, spec, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 	})
@@ -286,14 +295,13 @@ func TestServiceDelete(t *testing.T) {
 			ID:      testNetworkID,
 			Tags:    map[string]string{"cluster": "test-cluster"},
 			Managed: true,
-			SetNetwork: func(n *network.Network, _ bool) {
-				if n == nil {
-					cleared = true
-				}
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, _ := newTestServiceWithScope(t, spec, func(n *network.Network) {
+			if n == nil {
+				cleared = true
+			}
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/networks/"+testNetworkID) {
 				deletedID = testNetworkID
 				w.WriteHeader(http.StatusNoContent)
@@ -302,14 +310,14 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testNetworkID {
 			t.Fatalf("deletedID = %s, want %s", deletedID, testNetworkID)
 		}
 		if !cleared {
-			t.Fatal("expected SetNetwork(nil, false) to be called")
+			t.Fatal("expected SetNetwork(nil) to be called")
 		}
 	})
 
@@ -344,7 +352,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testNetworkID {

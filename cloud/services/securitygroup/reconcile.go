@@ -17,12 +17,42 @@ import (
 	"slices"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
+	if err := s.ReconcilePrimitive(ctx); err != nil {
+		log := logf.FromContext(ctx)
+		log.Error(err, "Failed to configure bastion SSH access for node", "machine", s.scope.Name())
+		s.scope.Warnf(
+			"FailedNodeSSHAccess",
+			"Failed to configure bastion SSH access for server %s: %v", firstServerID(s.scope.SecurityGroupSpecs()), err,
+		)
+		return s.scope.CloudFailureResult(
+			"BastionSSHAccessError",
+			err,
+			shared.RetryableErrorRequeueAfter,
+			true,
+			infrav1.MachineReadyCondition,
+		)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (s *Service) Delete(ctx context.Context) (ctrl.Result, error) {
+	if err := s.DeletePrimitive(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// ReconcilePrimitive reconciles the configured security groups without setting
+// StackitMachine-specific conditions or events.
+func (s *Service) ReconcilePrimitive(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	for _, spec := range s.scope.SecurityGroupSpecs() {
 		if err := s.reconcileSecurityGroup(ctx, spec); err != nil {
@@ -33,7 +63,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) Delete(ctx context.Context) error {
+// DeletePrimitive deletes the configured security groups in reverse order.
+func (s *Service) DeletePrimitive(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	var errs []error
 	for _, spec := range slices.Backward(s.scope.SecurityGroupSpecs()) {
@@ -46,6 +77,17 @@ func (s *Service) Delete(ctx context.Context) error {
 	}
 	log.V(1).Info("Deleted security group resources")
 	return nil
+}
+
+func firstServerID(specs []SecurityGroupSpec) string {
+	for _, spec := range specs {
+		for _, id := range spec.ServerIDs {
+			if id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 // get retrieves a STACKIT security group by ID.
@@ -140,9 +182,7 @@ func (s *Service) reconcileSecurityGroup(ctx context.Context, spec SecurityGroup
 	if err != nil {
 		return err
 	}
-	if spec.SetSecurityGroup != nil {
-		spec.SetSecurityGroup(securityGroup)
-	}
+	s.scope.SetSecurityGroup(spec.Name, securityGroup)
 	if err := s.ensureSecurityGroupRules(ctx, securityGroup.ID, spec.Rules); err != nil {
 		return err
 	}
@@ -171,9 +211,7 @@ func (s *Service) deleteSecurityGroup(ctx context.Context, spec SecurityGroupSpe
 	if err != nil {
 		return err
 	}
-	if spec.SetSecurityGroup != nil {
-		spec.SetSecurityGroup(nil)
-	}
+	s.scope.SetSecurityGroup(spec.Name, nil)
 	return nil
 }
 

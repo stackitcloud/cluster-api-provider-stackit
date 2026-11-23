@@ -15,7 +15,14 @@ import (
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
+
+// Reconciler is a common interface for reconciling and deleting STACKIT cloud resources.
+type Reconciler interface {
+	Reconcile(ctx context.Context) (ctrl.Result, error)
+	Delete(ctx context.Context) (ctrl.Result, error)
+}
 
 // Client provides the target STACKIT project, region, and SDK API clients.
 type Client interface {
@@ -33,7 +40,7 @@ type Client interface {
 //
 // Controllers receive a Factory rather than a Client so that the real
 // implementation can be swapped for the fake in tests.
-type Factory func(ctx context.Context, creds Credentials) (Client, error)
+type Factory func(creds Credentials) (Client, error)
 
 // Credentials carries the materials needed to construct a STACKIT API client.
 // For MVP we only need the service-account JSON and project ID.

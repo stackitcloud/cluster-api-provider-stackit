@@ -13,51 +13,146 @@ package loadbalancer
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	spec := s.scope.LoadBalancerSpec()
-	if err := spec.validate(); err != nil {
-		return err
+	if !s.scope.APIServerLoadBalancerEnabled() {
+		if s.scope.ControlPlaneEndpointHost() != "" {
+			s.scope.UseExternalControlPlaneEndpoint()
+			s.scope.SetConditions(
+				metav1.ConditionTrue,
+				"Skipped",
+				"external endpoint provided",
+				infrav1.ClusterLoadBalancerReadyCondition,
+			)
+			return ctrl.Result{}, nil
+		}
+		log.Error(errors.New("controlPlaneEndpoint host is empty"), "API server load balancer is disabled and controlPlaneEndpoint is empty", "cluster", s.scope.Name())
+		s.scope.Warn("EndpointMissing", "apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty")
+		s.scope.SetNotReady(
+			"EndpointMissing",
+			"apiServerLoadBalancer.enabled is false and controlPlaneEndpoint is empty",
+			infrav1.ClusterLoadBalancerReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+		return ctrl.Result{}, nil
 	}
+
+	spec, err := s.scope.ResolveLoadBalancerSpec(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := spec.validate(); err != nil {
+		return s.handleCreateError(ctx, err)
+	}
+
+	previousEndpointHost := s.scope.APIServerEndpointHost()
+	cond := s.scope.FindCondition(infrav1.ClusterLoadBalancerReadyCondition)
+	wasLBReady := cond != nil && cond.Status == metav1.ConditionTrue
 
 	loadBalancer, created, err := s.ensureLoadBalancer(ctx, spec)
 	if err != nil {
-		return err
+		return s.handleCreateError(ctx, err)
 	}
 	loadBalancer.Port = spec.Port
-	if spec.SetLoadBalancer != nil {
-		spec.SetLoadBalancer(loadBalancer, created)
+	s.scope.SetLoadBalancer(loadBalancer)
+	if created {
+		s.scope.Eventf(
+			"LoadBalancerCreated",
+			"Created API server load balancer %s", loadBalancer.ID,
+		)
 	}
 	if loadBalancer.IP == "" {
-		return nil
+		s.scope.SetNotReady(
+			"Provisioning",
+			"waiting for API server load balancer IP address",
+			infrav1.ClusterLoadBalancerReadyCondition,
+			infrav1.ClusterReadyCondition,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// An empty set never overwrites a populated pool: cluster deletion filters
 	// out every machine while the API server is still needed for drain.
 	if len(spec.Targets) > 0 {
 		if err := s.setTargets(ctx, loadBalancer.ID, spec.Port, spec.Targets); err != nil {
-			return fmt.Errorf("%w: %w", errTargetPoolUpdate, err)
+			targetErr := fmt.Errorf("%w: %w", errTargetPoolUpdate, err)
+			if !shared.IsRetryable(targetErr) {
+				s.scope.Warnf(
+					"LoadBalancerTargetError",
+					"Cannot update API server load balancer target pool: %v", targetErr,
+				)
+			}
+			// Scoped to the load balancer condition: failing the cluster would
+			// stop the machine reconciler from replacing the broken machine.
+			s.scope.SetConditions(
+				metav1.ConditionFalse,
+				"LoadBalancerTargetError",
+				targetErr.Error(),
+				infrav1.ClusterLoadBalancerReadyCondition,
+			)
+			// Requeue even on a permanent error: this return skips SetReady, so
+			// no machine exists yet whose events could retry it.
+			return s.scope.TargetPoolFailureResult(targetErr, shared.RetryableErrorRequeueAfter)
 		}
 		log.V(1).Info("Reconciled API server load balancer target pool", "targets", len(spec.Targets))
 	}
+
+	isLBReady := wasLBReady && previousEndpointHost == loadBalancer.IP
+	if !isLBReady {
+		s.scope.SetConditions(
+			metav1.ConditionTrue,
+			"Available",
+			"",
+			infrav1.ClusterLoadBalancerReadyCondition,
+		)
+		s.scope.Eventf(
+			"LoadBalancerReady",
+			"API server load balancer is ready at %s", loadBalancer.IP,
+		)
+	}
 	log.V(1).Info("Reconciled load balancer resources", "loadBalancerID", loadBalancer.ID, "created", created)
-	return nil
+	return ctrl.Result{}, nil
 }
 
-func (s *Service) Delete(ctx context.Context) error {
+func (s *Service) handleCreateError(ctx context.Context, err error) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	log.Error(err, "Failed to create API server load balancer",
+		"cluster", s.scope.Name(),
+		"region", s.scope.Region(),
+	)
+	s.scope.Warnf(
+		"FailedCreateLoadBalancer",
+		"Failed to create API server load balancer: %v", err,
+	)
+	return s.scope.CloudFailureResult(
+		"LoadBalancerError",
+		err,
+		shared.RetryableErrorRequeueAfter,
+		false,
+		infrav1.ClusterLoadBalancerReadyCondition,
+		infrav1.ClusterReadyCondition,
+	)
+}
+
+func (s *Service) Delete(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.LoadBalancerSpec()
 	if spec.ID == "" && len(spec.Tags) == 0 {
-		return fmt.Errorf("%w: load balancer ID or tags are required", shared.ErrInvalidInput)
+		return ctrl.Result{}, fmt.Errorf("%w: load balancer ID or tags are required", shared.ErrInvalidInput)
 	}
 
 	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, s.deleteByID, s.listIDsByTags)
@@ -65,12 +160,19 @@ func (s *Service) Delete(ctx context.Context) error {
 		log.V(1).Info("Deleted load balancer", "loadBalancerID", deletedID)
 	}
 	if err != nil {
-		return err
+		log.Error(err, "Failed to delete API server load balancer", "cluster", s.scope.Name(), "loadBalancerID", spec.ID)
+		s.scope.Warnf("FailedDeleteLoadBalancer",
+			"Failed to delete API server load balancer %s: %v", spec.ID, err)
+		return ctrl.Result{}, err
 	}
-	if spec.SetLoadBalancer != nil {
-		spec.SetLoadBalancer(nil, false)
+	s.scope.SetLoadBalancer(nil)
+	if spec.ID != "" {
+		s.scope.Eventf(
+			"LoadBalancerDeleted",
+			"Deleted API server load balancer %s", spec.ID,
+		)
 	}
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // get retrieves a STACKIT load balancer by ID.

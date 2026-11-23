@@ -16,10 +16,21 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/stackitcloud/stackit-sdk-go/core/oapierror"
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+)
+
+const (
+	// RetryableErrorRequeueAfter paces retries of transient or conflicting cloud API operations.
+	RetryableErrorRequeueAfter = 5 * time.Second
+
+	// DeleteRequeueAfter paces the wait for dependent resources to disappear during deletion.
+	DeleteRequeueAfter = 5 * time.Second
 )
 
 // IaaSClientScope is an interface that provides the IaaS client and target scope for IaaS operations.
@@ -34,6 +45,47 @@ type LoadBalancerClientScope interface {
 	ProjectID() string
 	Region() string
 	LoadBalancerClient() *lb.APIClient
+}
+
+// ReconcileScope provides condition, event, and failure result helpers for cloud resource reconcilers.
+type ReconcileScope interface {
+	Name() string
+	SetConditions(status metav1.ConditionStatus, reason, message string, conditionTypes ...string)
+	SetNotReady(reason, message string, conditionTypes ...string)
+	CloudFailureResult(reason string, err error, requeueAfter time.Duration, returnError bool, conditionTypes ...string) (ctrl.Result, error)
+	FindCondition(conditionType string) *metav1.Condition
+	Event(reason, message string)
+	Eventf(reason, messageFmt string, args ...any)
+	Warn(reason, message string)
+	Warnf(reason, messageFmt string, args ...any)
+}
+
+// NoOpReconcileScope provides default no-op implementations of ReconcileScope
+// for headless callers (such as tag cleanup) and service unit tests.
+type NoOpReconcileScope struct{}
+
+func (NoOpReconcileScope) Name() string { return "" }
+
+func (NoOpReconcileScope) SetConditions(_ metav1.ConditionStatus, _, _ string, _ ...string) {}
+
+func (NoOpReconcileScope) SetNotReady(_, _ string, _ ...string) {}
+
+func (NoOpReconcileScope) CloudFailureResult(_ string, err error, _ time.Duration, _ bool, _ ...string) (ctrl.Result, error) {
+	return ctrl.Result{}, err
+}
+
+func (NoOpReconcileScope) FindCondition(_ string) *metav1.Condition { return nil }
+
+func (NoOpReconcileScope) Event(_, _ string) {}
+
+func (NoOpReconcileScope) Eventf(_, _ string, _ ...any) {}
+
+func (NoOpReconcileScope) Warn(_, _ string) {}
+
+func (NoOpReconcileScope) Warnf(_, _ string, _ ...any) {}
+
+func (NoOpReconcileScope) ServerGoneResult(err error) (ctrl.Result, error) {
+	return ctrl.Result{}, err
 }
 
 // ListByTags validates that tags are non-empty, lists SDK items using the tag label selector,

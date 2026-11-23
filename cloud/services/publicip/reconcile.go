@@ -15,50 +15,49 @@ import (
 	"fmt"
 
 	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
-func (s *Service) Reconcile(ctx context.Context) error {
+func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.PublicIPSpec()
 	if err := spec.validate(); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 
 	publicIP, err := s.ensurePublicIP(ctx, spec)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 
 	if spec.ServerID != "" && publicIP.NetworkInterfaceID == "" {
 		if err := s.attachToServer(ctx, spec.ServerID, publicIP.ID); err != nil {
-			return err
+			return ctrl.Result{}, err
 		}
 		publicIP, err = s.get(ctx, publicIP.ID)
 		if err != nil {
-			return err
+			return ctrl.Result{}, err
 		}
 	}
 
-	if spec.SetPublicIP != nil {
-		spec.SetPublicIP(publicIP)
-	}
+	s.scope.SetPublicIP(publicIP)
 	log.V(1).Info("Reconciled public IP resources", "publicIPID", publicIP.ID)
-	return nil
+	return ctrl.Result{}, nil
 }
 
-func (s *Service) Delete(ctx context.Context) error {
+func (s *Service) Delete(ctx context.Context) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	spec := s.scope.PublicIPSpec()
 	if spec.ID == "" && len(spec.Tags) == 0 {
-		return fmt.Errorf("%w: public IP ID or tags are required", shared.ErrInvalidInput)
+		return ctrl.Result{}, fmt.Errorf("%w: public IP ID or tags are required", shared.ErrInvalidInput)
 	}
 
 	serverIDs, err := s.resolveServerIDs(ctx, spec)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	deletedIDs, err := shared.DeleteByIDOrTags(ctx, spec.ID, spec.Tags, func(ctx context.Context, id string) (bool, error) {
 		return s.detachAndDeleteByID(ctx, id, serverIDs)
@@ -67,13 +66,11 @@ func (s *Service) Delete(ctx context.Context) error {
 		log.V(1).Info("Deleted public IP", "publicIPID", deletedID)
 	}
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 
-	if spec.SetPublicIP != nil {
-		spec.SetPublicIP(nil)
-	}
-	return nil
+	s.scope.SetPublicIP(nil)
+	return ctrl.Result{}, nil
 }
 
 // get retrieves a STACKIT public IP by ID.

@@ -82,13 +82,13 @@ func TestDefaultAvailabilityZone(t *testing.T) {
 	}
 }
 
-func TestAvailabilityZoneSpecUsesResolvedRegion(t *testing.T) {
+func TestSetZonesUsesResolvedRegion(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
 		cloudClient:    cloudfake.New(),
 	}
 
-	clusterScope.AvailabilityZoneSpec().SetZones([]string{"eu01-1"})
+	clusterScope.SetZones([]string{"eu01-1"})
 
 	if len(clusterScope.StackitCluster.Status.FailureDomains) != 1 {
 		t.Fatalf("FailureDomains = %#v, want 1 entry", clusterScope.StackitCluster.Status.FailureDomains)
@@ -99,37 +99,24 @@ func TestAvailabilityZoneSpecUsesResolvedRegion(t *testing.T) {
 	}
 }
 
-func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) {
+func TestSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
 	}
 	clusterScope.SetBastionCloudInit([]byte("#cloud-config\npackages:\n- jq\n"), "new-hash")
 
-	spec := clusterScope.ServerSpec()
-	spec.SetServer(&server.Server{ID: "srv-adopted", State: "ACTIVE", PowerStatus: "RUNNING"}, false)
+	clusterScope.SetServer(&server.Server{ID: "srv-adopted", State: "ACTIVE", PowerStatus: "RUNNING"}, false)
 
-	if clusterScope.BastionServerCreated() {
-		t.Fatal("BastionServerCreated() = true on adopted server, want false")
-	}
 	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "" {
 		t.Fatalf("Status.Bastion.CloudInitHash on adopted server = %q, want empty", got)
 	}
 
-	spec.SetServer(&server.Server{ID: "srv-created", State: "ACTIVE", PowerStatus: "RUNNING"}, true)
-	if !clusterScope.BastionServerCreated() {
-		t.Fatal("BastionServerCreated() = false on created server, want true")
-	}
+	clusterScope.SetServer(&server.Server{ID: "srv-created", State: "ACTIVE", PowerStatus: "RUNNING"}, true)
 	if got := clusterScope.StackitCluster.Status.Bastion.CloudInitHash; got != "new-hash" {
 		t.Fatalf("Status.Bastion.CloudInitHash on created server = %q, want %q", got, "new-hash")
 	}
 
-	spec.SetServer(nil, false)
-	if clusterScope.BastionServerCreated() {
-		t.Fatal("BastionServerCreated() = true after SetServer(nil, false), want false")
-	}
-	if state, powerStatus := clusterScope.BastionServerState(); state != "" || powerStatus != "" {
-		t.Fatalf("BastionServerState() after SetServer(nil, false) = (%q, %q), want empty", state, powerStatus)
-	}
+	clusterScope.SetServer(nil, false)
 	if got := clusterScope.StackitCluster.Status.Bastion.ServerID; got != "" {
 		t.Fatalf("Status.Bastion.ServerID after SetServer(nil, false) = %q, want empty", got)
 	}
@@ -138,21 +125,17 @@ func TestServerSpecSetServerPreservesCloudInitHashOnAdoptedServer(t *testing.T) 
 	}
 }
 
-func TestLoadBalancerSpecSetLoadBalancerClearsOnNil(t *testing.T) {
+func TestSetLoadBalancerClearsOnNil(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
 	}
 
-	spec := clusterScope.LoadBalancerSpec()
-	spec.SetLoadBalancer(&loadbalancer.LoadBalancer{
+	clusterScope.SetLoadBalancer(&loadbalancer.LoadBalancer{
 		ID:   "lb-1",
 		IP:   "203.0.113.10",
 		Port: 6443,
-	}, true)
+	})
 
-	if !clusterScope.APIServerLoadBalancerCreated() {
-		t.Fatal("APIServerLoadBalancerCreated() = false on created load balancer, want true")
-	}
 	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "lb-1" {
 		t.Fatalf("Status.APIServerLoadBalancerID = %q, want lb-1", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
 	}
@@ -164,10 +147,7 @@ func TestLoadBalancerSpecSetLoadBalancerClearsOnNil(t *testing.T) {
 		t.Fatalf("Status.APIServerEndpoint = %#v, want %#v", clusterScope.StackitCluster.Status.APIServerEndpoint, wantEndpoint)
 	}
 
-	spec.SetLoadBalancer(nil, false)
-	if clusterScope.APIServerLoadBalancerCreated() {
-		t.Fatal("APIServerLoadBalancerCreated() = true after SetLoadBalancer(nil, false), want false")
-	}
+	clusterScope.SetLoadBalancer(nil)
 	if clusterScope.StackitCluster.Status.APIServerLoadBalancerID != "" {
 		t.Fatalf("Status.APIServerLoadBalancerID after clear = %q, want empty", clusterScope.StackitCluster.Status.APIServerLoadBalancerID)
 	}
@@ -179,13 +159,12 @@ func TestLoadBalancerSpecSetLoadBalancerClearsOnNil(t *testing.T) {
 	}
 }
 
-func TestPublicIPSpecSetPublicIPClearsOnNil(t *testing.T) {
+func TestSetPublicIPClearsOnNil(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},
 	}
 
-	spec := clusterScope.PublicIPSpec()
-	spec.SetPublicIP(&publicip.PublicIP{
+	clusterScope.SetPublicIP(&publicip.PublicIP{
 		ID: "pip-1",
 		IP: "203.0.113.22",
 	})
@@ -197,7 +176,7 @@ func TestPublicIPSpecSetPublicIPClearsOnNil(t *testing.T) {
 		t.Fatalf("Status.Bastion.PublicIP = %q, want 203.0.113.22", clusterScope.StackitCluster.Status.Bastion.PublicIP)
 	}
 
-	spec.SetPublicIP(nil)
+	clusterScope.SetPublicIP(nil)
 	if clusterScope.StackitCluster.Status.Bastion.PublicIPID != "" {
 		t.Fatalf("Status.Bastion.PublicIPID after clear = %q, want empty", clusterScope.StackitCluster.Status.Bastion.PublicIPID)
 	}
@@ -206,9 +185,11 @@ func TestPublicIPSpecSetPublicIPClearsOnNil(t *testing.T) {
 	}
 }
 
-func TestSecurityGroupSpecsSetSecurityGroupClearsOnNil(t *testing.T) {
+func TestSetSecurityGroupClearsOnNil(t *testing.T) {
 	clusterScope := &ClusterScope{
-		StackitCluster: &infrav1.StackitCluster{},
+		StackitCluster: &infrav1.StackitCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-cluster"},
+		},
 	}
 
 	specs := clusterScope.SecurityGroupSpecs()
@@ -216,7 +197,7 @@ func TestSecurityGroupSpecsSetSecurityGroupClearsOnNil(t *testing.T) {
 		t.Fatalf("SecurityGroupSpecs() count = %d, want 2", len(specs))
 	}
 
-	specs[0].SetSecurityGroup(&securitygroup.SecurityGroup{
+	clusterScope.SetSecurityGroup(specs[0].Name, &securitygroup.SecurityGroup{
 		ID:   "sg-1",
 		Name: "bastion-ssh",
 	})
@@ -224,13 +205,13 @@ func TestSecurityGroupSpecsSetSecurityGroupClearsOnNil(t *testing.T) {
 		t.Fatalf("Status.Bastion.SecurityGroupID = %q, want sg-1", clusterScope.StackitCluster.Status.Bastion.SecurityGroupID)
 	}
 
-	specs[0].SetSecurityGroup(nil)
+	clusterScope.SetSecurityGroup(specs[0].Name, nil)
 	if clusterScope.StackitCluster.Status.Bastion.SecurityGroupID != "" {
 		t.Fatalf("Status.Bastion.SecurityGroupID after clear = %q, want empty", clusterScope.StackitCluster.Status.Bastion.SecurityGroupID)
 	}
 }
 
-func TestMachineScopeServerSpecSetServerClearsOnNil(t *testing.T) {
+func TestMachineScopeSetServerClearsOnNil(t *testing.T) {
 	machineScope := &MachineScope{
 		cluster:        &clusterv1.Cluster{},
 		Machine:        &clusterv1.Machine{},
@@ -238,8 +219,7 @@ func TestMachineScopeServerSpecSetServerClearsOnNil(t *testing.T) {
 		StackitMachine: &infrav1.StackitMachine{},
 	}
 
-	spec := machineScope.ServerSpec()
-	spec.SetServer(&server.Server{
+	machineScope.SetServer(&server.Server{
 		ID:               "srv-1",
 		State:            "ACTIVE",
 		PowerStatus:      "RUNNING",
@@ -247,17 +227,11 @@ func TestMachineScopeServerSpecSetServerClearsOnNil(t *testing.T) {
 		Addresses:        []server.Address{{Type: "InternalIP", Address: "10.0.0.5"}},
 	}, true)
 
-	if !machineScope.InstanceCreated() || machineScope.InstancePowerStatus() != "RUNNING" {
-		t.Fatalf("InstanceCreated=%v, InstancePowerStatus=%q", machineScope.InstanceCreated(), machineScope.InstancePowerStatus())
-	}
 	if machineScope.StackitMachine.Status.InstanceID != "srv-1" {
 		t.Fatalf("Status.InstanceID = %q, want srv-1", machineScope.StackitMachine.Status.InstanceID)
 	}
 
-	spec.SetServer(nil, false)
-	if machineScope.InstanceCreated() || machineScope.InstancePowerStatus() != "" {
-		t.Fatalf("after SetServer(nil, false): InstanceCreated=%v, InstancePowerStatus=%q, want false and empty", machineScope.InstanceCreated(), machineScope.InstancePowerStatus())
-	}
+	machineScope.SetServer(nil, false)
 	if machineScope.StackitMachine.Status.InstanceID != "" ||
 		machineScope.StackitMachine.Status.InstanceState != "" ||
 		machineScope.StackitMachine.Status.AvailabilityZone != "" ||
@@ -393,18 +367,18 @@ func TestBootstrapTargetIP(t *testing.T) {
 		t.Fatalf("BootstrapTargetIP() with nil network = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
 	}
 
-	clusterScope.NetworkSpec().SetNetwork(&network.Network{
+	clusterScope.SetNetwork(&network.Network{
 		ID:           "net-1",
 		IPv4Prefixes: []string{"192.168.10.0/24"},
-	}, false)
+	})
 	if got := clusterScope.BootstrapTargetIP(); got != "192.168.10.10" {
 		t.Fatalf("BootstrapTargetIP() with /24 network = %q, want %q", got, "192.168.10.10")
 	}
 
-	clusterScope.NetworkSpec().SetNetwork(&network.Network{
+	clusterScope.SetNetwork(&network.Network{
 		ID:           "net-2",
 		IPv4Prefixes: []string{"invalid"},
-	}, false)
+	})
 	if got := clusterScope.BootstrapTargetIP(); got != loadbalancer.DefaultBootstrapTargetIP {
 		t.Fatalf("BootstrapTargetIP() with invalid prefix = %q, want %q", got, loadbalancer.DefaultBootstrapTargetIP)
 	}

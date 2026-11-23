@@ -11,7 +11,11 @@ You may obtain a copy of the License at
 package loadbalancer
 
 import (
+	"context"
 	"errors"
+	"time"
+
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
@@ -55,20 +59,27 @@ type Target struct {
 
 // LoadBalancerSpec describes the desired state of a STACKIT API server load balancer.
 type LoadBalancerSpec struct {
-	ID              string
-	Name            string
-	NetworkID       string
-	Port            int32
-	Tags            map[string]string
-	Targets         []Target
-	SeedTargets     []Target
-	SetLoadBalancer func(loadBalancer *LoadBalancer, created bool)
+	ID          string
+	Name        string
+	NetworkID   string
+	Port        int32
+	Tags        map[string]string
+	Targets     []Target
+	SeedTargets []Target
 }
 
 // Scope is an interface that provides scope data needed for load balancer reconciliation.
 type Scope interface {
 	shared.LoadBalancerClientScope
+	shared.ReconcileScope
+	APIServerLoadBalancerEnabled() bool
+	ControlPlaneEndpointHost() string
+	UseExternalControlPlaneEndpoint()
+	APIServerEndpointHost() string
+	ResolveLoadBalancerSpec(ctx context.Context) (LoadBalancerSpec, error)
 	LoadBalancerSpec() LoadBalancerSpec
+	SetLoadBalancer(loadBalancer *LoadBalancer)
+	TargetPoolFailureResult(err error, requeueAfter time.Duration) (ctrl.Result, error)
 }
 
 // Service implements load balancer reconciler.

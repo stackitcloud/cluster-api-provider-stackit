@@ -13,6 +13,8 @@ package server
 import (
 	"errors"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 )
 
@@ -63,13 +65,15 @@ type ServerSpec struct {
 	Tags             map[string]string
 	RootVolume       RootVolume
 	DisallowRecreate bool
-	SetServer        func(server *Server, created bool)
 }
 
 // Scope is an interface that provides scope data needed for server reconciliation.
 type Scope interface {
 	shared.IaaSClientScope
+	shared.ReconcileScope
 	ServerSpec() ServerSpec
+	SetServer(server *Server, created bool)
+	ServerGoneResult(err error) (ctrl.Result, error)
 }
 
 // Service implements server reconciler.

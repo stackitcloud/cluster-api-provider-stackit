@@ -13,8 +13,6 @@ package controller
 import "time"
 
 const (
-	cloudInitRefKindSecret = "Secret"
-
 	retryableErrorRequeueAfter = 5 * time.Second
 
 	// deleteRequeueAfter paces the wait for dependent objects to disappear during deletion.

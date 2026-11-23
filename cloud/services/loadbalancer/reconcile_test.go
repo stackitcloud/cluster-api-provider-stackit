@@ -19,9 +19,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
@@ -36,10 +38,13 @@ const (
 )
 
 type testScope struct {
-	projectID string
-	region    string
-	lbClient  *lb.APIClient
-	spec      loadbalancer.LoadBalancerSpec
+	shared.NoOpReconcileScope
+	projectID       string
+	region          string
+	lbClient        *lb.APIClient
+	spec            loadbalancer.LoadBalancerSpec
+	setLoadBalancer func(apiServerLB *loadbalancer.LoadBalancer)
+	created         bool
 }
 
 func (s *testScope) ProjectID() string {
@@ -54,8 +59,42 @@ func (s *testScope) LoadBalancerClient() *lb.APIClient {
 	return s.lbClient
 }
 
+func (s *testScope) APIServerLoadBalancerEnabled() bool {
+	return true
+}
+
+func (s *testScope) ControlPlaneEndpointHost() string {
+	return ""
+}
+
+func (s *testScope) UseExternalControlPlaneEndpoint() {}
+
+func (s *testScope) APIServerEndpointHost() string {
+	return ""
+}
+
+func (s *testScope) ResolveLoadBalancerSpec(_ context.Context) (loadbalancer.LoadBalancerSpec, error) {
+	return s.spec, nil
+}
+
 func (s *testScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return s.spec
+}
+
+func (s *testScope) SetLoadBalancer(apiServerLB *loadbalancer.LoadBalancer) {
+	if s.setLoadBalancer != nil {
+		s.setLoadBalancer(apiServerLB)
+	}
+}
+
+func (s *testScope) Eventf(reason, _ string, _ ...any) {
+	if reason == "LoadBalancerCreated" {
+		s.created = true
+	}
+}
+
+func (s *testScope) TargetPoolFailureResult(err error, _ time.Duration) (ctrl.Result, error) {
+	return ctrl.Result{}, err
 }
 
 func newTestLBClient(t *testing.T, handler http.Handler) *lb.APIClient {
@@ -74,15 +113,29 @@ func newTestLBClient(t *testing.T, handler http.Handler) *lb.APIClient {
 	return lbClient
 }
 
+func newTestServiceWithScope(
+	t *testing.T,
+	spec loadbalancer.LoadBalancerSpec,
+	setLB func(*loadbalancer.LoadBalancer),
+	handler http.Handler,
+) (*loadbalancer.Service, *testScope) {
+	t.Helper()
+
+	scope := &testScope{
+		projectID:       testProjectID,
+		region:          testRegion,
+		lbClient:        newTestLBClient(t, handler),
+		spec:            spec,
+		setLoadBalancer: setLB,
+	}
+	return loadbalancer.New(scope), scope
+}
+
 func newTestService(t *testing.T, spec loadbalancer.LoadBalancerSpec, handler http.Handler) *loadbalancer.Service {
 	t.Helper()
 
-	return loadbalancer.New(&testScope{
-		projectID: testProjectID,
-		region:    testRegion,
-		lbClient:  newTestLBClient(t, handler),
-		spec:      spec,
-	})
+	svc, _ := newTestServiceWithScope(t, spec, nil, handler)
+	return svc
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
@@ -120,11 +173,10 @@ func sdkLoadBalancerJSON(name string, labels map[string]any, targetPools []any) 
 func TestServiceReconcile(t *testing.T) {
 	t.Run("creates load balancer with expected payload and updates target pool", func(t *testing.T) {
 		var (
-			createPayload   map[string]any
-			recordedID      string
-			recordedIP      string
-			recordedPort    int32
-			recordedCreated bool
+			createPayload map[string]any
+			recordedID    string
+			recordedIP    string
+			recordedPort  int32
 		)
 		spec := loadbalancer.LoadBalancerSpec{
 			Name:      testLBName,
@@ -140,12 +192,6 @@ func TestServiceReconcile(t *testing.T) {
 			SeedTargets: []loadbalancer.Target{
 				{Name: "cp-0", IP: "10.0.0.10"},
 			},
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
-				recordedID = apiServerLB.ID
-				recordedIP = apiServerLB.IP
-				recordedPort = apiServerLB.Port
-				recordedCreated = created
-			},
 		}
 
 		targetPool := []any{
@@ -158,7 +204,11 @@ func TestServiceReconcile(t *testing.T) {
 			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, scope := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			recordedID = apiServerLB.ID
+			recordedIP = apiServerLB.IP
+			recordedPort = apiServerLB.Port
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):
@@ -173,7 +223,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 
@@ -183,8 +233,8 @@ func TestServiceReconcile(t *testing.T) {
 		if recordedIP != testPublicIP || recordedPort != 6443 {
 			t.Fatalf("recorded address = %s:%d, want %s:6443", recordedIP, recordedPort, testPublicIP)
 		}
-		if !recordedCreated {
-			t.Fatal("recordedCreated = false, want true")
+		if !scope.created {
+			t.Fatal("scope.created = false, want true")
 		}
 		if createPayload["name"] != testLBName {
 			t.Fatalf("payload name = %v, want %q", createPayload["name"], testLBName)
@@ -228,7 +278,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 
@@ -250,23 +300,18 @@ func TestServiceReconcile(t *testing.T) {
 
 func TestServiceReconcileReuseAndErrors(t *testing.T) {
 	t.Run("reuses existing load balancer found by ID without listing by tags", func(t *testing.T) {
-		var (
-			recordedID      string
-			recordedCreated = true
-		)
+		var recordedID string
 		spec := loadbalancer.LoadBalancerSpec{
 			ID:        testLBName,
 			Name:      testLBName,
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
-				recordedID = apiServerLB.ID
-				recordedCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, scope := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			recordedID = apiServerLB.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName) {
 				writeJSON(t, w, sdkLoadBalancerJSON(testLBName, nil, nil))
 				return
@@ -274,14 +319,14 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recordedID != testLBName {
 			t.Fatalf("recordedID = %q, want %q", recordedID, testLBName)
 		}
-		if recordedCreated {
-			t.Fatal("recordedCreated = true on reused load balancer, want false")
+		if scope.created {
+			t.Fatal("scope.created = true on reused load balancer, want false")
 		}
 	})
 
@@ -296,12 +341,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
-				recordedID = apiServerLB.ID
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, _ := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			recordedID = apiServerLB.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers/stale-lb"):
@@ -319,7 +363,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if !getByIDCalled {
@@ -337,12 +381,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			NetworkID: testNetworkID,
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
-				recordedID = apiServerLB.ID
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, _ := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			recordedID = apiServerLB.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/load-balancers") {
 				writeJSON(t, w, map[string]any{"loadBalancers": []any{
 					sdkLoadBalancerJSON(testLBName, map[string]any{
@@ -354,7 +397,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recordedID != testLBName {
@@ -377,7 +420,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}})
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrConflict) {
 			t.Fatalf("Reconcile() error = %v, want ErrConflict", err)
 		}
@@ -394,13 +437,12 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			Port:      loadbalancer.DefaultAPIServerPort,
 			Tags:      map[string]string{"cluster.x-k8s.io/cluster-name": "test"},
 			Targets:   []loadbalancer.Target{{Name: "cp-0", IP: "10.0.0.10"}},
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, _ bool) {
-				recordedID = apiServerLB.ID
-				recordedIP = apiServerLB.IP
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, _ := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			recordedID = apiServerLB.ID
+			recordedIP = apiServerLB.IP
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/load-balancers"):
@@ -417,7 +459,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !loadbalancer.IsTargetPoolUpdateError(err) {
 			t.Fatalf("Reconcile() error = %v, want IsTargetPoolUpdateError", err)
 		}
@@ -481,7 +523,7 @@ func TestSetTargets(t *testing.T) {
 		{Name: "cp-1", IP: "10.0.0.11"},
 	}
 	scope.spec.Targets = desired
-	if err := svc.Reconcile(context.Background()); err != nil {
+	if _, err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if len(updatePayloads) != 1 {
@@ -489,7 +531,7 @@ func TestSetTargets(t *testing.T) {
 	}
 
 	// Unchanged pool must not trigger another write.
-	if err := svc.Reconcile(context.Background()); err != nil {
+	if _, err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() repeat error = %v", err)
 	}
 	if len(updatePayloads) != 1 {
@@ -498,7 +540,7 @@ func TestSetTargets(t *testing.T) {
 
 	// Shrinking pool updates targets.
 	scope.spec.Targets = desired[:1]
-	if err := svc.Reconcile(context.Background()); err != nil {
+	if _, err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() shrink error = %v", err)
 	}
 	if len(updatePayloads) != 2 {
@@ -507,7 +549,7 @@ func TestSetTargets(t *testing.T) {
 
 	// Target missing name or IP is rejected.
 	scope.spec.Targets = []loadbalancer.Target{{Name: "", IP: "10.0.0.10"}}
-	if err := svc.Reconcile(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+	if _, err := svc.Reconcile(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
 		t.Fatalf("Reconcile(invalid target) error = %v, want ErrInvalidInput", err)
 	}
 }
@@ -557,7 +599,7 @@ func TestServiceReconcileValidation(t *testing.T) {
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 			}))
 
-			err := svc.Reconcile(context.Background())
+			_, err := svc.Reconcile(context.Background())
 			if !errors.Is(err, shared.ErrInvalidInput) {
 				t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 			}
@@ -568,19 +610,16 @@ func TestServiceReconcileValidation(t *testing.T) {
 func TestServiceDelete(t *testing.T) {
 	t.Run("deletes load balancer using ID when provided and clears state", func(t *testing.T) {
 		var (
-			deletedID      string
-			clearedLB      = &loadbalancer.LoadBalancer{ID: "not-cleared"}
-			clearedCreated = true
+			deletedID string
+			clearedLB = &loadbalancer.LoadBalancer{ID: "not-cleared"}
 		)
 		spec := loadbalancer.LoadBalancerSpec{
 			ID: testLBName,
-			SetLoadBalancer: func(apiServerLB *loadbalancer.LoadBalancer, created bool) {
-				clearedLB = apiServerLB
-				clearedCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc, _ := newTestServiceWithScope(t, spec, func(apiServerLB *loadbalancer.LoadBalancer) {
+			clearedLB = apiServerLB
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/load-balancers/"+testLBName) {
 				deletedID = testLBName
 				writeJSON(t, w, map[string]any{})
@@ -589,14 +628,14 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testLBName {
 			t.Fatalf("deletedID = %q, want %q", deletedID, testLBName)
 		}
-		if clearedLB != nil || clearedCreated {
-			t.Fatalf("cleared state = (%#v, %v), want (nil, false)", clearedLB, clearedCreated)
+		if clearedLB != nil {
+			t.Fatalf("cleared state = %#v, want nil", clearedLB)
 		}
 	})
 
@@ -632,7 +671,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if len(deletedIDs) != 2 || deletedIDs[0] != testLBName || deletedIDs[1] != "second-lb" {
@@ -667,7 +706,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testLBName {
@@ -684,7 +723,7 @@ func TestServiceDelete(t *testing.T) {
 			writeJSON(t, w, map[string]any{"loadBalancers": []any{}})
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v, want nil", err)
 		}
 	})
@@ -694,7 +733,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+		if _, err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})

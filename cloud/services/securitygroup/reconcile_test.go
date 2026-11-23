@@ -41,10 +41,12 @@ const (
 )
 
 type testScope struct {
-	projectID  string
-	region     string
-	iaasClient *iaas.APIClient
-	specs      []securitygroup.SecurityGroupSpec
+	shared.NoOpReconcileScope
+	projectID        string
+	region           string
+	iaasClient       *iaas.APIClient
+	specs            []securitygroup.SecurityGroupSpec
+	setSecurityGroup func(specName string, sg *securitygroup.SecurityGroup)
 }
 
 func (s *testScope) ProjectID() string {
@@ -63,6 +65,12 @@ func (s *testScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	return s.specs
 }
 
+func (s *testScope) SetSecurityGroup(specName string, sg *securitygroup.SecurityGroup) {
+	if s.setSecurityGroup != nil {
+		s.setSecurityGroup(specName, sg)
+	}
+}
+
 func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	t.Helper()
 
@@ -79,15 +87,27 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestService(t *testing.T, specs []securitygroup.SecurityGroupSpec, handler http.Handler) *securitygroup.Service {
+func newTestServiceWithSetter(
+	t *testing.T,
+	specs []securitygroup.SecurityGroupSpec,
+	setSG func(specName string, sg *securitygroup.SecurityGroup),
+	handler http.Handler,
+) *securitygroup.Service {
 	t.Helper()
 
 	return securitygroup.New(&testScope{
-		projectID:  testProjectID,
-		region:     testRegion,
-		iaasClient: newTestIaaSClient(t, handler),
-		specs:      specs,
+		projectID:        testProjectID,
+		region:           testRegion,
+		iaasClient:       newTestIaaSClient(t, handler),
+		specs:            specs,
+		setSecurityGroup: setSG,
 	})
+}
+
+func newTestService(t *testing.T, specs []securitygroup.SecurityGroupSpec, handler http.Handler) *securitygroup.Service {
+	t.Helper()
+
+	return newTestServiceWithSetter(t, specs, nil, handler)
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
@@ -163,7 +183,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 
@@ -196,12 +216,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:   testSecurityGroupID,
 			Name: "cluster-sg",
 			Tags: map[string]string{"cluster": "test"},
-			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
-				recordedID = sg.ID
-			},
 		}}
 
-		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, specs, func(_ string, sg *securitygroup.SecurityGroup) {
+			recordedID = sg.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID):
@@ -216,7 +235,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recordedID != testSecurityGroupID {
@@ -234,12 +253,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:   staleID,
 			Name: "cluster-sg",
 			Tags: map[string]string{"cluster": "test"},
-			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
-				recordedID = sg.ID
-			},
 		}}
 
-		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, specs, func(_ string, sg *securitygroup.SecurityGroup) {
+			recordedID = sg.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+staleID):
@@ -261,7 +279,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if !getByIDCalled {
@@ -296,7 +314,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 	})
@@ -314,7 +332,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}})
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrConflict) {
 			t.Fatalf("Reconcile() error = %v, want ErrConflict", err)
 		}
@@ -348,7 +366,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrTransient) {
 			t.Fatalf("Reconcile() error = %v, want ErrTransient", err)
 		}
@@ -380,7 +398,7 @@ func TestServiceReconcileAttachNoOpLogging(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
+		if _, err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
 			t.Fatalf("status %d: Reconcile() error = %v", status, err)
 		}
 		joined := strings.Join(logs, "\n")
@@ -404,9 +422,6 @@ func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {
 		{
 			Name: "cluster-bastion-ssh",
 			Tags: map[string]string{"role": "bastion"},
-			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
-				bastionSGID = sg.ID
-			},
 			Rules: []securitygroup.Rule{
 				{
 					Direction: securitygroup.DirectionIngress,
@@ -439,7 +454,11 @@ func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {
 		},
 	}
 
-	svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newTestServiceWithSetter(t, specs, func(specName string, sg *securitygroup.SecurityGroup) {
+		if specName == "cluster-bastion-ssh" && sg != nil {
+			bastionSGID = sg.ID
+		}
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups"):
@@ -483,7 +502,7 @@ func TestServiceReconcileBastionAndNodeSSH(t *testing.T) {
 		}
 	}))
 
-	if err := svc.Reconcile(context.Background()); err != nil {
+	if _, err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if bastionSGID != testRemoteSGID {
@@ -576,7 +595,7 @@ func TestServiceReconcileRules(t *testing.T) {
 		}
 	}))
 
-	if err := svc.Reconcile(context.Background()); err != nil {
+	if _, err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
@@ -683,7 +702,7 @@ func TestServiceReconcileValidation(t *testing.T) {
 				t.Fatalf("unexpected request before validation failure: %s %s", r.Method, r.URL.String())
 			}))
 
-			err := svc.Reconcile(context.Background())
+			_, err := svc.Reconcile(context.Background())
 			if !errors.Is(err, shared.ErrInvalidInput) {
 				t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 			}
@@ -700,12 +719,11 @@ func TestServiceDelete(t *testing.T) {
 		)
 		specs := []securitygroup.SecurityGroupSpec{{
 			ID: testSecurityGroupID,
-			SetSecurityGroup: func(sg *securitygroup.SecurityGroup) {
-				cleared = sg
-			},
 		}}
 
-		svc := newTestService(t, specs, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, specs, func(_ string, sg *securitygroup.SecurityGroup) {
+			cleared = sg
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/security-groups/"+testSecurityGroupID+"/rules"):
@@ -725,7 +743,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if !slices.Equal(deletedRules, []string{testRuleID1, testRuleID2}) {
@@ -779,7 +797,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if !slices.Equal(deletedRules, []string{testRuleID1, testRuleID2}) {
@@ -799,7 +817,7 @@ func TestServiceDelete(t *testing.T) {
 			writeJSON(t, w, map[string]any{"items": []any{}})
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v, want nil", err)
 		}
 	})
@@ -809,7 +827,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		err := svc.Delete(context.Background())
+		_, err := svc.Delete(context.Background())
 		if !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
@@ -839,7 +857,7 @@ func TestServiceDeleteDetachNoOpLogging(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
+		if _, err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
 			t.Fatalf("status %d: Delete() error = %v", status, err)
 		}
 		joined := strings.Join(logs, "\n")
@@ -910,7 +928,7 @@ func TestServiceDeleteStaleIDFallbackAndDetach(t *testing.T) {
 		}
 	}))
 
-	if err := svc.Delete(context.Background()); err != nil {
+	if _, err := svc.Delete(context.Background()); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 	if !slices.Equal(detachedPairs, []string{testServerID + ":" + testSecurityGroupID}) {

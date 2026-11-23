@@ -15,6 +15,9 @@ import (
 	"fmt"
 	"maps"
 	"testing"
+	"time"
+
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
@@ -23,13 +26,17 @@ import (
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
 type testResourceScope struct {
 	cloud.Client
+	shared.NoOpReconcileScope
 	networkSpec       network.NetworkSpec
+	setNetwork        func(*network.Network)
 	serverSpec        server.ServerSpec
+	setServer         func(*server.Server, bool)
 	publicIPSpec      publicip.PublicIPSpec
 	loadBalancerSpec  loadbalancer.LoadBalancerSpec
 	securityGroupSpec []securitygroup.SecurityGroupSpec
@@ -39,44 +46,84 @@ func (s *testResourceScope) NetworkSpec() network.NetworkSpec {
 	return s.networkSpec
 }
 
+func (s *testResourceScope) SetNetwork(net *network.Network) {
+	if s.setNetwork != nil {
+		s.setNetwork(net)
+	}
+}
+
 func (s *testResourceScope) ServerSpec() server.ServerSpec {
 	return s.serverSpec
+}
+
+func (s *testResourceScope) SetServer(srv *server.Server, created bool) {
+	if s.setServer != nil {
+		s.setServer(srv, created)
+	}
 }
 
 func (s *testResourceScope) PublicIPSpec() publicip.PublicIPSpec {
 	return s.publicIPSpec
 }
 
+func (s *testResourceScope) SetPublicIP(_ *publicip.PublicIP) {}
+
+func (s *testResourceScope) APIServerLoadBalancerEnabled() bool {
+	return true
+}
+
+func (s *testResourceScope) ControlPlaneEndpointHost() string {
+	return ""
+}
+
+func (s *testResourceScope) UseExternalControlPlaneEndpoint() {}
+
+func (s *testResourceScope) APIServerEndpointHost() string {
+	return ""
+}
+
+func (s *testResourceScope) ResolveLoadBalancerSpec(_ context.Context) (loadbalancer.LoadBalancerSpec, error) {
+	return s.loadBalancerSpec, nil
+}
+
 func (s *testResourceScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return s.loadBalancerSpec
+}
+
+func (s *testResourceScope) SetLoadBalancer(_ *loadbalancer.LoadBalancer) {}
+
+func (s *testResourceScope) TargetPoolFailureResult(err error, _ time.Duration) (ctrl.Result, error) {
+	return ctrl.Result{}, err
 }
 
 func (s *testResourceScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	return s.securityGroupSpec
 }
 
+func (s *testResourceScope) SetSecurityGroup(_ string, _ *securitygroup.SecurityGroup) {}
+
 func createTestResources(t *testing.T, client cloud.Client, prefix string, tags map[string]string) {
 	t.Helper()
 	ctx := context.Background()
 
 	var networkID string
-	if err := network.New(&testResourceScope{
+	if _, err := network.New(&testResourceScope{
 		Client: client,
 		networkSpec: network.NetworkSpec{
 			Name:       prefix + "-net",
 			IPv4Prefix: network.DefaultNetworkPrefix,
 			Tags:       tags,
 			Managed:    true,
-			SetNetwork: func(net *network.Network, _ bool) {
-				networkID = net.ID
-			},
+		},
+		setNetwork: func(net *network.Network) {
+			networkID = net.ID
 		},
 	}).Reconcile(ctx); err != nil {
 		t.Fatalf("network.Reconcile() error = %v", err)
 	}
 
 	var workerServerID, bastionServerID string
-	if err := server.New(&testResourceScope{
+	if _, err := server.New(&testResourceScope{
 		Client: client,
 		serverSpec: server.ServerSpec{
 			Name:        prefix + "-worker",
@@ -84,9 +131,9 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 			MachineType: "c2i.2",
 			NetworkID:   networkID,
 			Tags:        tags,
-			SetServer: func(srv *server.Server, _ bool) {
-				workerServerID = srv.ID
-			},
+		},
+		setServer: func(srv *server.Server, _ bool) {
+			workerServerID = srv.ID
 		},
 	}).Reconcile(ctx); err != nil {
 		t.Fatalf("server.Reconcile(worker) error = %v", err)
@@ -95,7 +142,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 	bastionTags := make(map[string]string, len(tags)+1)
 	maps.Copy(bastionTags, tags)
 	bastionTags[util.LabelResourceRole] = util.ResourceRoleBastion
-	if err := server.New(&testResourceScope{
+	if _, err := server.New(&testResourceScope{
 		Client: client,
 		serverSpec: server.ServerSpec{
 			Name:        prefix + "-bastion",
@@ -103,15 +150,15 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 			MachineType: "c2i.2",
 			NetworkID:   networkID,
 			Tags:        bastionTags,
-			SetServer: func(srv *server.Server, _ bool) {
-				bastionServerID = srv.ID
-			},
+		},
+		setServer: func(srv *server.Server, _ bool) {
+			bastionServerID = srv.ID
 		},
 	}).Reconcile(ctx); err != nil {
 		t.Fatalf("server.Reconcile(bastion) error = %v", err)
 	}
 
-	if err := publicip.New(&testResourceScope{
+	if _, err := publicip.New(&testResourceScope{
 		Client: client,
 		publicIPSpec: publicip.PublicIPSpec{
 			Tags:     bastionTags,
@@ -124,7 +171,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 	nodeSSHTags := make(map[string]string, len(tags)+1)
 	maps.Copy(nodeSSHTags, tags)
 	nodeSSHTags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
-	if err := securitygroup.New(&testResourceScope{
+	if _, err := securitygroup.New(&testResourceScope{
 		Client: client,
 		securityGroupSpec: []securitygroup.SecurityGroupSpec{
 			{
@@ -151,7 +198,7 @@ func createTestResources(t *testing.T, client cloud.Client, prefix string, tags 
 		t.Fatalf("securitygroup.Reconcile() error = %v", err)
 	}
 
-	if err := loadbalancer.New(&testResourceScope{
+	if _, err := loadbalancer.New(&testResourceScope{
 		Client: client,
 		loadBalancerSpec: loadbalancer.LoadBalancerSpec{
 			Name:      prefix + "-apiserver",

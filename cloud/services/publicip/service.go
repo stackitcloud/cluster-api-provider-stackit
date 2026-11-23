@@ -25,13 +25,13 @@ type PublicIPSpec struct {
 	Tags           map[string]string
 	ServerID       string
 	ServerSelector map[string]string
-	SetPublicIP    func(publicIP *PublicIP)
 }
 
 // Scope is an interface that provides scope data needed for public IP reconciliation.
 type Scope interface {
 	shared.IaaSClientScope
 	PublicIPSpec() PublicIPSpec
+	SetPublicIP(publicIP *PublicIP)
 }
 
 // Service implements public IPs reconciler.

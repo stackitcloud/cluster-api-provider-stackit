@@ -15,12 +15,14 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/cluster-api/util/record"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
@@ -38,9 +40,8 @@ type MachineScope struct {
 	cluster        *clusterv1.Cluster
 	cloudClient    cloud.Client
 
-	bootstrapData       []byte
-	instancePowerStatus string
-	instanceCreated     bool
+	bootstrapData []byte
+	notReady      bool
 
 	patchHelper *patch.Helper
 }
@@ -78,6 +79,30 @@ func (s *MachineScope) PatchObject(ctx context.Context) error {
 	}})
 }
 
+func (s *MachineScope) Name() string {
+	return s.StackitMachine.Name
+}
+
+func (s *MachineScope) FindCondition(conditionType string) *metav1.Condition {
+	return meta.FindStatusCondition(s.StackitMachine.Status.Conditions, conditionType)
+}
+
+func (s *MachineScope) Event(reason, message string) {
+	record.Event(s.StackitMachine, reason, message)
+}
+
+func (s *MachineScope) Eventf(reason, messageFmt string, args ...any) {
+	record.Eventf(s.StackitMachine, reason, messageFmt, args...)
+}
+
+func (s *MachineScope) Warn(reason, message string) {
+	record.Warn(s.StackitMachine, reason, message)
+}
+
+func (s *MachineScope) Warnf(reason, messageFmt string, args ...any) {
+	record.Warnf(s.StackitMachine, reason, messageFmt, args...)
+}
+
 func (s *MachineScope) SetConditions(status metav1.ConditionStatus, reason, message string, conditionTypes ...string) {
 	setConditions(&s.StackitMachine.Status.Conditions, s.StackitMachine.Generation, status, reason, message, conditionTypes...)
 }
@@ -93,7 +118,12 @@ func (s *MachineScope) SetReady() {
 
 func (s *MachineScope) SetNotReady(reason, message string, conditionTypes ...string) {
 	s.StackitMachine.Status.Ready = false
+	s.notReady = true
 	s.SetConditions(metav1.ConditionFalse, reason, message, conditionTypes...)
+}
+
+func (s *MachineScope) NotReady() bool {
+	return s.notReady
 }
 
 // CredentialFailureResult records the failure and decides how to retry.
@@ -127,18 +157,14 @@ func (s *MachineScope) tags() map[string]string {
 	)
 }
 
-func (s *MachineScope) setInstance(srv *server.Server, created bool) {
+func (s *MachineScope) SetServer(srv *server.Server, _ bool) {
 	if srv == nil {
-		s.instanceCreated = false
-		s.instancePowerStatus = ""
 		s.StackitMachine.Status.Addresses = nil
 		s.StackitMachine.Status.InstanceID = ""
 		s.StackitMachine.Status.InstanceState = ""
 		s.StackitMachine.Status.AvailabilityZone = ""
 		return
 	}
-	s.instanceCreated = created
-	s.instancePowerStatus = srv.PowerStatus
 	s.StackitMachine.Status.Addresses = machineAddressesFromServer(srv.Addresses)
 	providerID := fmt.Sprintf("stackit://%s", srv.ID)
 	s.StackitMachine.Status.InstanceID = srv.ID
@@ -147,6 +173,10 @@ func (s *MachineScope) setInstance(srv *server.Server, created bool) {
 	s.StackitMachine.Spec.ProviderID = &providerID
 	s.StackitMachine.Status.ProviderID = providerID
 	s.StackitMachine.Status.Initialization.Provisioned = true
+}
+
+func (s *MachineScope) ServerGoneResult(_ error) (ctrl.Result, error) {
+	return ctrl.Result{}, nil
 }
 
 // availabilityZone returns the resolved availability zone for the machine.
@@ -195,14 +225,6 @@ func (s *MachineScope) SetBootstrapData(data []byte) {
 	s.bootstrapData = data
 }
 
-func (s *MachineScope) InstancePowerStatus() string {
-	return s.instancePowerStatus
-}
-
-func (s *MachineScope) InstanceCreated() bool {
-	return s.instanceCreated
-}
-
 func (s *MachineScope) ServerSpec() server.ServerSpec {
 	return server.ServerSpec{
 		ID:               s.StackitMachine.Status.InstanceID,
@@ -217,7 +239,6 @@ func (s *MachineScope) ServerSpec() server.ServerSpec {
 		Tags:             s.tags(),
 		RootVolume:       rootVolumeFromSpec(s.StackitMachine.Spec.RootVolume),
 		DisallowRecreate: s.StackitMachine.Status.Initialization.Provisioned,
-		SetServer:        s.setInstance,
 	}
 }
 
@@ -233,6 +254,8 @@ func (s *MachineScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 		),
 	}
 }
+
+func (s *MachineScope) SetSecurityGroup(_ string, _ *securitygroup.SecurityGroup) {}
 
 func machineAddressesFromServer(in []server.Address) []clusterv1.MachineAddress {
 	if len(in) == 0 {

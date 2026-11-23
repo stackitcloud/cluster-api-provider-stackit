@@ -20,11 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -194,74 +192,15 @@ func (r *StackitMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	machineScope.SetConditions(metav1.ConditionTrue, "Available", "", infrav1.MachineCredentialsReadyCondition)
 
 	machineScope.SetBootstrapData(bootstrapData)
-	err = server.New(machineScope).Reconcile(ctx)
-	if server.IsServerGone(err) {
-		machineScope.SetNotReady(
-			"InstanceNotFound",
-			err.Error(),
-			infrav1.MachineInstanceReadyCondition,
-			infrav1.MachineReadyCondition,
-		)
-		record.Warnf(
-			stackitMachine, "InstanceNotFound",
-			"Server %s no longer exists; the Machine must be replaced", stackitMachine.Status.InstanceID,
-		)
-		return ctrl.Result{}, nil
+	reconcilers := []cloud.Reconciler{
+		server.New(machineScope),
+		securitygroup.New(machineScope),
 	}
-	if err != nil {
-		log.Error(err, "Failed to create server",
-			"machine", stackitMachine.Name,
-			"imageID", stackitMachine.Spec.ImageID,
-			"networkID", machineScope.NetworkID(),
-			"region", machineScope.StackitCluster.Spec.Region,
-		)
-		record.Warnf(
-			stackitMachine, "FailedCreateInstance",
-			"Failed to create server %s (imageID: %s, networkID: %s, region: %s): %v",
-			stackitMachine.Name, stackitMachine.Spec.ImageID, machineScope.NetworkID(),
-			machineScope.StackitCluster.Spec.Region, err,
-		)
-		return machineScope.CloudFailureResult(
-			"InstanceError",
-			err,
-			retryableErrorRequeueAfter,
-			true,
-			infrav1.MachineInstanceReadyCondition,
-			infrav1.MachineReadyCondition,
-		)
-	}
-	if machineScope.InstanceCreated() {
-		record.Eventf(
-			stackitMachine, "InstanceCreated", "Created instance %s", stackitMachine.Status.InstanceID,
-		)
-	}
-
-	if ready, reason, message, warn := server.StateCondition(stackitMachine.Status.InstanceState, machineScope.InstancePowerStatus()); !ready {
-		previousReason := ""
-		if previous := meta.FindStatusCondition(stackitMachine.Status.Conditions, infrav1.MachineInstanceReadyCondition); previous != nil {
-			previousReason = previous.Reason
+	for _, s := range reconcilers {
+		res, err := s.Reconcile(ctx)
+		if err != nil || !res.IsZero() || machineScope.NotReady() {
+			return res, err
 		}
-		machineScope.SetNotReady(reason, message, infrav1.MachineInstanceReadyCondition, infrav1.MachineReadyCondition)
-		// Only warn on entering the state, not on every requeue.
-		if warn && previousReason != reason {
-			record.Warnf(stackitMachine, reason, "Server %s: %s", stackitMachine.Status.InstanceID, message)
-		}
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
-	if err := securitygroup.New(machineScope).Reconcile(ctx); err != nil {
-		log.Error(err, "Failed to configure bastion SSH access for node", "machine", stackitMachine.Name)
-		record.Warnf(
-			stackitMachine, "FailedNodeSSHAccess",
-			"Failed to configure bastion SSH access for server %s: %v", stackitMachine.Status.InstanceID, err,
-		)
-		return machineScope.CloudFailureResult(
-			"BastionSSHAccessError",
-			err,
-			retryableErrorRequeueAfter,
-			true,
-			infrav1.MachineReadyCondition,
-		)
 	}
 
 	machineScope.SetReady()
@@ -326,17 +265,8 @@ func (r *StackitMachineReconciler) reconcileDelete(ctx context.Context, machineS
 	}
 
 	machineScope.SetCloudClient(cloudClient)
-	instanceID := stackitMachine.Status.InstanceID
-	if err := server.New(machineScope).Delete(ctx); err != nil {
-		log.Error(err, "Failed to delete server", "machine", stackitMachine.Name, "instanceID", instanceID)
-		record.Warnf(stackitMachine, "FailedDeleteInstance",
-			"Failed to delete server %s: %v", instanceID, err)
+	if _, err := server.New(machineScope).Delete(ctx); err != nil {
 		return err
-	}
-	if instanceID != "" {
-		record.Eventf(
-			stackitMachine, "InstanceDeleted", "Deleted instance %s", instanceID,
-		)
 	}
 	controllerutil.RemoveFinalizer(stackitMachine, infrav1.MachineFinalizer)
 	return nil

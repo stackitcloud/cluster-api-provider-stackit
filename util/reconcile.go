@@ -69,7 +69,7 @@ func BuildCloudClient(
 		return nil, err
 	}
 
-	return factory(ctx, creds)
+	return factory(creds)
 }
 
 func CredentialsSecretKey(stackitCluster *infrav1.StackitCluster) types.NamespacedName {

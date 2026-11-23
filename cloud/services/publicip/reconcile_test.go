@@ -41,10 +41,11 @@ const (
 )
 
 type testScope struct {
-	projectID  string
-	region     string
-	iaasClient *iaas.APIClient
-	spec       publicip.PublicIPSpec
+	projectID   string
+	region      string
+	iaasClient  *iaas.APIClient
+	spec        publicip.PublicIPSpec
+	setPublicIP func(publicIP *publicip.PublicIP)
 }
 
 func (s *testScope) ProjectID() string {
@@ -63,6 +64,12 @@ func (s *testScope) PublicIPSpec() publicip.PublicIPSpec {
 	return s.spec
 }
 
+func (s *testScope) SetPublicIP(pip *publicip.PublicIP) {
+	if s.setPublicIP != nil {
+		s.setPublicIP(pip)
+	}
+}
+
 func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	t.Helper()
 
@@ -79,15 +86,22 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestService(t *testing.T, spec publicip.PublicIPSpec, handler http.Handler) *publicip.Service {
+func newTestServiceWithSetter(t *testing.T, spec publicip.PublicIPSpec, setPublicIP func(*publicip.PublicIP), handler http.Handler) *publicip.Service {
 	t.Helper()
 
 	return publicip.New(&testScope{
-		projectID:  testProjectID,
-		region:     testRegion,
-		iaasClient: newTestIaaSClient(t, handler),
-		spec:       spec,
+		projectID:   testProjectID,
+		region:      testRegion,
+		iaasClient:  newTestIaaSClient(t, handler),
+		spec:        spec,
+		setPublicIP: setPublicIP,
 	})
+}
+
+func newTestService(t *testing.T, spec publicip.PublicIPSpec, handler http.Handler) *publicip.Service {
+	t.Helper()
+
+	return newTestServiceWithSetter(t, spec, nil, handler)
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
@@ -124,12 +138,11 @@ func TestServiceReconcile(t *testing.T) {
 		spec := publicip.PublicIPSpec{
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(pip *publicip.PublicIP) {
-				recorded = pip
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(pip *publicip.PublicIP) {
+			recorded = pip
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips"):
@@ -154,7 +167,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if attachedPair != testServerID+":"+testPublicIPID {
@@ -175,12 +188,11 @@ func TestServiceReconcile(t *testing.T) {
 			ID:       testPublicIPID,
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(pip *publicip.PublicIP) {
-				recorded = pip
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(pip *publicip.PublicIP) {
+			recorded = pip
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/public-ips/"+testPublicIPID) {
 				writeJSON(t, w, map[string]any{
 					"id":               testPublicIPID,
@@ -192,7 +204,7 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recorded == nil || recorded.ID != testPublicIPID || recorded.IP != testPublicIPAddress {
@@ -206,12 +218,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 		var recordedID string
 		spec := publicip.PublicIPSpec{
 			Tags: map[string]string{"cluster": "test"},
-			SetPublicIP: func(pip *publicip.PublicIP) {
-				recordedID = pip.ID
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(pip *publicip.PublicIP) {
+			recordedID = pip.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/public-ips") {
 				writeJSON(t, w, map[string]any{"items": []any{
 					map[string]any{
@@ -225,7 +236,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if recordedID != testPublicIPID {
@@ -242,12 +253,11 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ID:       testPublicIPID,
 			Tags:     map[string]string{"cluster": "test"},
 			ServerID: testServerID,
-			SetPublicIP: func(pip *publicip.PublicIP) {
-				recordedID = pip.ID
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(pip *publicip.PublicIP) {
+			recordedID = pip.ID
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(path, "/public-ips/"+testPublicIPID):
@@ -263,7 +273,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
+		if _, err := svc.Reconcile(contextWithLogCapture(&logs)); err != nil {
 			t.Fatalf("Reconcile() error = %v, want nil on conflict", err)
 		}
 		if recordedID != testPublicIPID {
@@ -290,7 +300,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}})
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrConflict) {
 			t.Fatalf("Reconcile() error = %v, want ErrConflict", err)
 		}
@@ -301,7 +311,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+		if _, err := svc.Reconcile(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 		}
 	})
@@ -317,12 +327,11 @@ func TestServiceDelete(t *testing.T) {
 		spec := publicip.PublicIPSpec{
 			ID:       testPublicIPID,
 			ServerID: testServerID,
-			SetPublicIP: func(pip *publicip.PublicIP) {
-				cleared = pip
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(pip *publicip.PublicIP) {
+			cleared = pip
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			switch {
 			case r.Method == http.MethodDelete && strings.HasSuffix(path, "/servers/"+testServerID+"/public-ips/"+testPublicIPID):
@@ -336,7 +345,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if detachedPair != testServerID+":"+testPublicIPID {
@@ -359,7 +368,7 @@ func TestServiceDelete(t *testing.T) {
 			writeJSON(t, w, map[string]any{"items": []any{}})
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v, want nil", err)
 		}
 	})
@@ -385,7 +394,7 @@ func TestServiceDelete(t *testing.T) {
 				}
 			}))
 
-			if err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
+			if _, err := svc.Delete(contextWithLogCapture(&logs)); err != nil {
 				t.Fatalf("Delete() error = %v", err)
 			}
 			joined := strings.Join(logs, "\n")
@@ -403,7 +412,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+		if _, err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})
@@ -475,7 +484,7 @@ func TestServiceDeleteTagFallback(t *testing.T) {
 		}
 	}))
 
-	if err := svc.Delete(context.Background()); err != nil {
+	if _, err := svc.Delete(context.Background()); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 	if len(detachedPairs) != 2 || detachedPairs[0] != testServerID+":"+testPublicIPID || detachedPairs[1] != testServerID+":"+testOtherPublicIPID {

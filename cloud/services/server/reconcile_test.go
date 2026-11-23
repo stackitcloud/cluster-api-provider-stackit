@@ -38,10 +38,12 @@ const (
 )
 
 type testScope struct {
+	shared.NoOpReconcileScope
 	projectID  string
 	region     string
 	iaasClient *iaas.APIClient
 	spec       server.ServerSpec
+	setServer  func(srv *server.Server, created bool)
 }
 
 func (s *testScope) ProjectID() string {
@@ -60,6 +62,12 @@ func (s *testScope) ServerSpec() server.ServerSpec {
 	return s.spec
 }
 
+func (s *testScope) SetServer(srv *server.Server, created bool) {
+	if s.setServer != nil {
+		s.setServer(srv, created)
+	}
+}
+
 func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	t.Helper()
 
@@ -76,7 +84,12 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestService(t *testing.T, spec server.ServerSpec, handler http.Handler) *server.Service {
+func newTestServiceWithSetter(
+	t *testing.T,
+	spec server.ServerSpec,
+	setServer func(*server.Server, bool),
+	handler http.Handler,
+) *server.Service {
 	t.Helper()
 
 	return server.New(&testScope{
@@ -84,7 +97,14 @@ func newTestService(t *testing.T, spec server.ServerSpec, handler http.Handler) 
 		region:     testRegion,
 		iaasClient: newTestIaaSClient(t, handler),
 		spec:       spec,
+		setServer:  setServer,
 	})
+}
+
+func newTestService(t *testing.T, spec server.ServerSpec, handler http.Handler) *server.Service {
+	t.Helper()
+
+	return newTestServiceWithSetter(t, spec, nil, handler)
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
@@ -188,13 +208,12 @@ func TestServiceReconcile(t *testing.T) {
 				DeleteOnTermination: true,
 			},
 			Tags: map[string]string{"cluster": "test"},
-			SetServer: func(srv *server.Server, created bool) {
-				recordedServer = srv
-				wasCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(srv *server.Server, created bool) {
+			recordedServer = srv
+			wasCreated = created
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
 				if got := r.URL.Query().Get("label_selector"); got != "cluster=test" {
@@ -224,7 +243,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if !wasCreated {
@@ -281,7 +300,7 @@ func TestServiceReconcile(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		assertStringField(t, createPayload, "imageId", testImageID)
@@ -302,13 +321,12 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ImageID:     testImageID,
 			NetworkID:   testNetworkID,
 			Tags:        map[string]string{"cluster": "test"},
-			SetServer: func(srv *server.Server, created bool) {
-				recordedServer = srv
-				wasCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(srv *server.Server, created bool) {
+			recordedServer = srv
+			wasCreated = created
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID):
 				writeJSON(t, w, map[string]any{
@@ -324,7 +342,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if wasCreated {
@@ -346,13 +364,12 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			ImageID:     testImageID,
 			NetworkID:   testNetworkID,
 			Tags:        map[string]string{"cluster": "test"},
-			SetServer: func(srv *server.Server, created bool) {
-				recordedServer = srv
-				wasCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(srv *server.Server, created bool) {
+			recordedServer = srv
+			wasCreated = created
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/servers"):
 				writeJSON(t, w, map[string]any{"items": []any{
@@ -371,7 +388,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if wasCreated {
@@ -405,7 +422,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			}
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !server.IsServerGone(err) {
 			t.Fatalf("Reconcile() error = %v, want ErrServerGone", err)
 		}
@@ -431,7 +448,7 @@ func TestServiceReconcileReuseAndErrors(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrConflict) {
 			t.Fatalf("Reconcile() error = %v, want ErrConflict", err)
 		}
@@ -507,7 +524,7 @@ func TestServiceReconcileValidation(t *testing.T) {
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 			}))
 
-			err := svc.Reconcile(context.Background())
+			_, err := svc.Reconcile(context.Background())
 			if !errors.Is(err, shared.ErrInvalidInput) {
 				t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 			}
@@ -525,14 +542,13 @@ func TestServiceDelete(t *testing.T) {
 		)
 		spec := server.ServerSpec{
 			ID: testServerID,
-			SetServer: func(srv *server.Server, created bool) {
-				setServerCalls++
-				clearedServer = srv
-				clearedCreated = created
-			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestServiceWithSetter(t, spec, func(srv *server.Server, created bool) {
+			setServerCalls++
+			clearedServer = srv
+			clearedCreated = created
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/servers/"+testServerID) {
 				deletedID = testServerID
 				w.WriteHeader(http.StatusNoContent)
@@ -541,7 +557,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testServerID {
@@ -580,7 +596,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if len(deletedIDs) != 2 || deletedIDs[0] != testServerID || deletedIDs[1] != testOtherServerID {
@@ -612,7 +628,7 @@ func TestServiceDelete(t *testing.T) {
 			}
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		if deletedID != testServerID {
@@ -629,7 +645,7 @@ func TestServiceDelete(t *testing.T) {
 			writeJSON(t, w, map[string]any{"items": []any{}})
 		}))
 
-		if err := svc.Delete(context.Background()); err != nil {
+		if _, err := svc.Delete(context.Background()); err != nil {
 			t.Fatalf("Delete() error = %v, want nil", err)
 		}
 	})
@@ -639,7 +655,7 @@ func TestServiceDelete(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
+		if _, err := svc.Delete(context.Background()); !errors.Is(err, shared.ErrInvalidInput) {
 			t.Fatalf("Delete() error = %v, want ErrInvalidInput", err)
 		}
 	})

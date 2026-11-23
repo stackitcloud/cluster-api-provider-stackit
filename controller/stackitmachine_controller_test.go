@@ -65,7 +65,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		reconciler = &StackitMachineReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
-			CloudClientFactory: func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			CloudClientFactory: func(cloud.Credentials) (cloud.Client, error) {
 				return fakeCloud, nil
 			},
 		}
@@ -382,7 +382,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
-			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 				return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 			}
 
@@ -397,7 +397,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 
 			By("correcting the credentials")
-			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 				return fakeCloud, nil
 			}
 
@@ -417,7 +417,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
 
 			cloudClientFactoryCalls := 0
-			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 				cloudClientFactoryCalls++
 				return fakeCloud, nil
 			}
@@ -440,7 +440,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
 			cloudClientFactoryCalls := 0
-			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 				cloudClientFactoryCalls++
 				return fakeCloud, nil
 			}

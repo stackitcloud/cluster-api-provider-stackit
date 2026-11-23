@@ -12,15 +12,11 @@ package availabilityzone
 
 import "github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 
-// AvailabilityZoneSpec describes the callback used to record discovered availability zones.
-type AvailabilityZoneSpec struct {
-	SetZones func(zones []string)
-}
-
 // Scope is an interface that provides scope data needed for availability zone reconciliation.
 type Scope interface {
 	shared.IaaSClientScope
-	AvailabilityZoneSpec() AvailabilityZoneSpec
+	shared.ReconcileScope
+	SetZones(zones []string)
 }
 
 // Service implements availability zones reconciler.

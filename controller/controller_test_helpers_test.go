@@ -23,8 +23,13 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/bastion"
 	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
+
+func bastionCloudInitHash(cloudInit []byte) string {
+	return bastion.CloudInitHash(cloudInit)
+}
 
 const (
 	testProjectID = "11111111-1111-1111-1111-111111111111"

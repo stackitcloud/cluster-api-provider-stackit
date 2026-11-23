@@ -14,6 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
@@ -25,6 +28,7 @@ import (
 
 type cleanupScope struct {
 	Client
+	shared.NoOpReconcileScope
 	tags map[string]string
 }
 
@@ -43,14 +47,14 @@ func CleanupByTags(ctx context.Context, client Client, tags map[string]string) e
 		tags:   tags,
 	}
 	var errs []error
-	for _, deleteFn := range []func(context.Context) error{
-		publicip.New(scope).Delete,
-		loadbalancer.New(scope).Delete,
-		server.New(scope).Delete,
-		securitygroup.New(scope).Delete,
-		network.New(scope).Delete,
+	for _, reconciler := range []Reconciler{
+		publicip.New(scope),
+		loadbalancer.New(scope),
+		server.New(scope),
+		securitygroup.New(scope),
+		network.New(scope),
 	} {
-		if err := deleteFn(ctx); err != nil {
+		if _, err := reconciler.Delete(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -68,10 +72,36 @@ func (s *cleanupScope) PublicIPSpec() publicip.PublicIPSpec {
 	}
 }
 
+func (s *cleanupScope) SetPublicIP(_ *publicip.PublicIP) {}
+
+func (s *cleanupScope) APIServerLoadBalancerEnabled() bool {
+	return true
+}
+
+func (s *cleanupScope) ControlPlaneEndpointHost() string {
+	return ""
+}
+
+func (s *cleanupScope) UseExternalControlPlaneEndpoint() {}
+
+func (s *cleanupScope) APIServerEndpointHost() string {
+	return ""
+}
+
+func (s *cleanupScope) ResolveLoadBalancerSpec(_ context.Context) (loadbalancer.LoadBalancerSpec, error) {
+	return s.LoadBalancerSpec(), nil
+}
+
 func (s *cleanupScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
 	return loadbalancer.LoadBalancerSpec{
 		Tags: s.tags,
 	}
+}
+
+func (s *cleanupScope) SetLoadBalancer(_ *loadbalancer.LoadBalancer) {}
+
+func (s *cleanupScope) TargetPoolFailureResult(err error, _ time.Duration) (ctrl.Result, error) {
+	return ctrl.Result{}, err
 }
 
 func (s *cleanupScope) ServerSpec() server.ServerSpec {
@@ -79,6 +109,8 @@ func (s *cleanupScope) ServerSpec() server.ServerSpec {
 		Tags: s.tags,
 	}
 }
+
+func (s *cleanupScope) SetServer(_ *server.Server, _ bool) {}
 
 func (s *cleanupScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	return []securitygroup.SecurityGroupSpec{
@@ -89,9 +121,13 @@ func (s *cleanupScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
 	}
 }
 
+func (s *cleanupScope) SetSecurityGroup(_ string, _ *securitygroup.SecurityGroup) {}
+
 func (s *cleanupScope) NetworkSpec() network.NetworkSpec {
 	return network.NetworkSpec{
 		Tags:    s.tags,
 		Managed: true,
 	}
 }
+
+func (s *cleanupScope) SetNetwork(_ *network.Network) {}

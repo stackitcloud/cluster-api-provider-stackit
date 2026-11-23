@@ -59,7 +59,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		reconciler = &StackitClusterReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
-			CloudClientFactory: func(context.Context, cloud.Credentials) (cloud.Client, error) {
+			CloudClientFactory: func(cloud.Credentials) (cloud.Client, error) {
 				return fakeCloud, nil
 			},
 		}
@@ -316,7 +316,9 @@ var _ = Describe("StackitCluster Controller", func() {
 		)
 		Expect(err).NotTo(HaveOccurred())
 		machineScope.SetCloudClient(fakeCloud)
-		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		serverRes, err := server.New(machineScope).Reconcile(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(serverRes).To(Equal(reconcile.Result{}))
 		workerServerID := stackitMachine.Status.InstanceID
 		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
@@ -446,7 +448,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 		}
 
@@ -460,7 +462,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterCredentialsReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 
 		By("correcting the credentials so deletion succeeds")
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			return fakeCloud, nil
 		}
 
@@ -633,7 +635,9 @@ var _ = Describe("StackitCluster Controller", func() {
 		)
 		Expect(err).NotTo(HaveOccurred())
 		machineScope.SetCloudClient(fakeCloud)
-		Expect(server.New(machineScope).Reconcile(ctx)).To(Succeed())
+		serverRes, err := server.New(machineScope).Reconcile(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(serverRes).To(Equal(reconcile.Result{}))
 		workerServerID := stackitMachine.Status.InstanceID
 		Expect(fakeCloud.ServerHasSecurityGroup(workerServerID, nodeSG.ID)).To(BeTrue())
 
@@ -774,7 +778,7 @@ var _ = Describe("StackitCluster Controller", func() {
 	// The requeue is what lets a corrected Secret take effect: nothing else
 	// enqueues the cluster once the credentials are rejected.
 	It("requeues on unauthorized credentials and recovers once they are corrected", func() {
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 		}
 
@@ -789,7 +793,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		expectCondition(got.Status.Conditions, infrav1.ClusterReadyCondition, metav1.ConditionFalse, "CredentialsInvalid")
 
 		By("correcting the credentials")
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			return fakeCloud, nil
 		}
 
@@ -809,7 +813,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
 
 		cloudClientFactoryCalls := 0
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			cloudClientFactoryCalls++
 			return fakeCloud, nil
 		}
@@ -832,7 +836,7 @@ var _ = Describe("StackitCluster Controller", func() {
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 
 		cloudClientFactoryCalls := 0
-		reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
+		reconciler.CloudClientFactory = func(cloud.Credentials) (cloud.Client, error) {
 			cloudClientFactoryCalls++
 			return fakeCloud, nil
 		}

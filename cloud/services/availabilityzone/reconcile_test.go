@@ -30,10 +30,11 @@ import (
 const testRegion = "eu01"
 
 type testScope struct {
+	shared.NoOpReconcileScope
 	projectID  string
 	region     string
 	iaasClient *iaas.APIClient
-	spec       availabilityzone.AvailabilityZoneSpec
+	setZones   func(zones []string)
 }
 
 func (s *testScope) ProjectID() string {
@@ -48,8 +49,10 @@ func (s *testScope) IaaSClient() *iaas.APIClient {
 	return s.iaasClient
 }
 
-func (s *testScope) AvailabilityZoneSpec() availabilityzone.AvailabilityZoneSpec {
-	return s.spec
+func (s *testScope) SetZones(zones []string) {
+	if s.setZones != nil {
+		s.setZones(zones)
+	}
 }
 
 func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
@@ -68,13 +71,13 @@ func newTestIaaSClient(t *testing.T, handler http.Handler) *iaas.APIClient {
 	return iaasClient
 }
 
-func newTestService(t *testing.T, spec availabilityzone.AvailabilityZoneSpec, handler http.Handler) *availabilityzone.Service {
+func newTestService(t *testing.T, setZones func(zones []string), handler http.Handler) *availabilityzone.Service {
 	t.Helper()
 
 	return availabilityzone.New(&testScope{
 		region:     testRegion,
 		iaasClient: newTestIaaSClient(t, handler),
-		spec:       spec,
+		setZones:   setZones,
 	})
 }
 
@@ -89,13 +92,10 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 func TestServiceReconcile(t *testing.T) {
 	t.Run("lists availability zones and passes them to SetZones", func(t *testing.T) {
 		var recorded []string
-		spec := availabilityzone.AvailabilityZoneSpec{
-			SetZones: func(zones []string) {
-				recorded = zones
-			},
-		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		svc := newTestService(t, func(zones []string) {
+			recorded = zones
+		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/availability-zones") {
 				writeJSON(t, w, map[string]any{
 					"items": []string{"eu01-1", "eu01-2", "eu01-3"},
@@ -105,7 +105,7 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}))
 
-		if err := svc.Reconcile(context.Background()); err != nil {
+		if _, err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
 		if !slices.Equal(recorded, []string{"eu01-1", "eu01-2", "eu01-3"}) {
@@ -114,12 +114,12 @@ func TestServiceReconcile(t *testing.T) {
 	})
 
 	t.Run("returns classified error when API fails", func(t *testing.T) {
-		svc := newTestService(t, availabilityzone.AvailabilityZoneSpec{}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		svc := newTestService(t, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			writeJSON(t, w, map[string]any{"message": "backend error"})
 		}))
 
-		err := svc.Reconcile(context.Background())
+		_, err := svc.Reconcile(context.Background())
 		if !errors.Is(err, shared.ErrTransient) {
 			t.Fatalf("Reconcile() error = %v, want ErrTransient", err)
 		}

@@ -29,13 +29,14 @@ type NetworkSpec struct {
 	IPv4Prefix string
 	Tags       map[string]string
 	Managed    bool
-	SetNetwork func(network *Network, created bool)
 }
 
 // Scope is an interface that provides scope data needed for network reconciliation.
 type Scope interface {
 	shared.IaaSClientScope
+	shared.ReconcileScope
 	NetworkSpec() NetworkSpec
+	SetNetwork(network *Network)
 }
 
 // Service implements network reconciler.

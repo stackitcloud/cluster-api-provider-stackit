@@ -11,7 +11,6 @@ You may obtain a copy of the License at
 package cloud
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -42,7 +41,7 @@ type SDKClient struct {
 // The credential secret format mirrors machine-controller-manager-provider-stackit:
 // "project-id" plus "serviceaccount.json". Authentication uses the STACKIT
 // service-account key flow.
-func NewClient(_ context.Context, creds Credentials) (Client, error) {
+func NewClient(creds Credentials) (Client, error) {
 	if creds.ProjectID == "" {
 		return nil, fmt.Errorf("%w: project ID is empty", shared.ErrInvalidInput)
 	}
