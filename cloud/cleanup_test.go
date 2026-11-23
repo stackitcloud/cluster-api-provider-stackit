@@ -12,11 +12,157 @@ package cloud_test
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/loadbalancer"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/publicip"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/server"
+	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
+
+type testResourceScope struct {
+	cloud.Client
+	networkSpec       network.NetworkSpec
+	serverSpec        server.ServerSpec
+	publicIPSpec      publicip.PublicIPSpec
+	loadBalancerSpec  loadbalancer.LoadBalancerSpec
+	securityGroupSpec []securitygroup.SecurityGroupSpec
+}
+
+func (s *testResourceScope) NetworkSpec() network.NetworkSpec {
+	return s.networkSpec
+}
+
+func (s *testResourceScope) ServerSpec() server.ServerSpec {
+	return s.serverSpec
+}
+
+func (s *testResourceScope) PublicIPSpec() publicip.PublicIPSpec {
+	return s.publicIPSpec
+}
+
+func (s *testResourceScope) LoadBalancerSpec() loadbalancer.LoadBalancerSpec {
+	return s.loadBalancerSpec
+}
+
+func (s *testResourceScope) SecurityGroupSpecs() []securitygroup.SecurityGroupSpec {
+	return s.securityGroupSpec
+}
+
+func createTestResources(t *testing.T, client cloud.Client, prefix string, tags map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var networkID string
+	if err := network.New(&testResourceScope{
+		Client: client,
+		networkSpec: network.NetworkSpec{
+			Name:       prefix + "-net",
+			IPv4Prefix: network.DefaultNetworkPrefix,
+			Tags:       tags,
+			Managed:    true,
+			SetNetwork: func(net *network.Network, _ bool) {
+				networkID = net.ID
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("network.Reconcile() error = %v", err)
+	}
+
+	var workerServerID, bastionServerID string
+	if err := server.New(&testResourceScope{
+		Client: client,
+		serverSpec: server.ServerSpec{
+			Name:        prefix + "-worker",
+			ImageID:     "22222222-2222-4222-8222-222222222222",
+			MachineType: "c2i.2",
+			NetworkID:   networkID,
+			Tags:        tags,
+			SetServer: func(srv *server.Server, _ bool) {
+				workerServerID = srv.ID
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("server.Reconcile(worker) error = %v", err)
+	}
+
+	bastionTags := make(map[string]string, len(tags)+1)
+	maps.Copy(bastionTags, tags)
+	bastionTags[util.LabelResourceRole] = util.ResourceRoleBastion
+	if err := server.New(&testResourceScope{
+		Client: client,
+		serverSpec: server.ServerSpec{
+			Name:        prefix + "-bastion",
+			ImageID:     "22222222-2222-4222-8222-222222222222",
+			MachineType: "c2i.2",
+			NetworkID:   networkID,
+			Tags:        bastionTags,
+			SetServer: func(srv *server.Server, _ bool) {
+				bastionServerID = srv.ID
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("server.Reconcile(bastion) error = %v", err)
+	}
+
+	if err := publicip.New(&testResourceScope{
+		Client: client,
+		publicIPSpec: publicip.PublicIPSpec{
+			Tags:     bastionTags,
+			ServerID: bastionServerID,
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("publicip.Reconcile() error = %v", err)
+	}
+
+	nodeSSHTags := make(map[string]string, len(tags)+1)
+	maps.Copy(nodeSSHTags, tags)
+	nodeSSHTags[util.LabelResourceRole] = util.ResourceRoleNodeSSH
+	if err := securitygroup.New(&testResourceScope{
+		Client: client,
+		securityGroupSpec: []securitygroup.SecurityGroupSpec{
+			{
+				Name:      prefix + "-bastion-sg",
+				Tags:      bastionTags,
+				ServerIDs: []string{bastionServerID},
+			},
+			{
+				Name:      prefix + "-node-ssh-sg",
+				Tags:      nodeSSHTags,
+				ServerIDs: []string{workerServerID},
+				Rules: []securitygroup.Rule{
+					{
+						Direction:               securitygroup.DirectionIngress,
+						Protocol:                securitygroup.ProtocolTCP,
+						PortMin:                 22,
+						PortMax:                 22,
+						RemoteSecurityGroupTags: bastionTags,
+					},
+				},
+			},
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("securitygroup.Reconcile() error = %v", err)
+	}
+
+	if err := loadbalancer.New(&testResourceScope{
+		Client: client,
+		loadBalancerSpec: loadbalancer.LoadBalancerSpec{
+			Name:      prefix + "-apiserver",
+			NetworkID: networkID,
+			Port:      loadbalancer.DefaultAPIServerPort,
+			Tags:      tags,
+		},
+	}).Reconcile(ctx); err != nil {
+		t.Fatalf("loadbalancer.Reconcile() error = %v", err)
+	}
+}
 
 func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 	ctx := context.Background()
@@ -30,80 +176,74 @@ func TestCleanupByTagsDeletesMatchingCloudResources(t *testing.T) {
 		"cluster-api-provider-stackit/test-id": "test-2",
 	}
 
-	if _, err := client.CreateServer(ctx, cloud.CreateServerInput{Name: "matched", Tags: tags}); err != nil {
-		t.Fatalf("CreateServer() error = %v", err)
-	}
-	if _, err := client.CreateServer(ctx, cloud.CreateServerInput{Name: "other", Tags: otherTags}); err != nil {
-		t.Fatalf("CreateServer() error = %v", err)
-	}
-	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-		Name:      "matched",
-		Tags:      tags,
-		NetworkID: "network-id",
-		Port:      6443,
-		Targets: []cloud.LoadBalancerTargetInput{{
-			Name: "target",
-			IP:   "10.0.0.10",
-		}},
-	}); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
-	}
-	if _, err := client.EnsureAPIServerLoadBalancer(ctx, cloud.LoadBalancerInput{
-		Name:      "other",
-		Tags:      otherTags,
-		NetworkID: "network-id",
-		Port:      6443,
-		Targets: []cloud.LoadBalancerTargetInput{{
-			Name: "target",
-			IP:   "10.0.0.11",
-		}},
-	}); err != nil {
-		t.Fatalf("EnsureAPIServerLoadBalancer() error = %v", err)
-	}
-	if _, err := client.CreateNetwork(ctx, cloud.CreateNetworkInput{Name: "matched-net", Tags: tags}); err != nil {
-		t.Fatalf("CreateNetwork() error = %v", err)
-	}
-	if _, err := client.CreateNetwork(ctx, cloud.CreateNetworkInput{Name: "other-net", Tags: otherTags}); err != nil {
-		t.Fatalf("CreateNetwork() error = %v", err)
-	}
+	createTestResources(t, client, "matched", tags)
+	createTestResources(t, client, "other", otherTags)
 
 	if err := cloud.CleanupByTags(ctx, client, tags); err != nil {
 		t.Fatalf("CleanupByTags() error = %v", err)
 	}
 
-	matchedServers, err := client.ListServersByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("ListServersByTags() error = %v", err)
+	if got := client.ServerCount(); got != 2 {
+		t.Fatalf("remaining server count = %d, want 2", got)
 	}
-	if len(matchedServers) != 0 {
-		t.Fatalf("matched server count = %d, want 0", len(matchedServers))
+	if got := client.LoadBalancerCount(); got != 1 {
+		t.Fatalf("remaining load balancer count = %d, want 1", got)
 	}
-	otherServers, err := client.ListServersByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("ListServersByTags(other) error = %v", err)
+	if got := client.PublicIPCount(); got != 1 {
+		t.Fatalf("remaining public IP count = %d, want 1", got)
 	}
-	if len(otherServers) != 1 {
-		t.Fatalf("other server count = %d, want 1", len(otherServers))
+	if got := client.SecurityGroupCount(); got != 2 {
+		t.Fatalf("remaining security group count = %d, want 2", got)
 	}
-	matchedLoadBalancers, err := client.ListAPIServerLoadBalancersByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("ListAPIServerLoadBalancersByTags() error = %v", err)
+	if sg := client.FindSecurityGroupByTags(tags); sg != nil {
+		t.Fatalf("unexpected remaining matched security group: %+v", sg)
 	}
-	if len(matchedLoadBalancers) != 0 {
-		t.Fatalf("matched load balancer count = %d, want 0", len(matchedLoadBalancers))
+	if sg := client.FindSecurityGroupByTags(otherTags); sg == nil {
+		t.Fatal("expected other security group to remain")
 	}
-	matchedNetworks, err := client.ListNetworksByTags(ctx, tags)
-	if err != nil {
-		t.Fatalf("ListNetworksByTags() error = %v", err)
+	if got := client.NetworkCount(); got != 1 {
+		t.Fatalf("remaining network count = %d, want 1", got)
 	}
-	if len(matchedNetworks) != 0 {
-		t.Fatalf("matched network count = %d, want 0", len(matchedNetworks))
+	if net := client.FindNetworkByTags(tags); net != nil {
+		t.Fatalf("unexpected remaining matched network: %+v", net)
 	}
-	otherNetworks, err := client.ListNetworksByTags(ctx, otherTags)
-	if err != nil {
-		t.Fatalf("ListNetworksByTags(other) error = %v", err)
+	if net := client.FindNetworkByTags(otherTags); net == nil {
+		t.Fatal("expected other network to remain")
 	}
-	if len(otherNetworks) != 1 {
-		t.Fatalf("other network count = %d, want 1", len(otherNetworks))
+}
+
+func TestCleanupByTagsContinuesWhenIndividualDeletesFail(t *testing.T) {
+	ctx := context.Background()
+	client := cloudfake.New()
+	tags := map[string]string{
+		"cluster-api-provider-stackit/e2e":     "true",
+		"cluster-api-provider-stackit/test-id": "test-partial-fail",
+	}
+
+	createTestResources(t, client, "matched", tags)
+
+	// Inject a transient failure on the first server delete; the remaining
+	// server, load balancer, public IP, unattached security group, and network
+	// should still be cleaned up in the same pass.
+	client.FailNextDeleteServer = fmt.Errorf("injected server delete failure")
+
+	if err := cloud.CleanupByTags(ctx, client, tags); err == nil {
+		t.Fatal("CleanupByTags() error = nil, want non-nil when server delete fails")
+	}
+
+	if got := client.ServerCount(); got != 1 {
+		t.Fatalf("remaining server count = %d, want 1 (the one that failed to delete)", got)
+	}
+	if got := client.LoadBalancerCount(); got != 0 {
+		t.Fatalf("remaining load balancer count = %d, want 0", got)
+	}
+	if got := client.PublicIPCount(); got != 0 {
+		t.Fatalf("remaining public IP count = %d, want 0", got)
+	}
+	if got := client.SecurityGroupCount(); got != 0 {
+		t.Fatalf("remaining security group count = %d, want 0", got)
+	}
+	if got := client.NetworkCount(); got != 0 {
+		t.Fatalf("remaining network count = %d, want 0", got)
 	}
 }

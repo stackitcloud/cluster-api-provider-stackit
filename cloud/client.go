@@ -10,62 +10,22 @@ You may obtain a copy of the License at
 
 package cloud
 
-import "context"
+import (
+	"context"
 
-// Client is the abstraction over STACKIT cloud APIs used by the controllers.
-//
-// Implementations must:
-//   - return ErrNotFound when a resource does not exist
-//   - return ErrUnauthorized for permanent auth failures
-//   - return ErrInvalidInput for permanent input validation errors
-//   - return ErrConflict for retryable conflict errors
-//   - return ErrTransient for retryable transient errors
-//   - be idempotent (CreateServer/EnsureAPIServerLoadBalancer must not produce
-//     duplicates when a resource with matching tags already exists)
+	iaas "github.com/stackitcloud/stackit-sdk-go/services/iaas/v2api"
+	lb "github.com/stackitcloud/stackit-sdk-go/services/loadbalancer/v2api"
+)
+
+// Client provides the target STACKIT project, region, and SDK API clients.
 type Client interface {
-	GetNetwork(ctx context.Context, id string) (*Network, error)
+	ProjectID() string
 
-	FindNetworkByTags(ctx context.Context, tags map[string]string) (*Network, error)
+	Region() string
 
-	ListNetworksByTags(ctx context.Context, tags map[string]string) ([]*Network, error)
+	IaaSClient() *iaas.APIClient
 
-	CreateNetwork(ctx context.Context, input CreateNetworkInput) (*Network, error)
-
-	DeleteNetwork(ctx context.Context, id string) error
-
-	GetServer(ctx context.Context, id string) (*Server, error)
-
-	FindServerByTags(ctx context.Context, tags map[string]string) (*Server, error)
-
-	ListServersByTags(ctx context.Context, tags map[string]string) ([]*Server, error)
-
-	CreateServer(ctx context.Context, input CreateServerInput) (*Server, error)
-
-	DeleteServer(ctx context.Context, id string) error
-
-	EnsureBastion(ctx context.Context, input BastionInput) (*Bastion, error)
-
-	DeleteBastion(ctx context.Context, input BastionInput, status Bastion) error
-
-	EnsureNodeSSHAccess(ctx context.Context, input NodeSSHAccessInput) (*SecurityGroup, error)
-
-	DeleteNodeSSHAccess(ctx context.Context, tags map[string]string) error
-
-	ListPublicIPsByTags(ctx context.Context, tags map[string]string) ([]*PublicIP, error)
-
-	ListSecurityGroupsByTags(ctx context.Context, tags map[string]string) ([]*SecurityGroup, error)
-
-	EnsureAPIServerLoadBalancer(ctx context.Context, input LoadBalancerInput) (*LoadBalancer, error)
-
-	ListAPIServerLoadBalancersByTags(ctx context.Context, tags map[string]string) ([]*LoadBalancer, error)
-
-	// SetAPIServerLoadBalancerTargets replaces the contents of the API-server
-	// target pool. STACKIT rejects an empty pool.
-	SetAPIServerLoadBalancerTargets(ctx context.Context, loadBalancerID string, port int32, targets []LoadBalancerTargetInput) error
-
-	DeleteAPIServerLoadBalancer(ctx context.Context, id string) error
-
-	ListAvailabilityZones(ctx context.Context) ([]string, error)
+	LoadBalancerClient() *lb.APIClient
 }
 
 // Factory builds a Client from credentials (raw bytes from the configured

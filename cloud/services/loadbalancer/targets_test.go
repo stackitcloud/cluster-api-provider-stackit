@@ -19,8 +19,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-
-	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 )
 
 func machineWithAddresses(name string, addresses ...clusterv1.MachineAddress) *clusterv1.Machine {
@@ -38,7 +36,7 @@ func TestAPIServerTargets(t *testing.T) {
 	tests := []struct {
 		name     string
 		machines []*clusterv1.Machine
-		want     []cloud.LoadBalancerTargetInput
+		want     []Target
 	}{
 		{
 			name: "sorts targets by machine name",
@@ -47,7 +45,7 @@ func TestAPIServerTargets(t *testing.T) {
 				machineWithAddresses("cp-0", internalIP("10.0.0.10")),
 				machineWithAddresses("cp-1", internalIP("10.0.0.11")),
 			},
-			want: []cloud.LoadBalancerTargetInput{
+			want: []Target{
 				{Name: "cp-0", IP: "10.0.0.10"},
 				{Name: "cp-1", IP: "10.0.0.11"},
 				{Name: "cp-2", IP: "10.0.0.12"},
@@ -63,7 +61,7 @@ func TestAPIServerTargets(t *testing.T) {
 					Address: "203.0.113.10",
 				}),
 			},
-			want: []cloud.LoadBalancerTargetInput{{Name: "cp-0", IP: "10.0.0.10"}},
+			want: []Target{{Name: "cp-0", IP: "10.0.0.10"}},
 		},
 		{
 			name: "drops a duplicate IP address",
@@ -71,7 +69,7 @@ func TestAPIServerTargets(t *testing.T) {
 				machineWithAddresses("cp-1", internalIP("10.0.0.10")),
 				machineWithAddresses("cp-0", internalIP("10.0.0.10")),
 			},
-			want: []cloud.LoadBalancerTargetInput{{Name: "cp-0", IP: "10.0.0.10"}},
+			want: []Target{{Name: "cp-0", IP: "10.0.0.10"}},
 		},
 		{
 			// The placeholder belongs to the creation path, not here.
@@ -82,7 +80,7 @@ func TestAPIServerTargets(t *testing.T) {
 		{
 			name:     "tolerates nil entries",
 			machines: []*clusterv1.Machine{nil, machineWithAddresses("cp-0", internalIP("10.0.0.11"))},
-			want:     []cloud.LoadBalancerTargetInput{{Name: "cp-0", IP: "10.0.0.11"}},
+			want:     []Target{{Name: "cp-0", IP: "10.0.0.11"}},
 		},
 	}
 

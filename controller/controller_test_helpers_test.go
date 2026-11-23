@@ -23,6 +23,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
+	"github.com/stackitcloud/cluster-api-provider-stackit/scope"
 )
 
 const (
@@ -118,7 +119,7 @@ func createReadyStackitCluster(ctx context.Context, name, namespace, credentials
 	Expect(k8sClient.Create(ctx, stackitCluster)).To(Succeed())
 	stackitCluster.Status.Ready = true
 	stackitCluster.Status.APIServerEndpoint = clusterv1.APIEndpoint{Host: "203.0.113.10", Port: 6443}
-	stackitCluster.Status.FailureDomains = stackitFailureDomains(stackitCluster.Spec.Region)
+	stackitCluster.Status.FailureDomains = scope.DefaultFailureDomains(stackitCluster.Spec.Region)
 	Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
 }
 

@@ -13,8 +13,6 @@ package controller
 import "time"
 
 const (
-	defaultAPIServerPort int32 = 6443
-
 	cloudInitRefKindSecret = "Secret"
 
 	retryableErrorRequeueAfter = 5 * time.Second

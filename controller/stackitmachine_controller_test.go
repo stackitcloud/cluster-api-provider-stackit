@@ -28,6 +28,9 @@ import (
 	infrav1 "github.com/stackitcloud/cluster-api-provider-stackit/api/v1alpha1"
 	"github.com/stackitcloud/cluster-api-provider-stackit/cloud"
 	cloudfake "github.com/stackitcloud/cluster-api-provider-stackit/cloud/fake"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/network"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/securitygroup"
+	"github.com/stackitcloud/cluster-api-provider-stackit/cloud/services/shared"
 	"github.com/stackitcloud/cluster-api-provider-stackit/util"
 )
 
@@ -58,7 +61,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		bootstrapName = fmt.Sprintf("bootstrap-%d", suffix)
 		stackitKey = types.NamespacedName{Namespace: namespace, Name: stackitName}
 		request = reconcile.Request{NamespacedName: stackitKey}
-		fakeCloud = cloudfake.New(cloud.Network{ID: testNetworkID, Name: "network"})
+		fakeCloud = cloudfake.New(network.Network{ID: testNetworkID, Name: "network"})
 		reconciler = &StackitMachineReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
@@ -153,7 +156,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(instanceID).NotTo(BeEmpty())
 
 			By("removing the server behind the provider's back")
-			Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+			fakeCloud.DeleteServer(instanceID)
 			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 			By("reconciling again")
@@ -237,15 +240,44 @@ var _ = Describe("StackitMachine Controller", func() {
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			Expect(got.Status.Ready).To(BeTrue())
-			Expect(fakeCloud.EnsureNodeSSHCalls).To(Equal(1))
-			securityGroups, err := fakeCloud.ListSecurityGroupsByTags(ctx, map[string]string{
+			Expect(fakeCloud.AddSecurityGroupCalls).To(Equal(1))
+			securityGroup := fakeCloud.FindSecurityGroupByTags(map[string]string{
 				util.LabelClusterName:  clusterName,
 				util.LabelResourceRole: util.ResourceRoleNodeSSH,
 			})
+			Expect(securityGroup).NotTo(BeNil())
+			Expect(fakeCloud.SecurityGroupRules(securityGroup.ID)).To(ConsistOf(
+				securitygroup.Rule{
+					Direction:             securitygroup.DirectionIngress,
+					Protocol:              securitygroup.ProtocolTCP,
+					PortMin:               22,
+					PortMax:               22,
+					RemoteSecurityGroupID: "bastion-sg",
+				},
+				securitygroup.Rule{
+					Direction: securitygroup.DirectionEgress,
+				},
+			))
+			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroup.ID)).To(BeTrue())
+		})
+
+		It("requeues when bastion is enabled and bastion security group does not exist yet", func() {
+			stackitCluster := &infrav1.StackitCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, stackitCluster)).To(Succeed())
+			stackitCluster.Spec.Bastion = validBastionSpec()
+			Expect(k8sClient.Update(ctx, stackitCluster)).To(Succeed())
+			stackitCluster.Status.Ready = true
+			stackitCluster.Status.Bastion.SecurityGroupID = ""
+			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(securityGroups).To(HaveLen(1))
-			Expect(fakeCloud.SecurityGroupRemoteSources(securityGroups[0].ID)).To(ConsistOf("bastion-sg"))
-			Expect(fakeCloud.ServerHasSecurityGroup(got.Status.InstanceID, securityGroups[0].ID)).To(BeTrue())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			got := &infrav1.StackitMachine{}
+			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
+			Expect(got.Status.Ready).To(BeFalse())
+			expectCondition(got.Status.Conditions, infrav1.MachineReadyCondition, metav1.ConditionFalse, "BastionSSHAccessError")
 		})
 
 		It("marks conditions not ready when bastion node SSH access fails", func() {
@@ -257,7 +289,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			stackitCluster.Status.Bastion.SecurityGroupID = "bastion-sg"
 			Expect(k8sClient.Status().Update(ctx, stackitCluster)).To(Succeed())
 
-			fakeCloud.FailNextEnsureNodeSSH = fmt.Errorf("node ssh access timeout: %w", cloud.ErrTransient)
+			fakeCloud.FailNextAddSecurityGroup = fmt.Errorf("node ssh access timeout: %w", shared.ErrTransient)
 
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -351,7 +383,7 @@ var _ = Describe("StackitMachine Controller", func() {
 
 		It("requeues on unauthorized credentials and recovers once they are corrected", func() {
 			reconciler.CloudClientFactory = func(context.Context, cloud.Credentials) (cloud.Client, error) {
-				return nil, fmt.Errorf("authenticate: %w", cloud.ErrUnauthorized)
+				return nil, fmt.Errorf("authenticate: %w", shared.ErrUnauthorized)
 			}
 
 			result, err := reconciler.Reconcile(ctx, request)
@@ -424,7 +456,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("requeues when server lookup returns a conflict", func() {
-			fakeCloud.FailNextFindServer = fmt.Errorf("multiple matching servers: %w", cloud.ErrConflict)
+			fakeCloud.FailNextFindServer = fmt.Errorf("multiple matching servers: %w", shared.ErrConflict)
 
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -438,7 +470,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("requeues when VM creation returns a transient error", func() {
-			fakeCloud.FailNextCreateServer = fmt.Errorf("create server timeout: %w", cloud.ErrTransient)
+			fakeCloud.FailNextCreateServer = fmt.Errorf("create server timeout: %w", shared.ErrTransient)
 
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -452,7 +484,7 @@ var _ = Describe("StackitMachine Controller", func() {
 		})
 
 		It("returns an error when VM creation is rejected", func() {
-			fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", cloud.ErrInvalidInput)
+			fakeCloud.FailNextCreateServer = fmt.Errorf("create server rejected: %w", shared.ErrInvalidInput)
 
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).To(HaveOccurred())
@@ -492,7 +524,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 
-			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server timeout: %w", cloud.ErrTransient)
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server timeout: %w", shared.ErrTransient)
 
 			_, err = reconciler.Reconcile(ctx, request)
 			Expect(err).To(HaveOccurred())
@@ -527,7 +559,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			Expect(instanceID).NotTo(BeEmpty())
 
 			By("removing the server behind the provider's back")
-			Expect(fakeCloud.DeleteServer(ctx, instanceID)).To(Succeed())
+			fakeCloud.DeleteServer(instanceID)
 			Expect(fakeCloud.ServerCount()).To(Equal(0))
 
 			By("reconciling into the terminal state")
@@ -542,7 +574,7 @@ var _ = Describe("StackitMachine Controller", func() {
 			By("deleting the object while the cloud reports the server as gone")
 			// The fake deletes an unknown ID without an error, so the not-found answer
 			// of the cloud must be injected.
-			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrNotFound)
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", shared.ErrNotFound)
 
 			Expect(k8sClient.Delete(ctx, degraded)).To(Succeed())
 
@@ -597,12 +629,12 @@ var _ = Describe("StackitMachine Controller", func() {
 
 			got := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, got)).To(Succeed())
-			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", cloud.ErrTransient)
+			fakeCloud.FailNextDeleteServer = fmt.Errorf("delete server: %w", shared.ErrTransient)
 
 			Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 			_, err = reconciler.Reconcile(ctx, request)
 
-			Expect(err).To(MatchError(cloud.ErrTransient))
+			Expect(err).To(MatchError(shared.ErrTransient))
 			Expect(fakeCloud.ServerCount()).To(Equal(1))
 			stillThere := &infrav1.StackitMachine{}
 			Expect(k8sClient.Get(ctx, stackitKey, stillThere)).To(Succeed())
