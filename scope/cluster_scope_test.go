@@ -385,6 +385,91 @@ func TestMachineScopeSecurityGroupSpecsRespectsBastionEnabled(t *testing.T) {
 	}
 }
 
+func TestNetworkSpec(t *testing.T) {
+	t.Run("defaults to DefaultNetworkPrefix when prefix and prefixLength are empty", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-cluster"},
+			},
+		}
+		spec := clusterScope.NetworkSpec()
+		if spec.IPv4Prefix != network.DefaultNetworkPrefix {
+			t.Fatalf("IPv4Prefix = %q, want %q", spec.IPv4Prefix, network.DefaultNetworkPrefix)
+		}
+		if spec.IPv4PrefixLength != nil {
+			t.Fatalf("IPv4PrefixLength = %v, want nil", spec.IPv4PrefixLength)
+		}
+		if !spec.Managed {
+			t.Fatal("Managed = false, want true")
+		}
+	})
+
+	t.Run("uses custom prefix when specified", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-cluster"},
+				Spec: infrav1.StackitClusterSpec{
+					Network: infrav1.StackitClusterNetworkSpec{
+						Prefix: "10.0.5.0/24",
+					},
+				},
+			},
+		}
+		spec := clusterScope.NetworkSpec()
+		if spec.IPv4Prefix != "10.0.5.0/24" {
+			t.Fatalf("IPv4Prefix = %q, want 10.0.5.0/24", spec.IPv4Prefix)
+		}
+		if spec.IPv4PrefixLength != nil {
+			t.Fatalf("IPv4PrefixLength = %v, want nil", spec.IPv4PrefixLength)
+		}
+		if !spec.Managed {
+			t.Fatal("Managed = false, want true")
+		}
+	})
+
+	t.Run("uses prefixLength when specified", func(t *testing.T) {
+		prefixLen := int32(24)
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-cluster"},
+				Spec: infrav1.StackitClusterSpec{
+					Network: infrav1.StackitClusterNetworkSpec{
+						PrefixLength: &prefixLen,
+					},
+				},
+			},
+		}
+		spec := clusterScope.NetworkSpec()
+		if spec.IPv4Prefix != "" {
+			t.Fatalf("IPv4Prefix = %q, want empty", spec.IPv4Prefix)
+		}
+		if spec.IPv4PrefixLength == nil || *spec.IPv4PrefixLength != 24 {
+			t.Fatalf("IPv4PrefixLength = %v, want 24", spec.IPv4PrefixLength)
+		}
+		if !spec.Managed {
+			t.Fatal("Managed = false, want true")
+		}
+	})
+
+	t.Run("records IPv4Prefixes in status via SetNetwork", func(t *testing.T) {
+		clusterScope := &ClusterScope{
+			StackitCluster: &infrav1.StackitCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-cluster"},
+			},
+		}
+		clusterScope.NetworkSpec().SetNetwork(&network.Network{
+			ID:           "net-123",
+			IPv4Prefixes: []string{"10.0.5.0/24"},
+		}, true)
+		if clusterScope.StackitCluster.Status.Network.ID != "net-123" {
+			t.Fatalf("Status.Network.ID = %q, want net-123", clusterScope.StackitCluster.Status.Network.ID)
+		}
+		if len(clusterScope.StackitCluster.Status.Network.IPv4Prefixes) != 1 || clusterScope.StackitCluster.Status.Network.IPv4Prefixes[0] != "10.0.5.0/24" {
+			t.Fatalf("Status.Network.IPv4Prefixes = %v, want [10.0.5.0/24]", clusterScope.StackitCluster.Status.Network.IPv4Prefixes)
+		}
+	})
+}
+
 func TestBootstrapTargetIP(t *testing.T) {
 	clusterScope := &ClusterScope{
 		StackitCluster: &infrav1.StackitCluster{},

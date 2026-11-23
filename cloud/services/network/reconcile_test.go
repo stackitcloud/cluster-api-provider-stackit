@@ -91,6 +91,33 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	}
 }
 
+func newCreateNetworkHandler(t *testing.T, createdPayload *map[string]any, prefixes []any) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
+			writeJSON(t, w, map[string]any{"items": []any{}})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks") {
+			if createdPayload != nil {
+				if err := json.NewDecoder(r.Body).Decode(createdPayload); err != nil {
+					t.Fatalf("decode payload: %v", err)
+				}
+			}
+			writeJSON(t, w, map[string]any{
+				"id":     testNetworkID,
+				"name":   "test-network",
+				"status": "CREATED",
+				"ipv4": map[string]any{
+					"prefixes": prefixes,
+				},
+			})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+	}
+}
+
 func TestServiceReconcile(t *testing.T) {
 	t.Run("fetches network and records IPv4 prefixes via SetNetwork", func(t *testing.T) {
 		var (
@@ -161,7 +188,9 @@ func TestServiceReconcile(t *testing.T) {
 			t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 		}
 	})
+}
 
+func TestServiceReconcileManagedNetwork(t *testing.T) {
 	t.Run("creates managed network when none exists", func(t *testing.T) {
 		var (
 			recorded       *network.Network
@@ -179,27 +208,8 @@ func TestServiceReconcile(t *testing.T) {
 			},
 		}
 
-		svc := newTestService(t, spec, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks") {
-				writeJSON(t, w, map[string]any{"items": []any{}})
-				return
-			}
-			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks") {
-				if err := json.NewDecoder(r.Body).Decode(&createdPayload); err != nil {
-					t.Fatalf("decode payload: %v", err)
-				}
-				writeJSON(t, w, map[string]any{
-					"id":     testNetworkID,
-					"name":   "test-network",
-					"status": "CREATED",
-					"ipv4": map[string]any{
-						"prefixes": []any{"10.0.0.0/24"},
-					},
-				})
-				return
-			}
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
-		}))
+		handler := newCreateNetworkHandler(t, &createdPayload, []any{"10.0.0.0/24"})
+		svc := newTestService(t, spec, handler)
 
 		if err := svc.Reconcile(context.Background()); err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
@@ -212,6 +222,69 @@ func TestServiceReconcile(t *testing.T) {
 		}
 		if createdPayload["name"] != "test-network" {
 			t.Fatalf("payload name = %v, want test-network", createdPayload["name"])
+		}
+	})
+
+	t.Run("creates managed network with custom IPv4 prefix", func(t *testing.T) {
+		var createdPayload map[string]any
+		spec := network.NetworkSpec{
+			Name:       "test-network",
+			IPv4Prefix: "10.0.1.0/24",
+			Tags:       map[string]string{"cluster": "test-cluster"},
+			Managed:    true,
+		}
+
+		handler := newCreateNetworkHandler(t, &createdPayload, []any{"10.0.1.0/24"})
+		svc := newTestService(t, spec, handler)
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		ipv4, ok := createdPayload["ipv4"].(map[string]any)
+		if !ok || ipv4["prefix"] != "10.0.1.0/24" {
+			t.Fatalf("payload ipv4 prefix = %v, want 10.0.1.0/24", createdPayload["ipv4"])
+		}
+	})
+
+	t.Run("creates managed network with IPv4 prefix length", func(t *testing.T) {
+		var createdPayload map[string]any
+		prefixLen := int32(24)
+		spec := network.NetworkSpec{
+			Name:             "test-network",
+			IPv4PrefixLength: &prefixLen,
+			Tags:             map[string]string{"cluster": "test-cluster"},
+			Managed:          true,
+		}
+
+		handler := newCreateNetworkHandler(t, &createdPayload, []any{"10.0.2.0/24"})
+		svc := newTestService(t, spec, handler)
+
+		if err := svc.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		ipv4, ok := createdPayload["ipv4"].(map[string]any)
+		if !ok || ipv4["prefixLength"] != float64(24) {
+			t.Fatalf("payload ipv4 prefixLength = %v, want 24", createdPayload["ipv4"])
+		}
+	})
+
+	t.Run("returns ErrInvalidInput when both prefix and prefixLength are set", func(t *testing.T) {
+		prefixLen := int32(24)
+		spec := network.NetworkSpec{
+			Name:             "test-network",
+			IPv4Prefix:       "10.0.0.0/24",
+			IPv4PrefixLength: &prefixLen,
+			Tags:             map[string]string{"cluster": "test-cluster"},
+			Managed:          true,
+		}
+
+		svc := newTestService(t, spec, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}))
+
+		err := svc.Reconcile(context.Background())
+		if !errors.Is(err, shared.ErrInvalidInput) {
+			t.Fatalf("Reconcile() error = %v, want ErrInvalidInput", err)
 		}
 	})
 

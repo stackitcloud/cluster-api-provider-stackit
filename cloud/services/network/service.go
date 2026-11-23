@@ -24,12 +24,13 @@ type Network struct {
 
 // NetworkSpec describes the desired state of a STACKIT network.
 type NetworkSpec struct {
-	ID         string
-	Name       string
-	IPv4Prefix string
-	Tags       map[string]string
-	Managed    bool
-	SetNetwork func(network *Network, created bool)
+	ID               string
+	Name             string
+	IPv4Prefix       string
+	IPv4PrefixLength *int32
+	Tags             map[string]string
+	Managed          bool
+	SetNetwork       func(network *Network, created bool)
 }
 
 // Scope is an interface that provides scope data needed for network reconciliation.

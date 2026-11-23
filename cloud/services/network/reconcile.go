@@ -160,6 +160,9 @@ func (s NetworkSpec) validate() error {
 		if len(s.Tags) == 0 {
 			return fmt.Errorf("%w: network tags are required", shared.ErrInvalidInput)
 		}
+		if s.IPv4Prefix != "" && s.IPv4PrefixLength != nil {
+			return fmt.Errorf("%w: network prefix and prefixLength are mutually exclusive", shared.ErrInvalidInput)
+		}
 		return nil
 	}
 	if s.ID == "" {
@@ -176,6 +179,9 @@ func (s NetworkSpec) toCreatePayload() iaas.CreateNetworkPayload {
 	if s.IPv4Prefix != "" {
 		ipv4Payload := iaas.NewCreateNetworkIPv4WithPrefix(s.IPv4Prefix)
 		payload.SetIpv4(iaas.CreateNetworkIPv4WithPrefixAsCreateNetworkIPv4(ipv4Payload))
+	} else if s.IPv4PrefixLength != nil {
+		ipv4Payload := iaas.NewCreateNetworkIPv4WithPrefixLength(int64(*s.IPv4PrefixLength))
+		payload.SetIpv4(iaas.CreateNetworkIPv4WithPrefixLengthAsCreateNetworkIPv4(ipv4Payload))
 	}
 	return *payload
 }

@@ -380,8 +380,9 @@ func (s *ClusterScope) setNetwork(net *network.Network, created bool) {
 	s.network = net
 	s.networkCreated = created
 	s.StackitCluster.Status.Network = infrav1.StackitNetworkStatus{
-		ID:      net.ID,
-		Managed: s.StackitCluster.Spec.Network.ID == "",
+		ID:           net.ID,
+		Managed:      s.StackitCluster.Spec.Network.ID == "",
+		IPv4Prefixes: net.IPv4Prefixes,
 	}
 }
 
@@ -392,14 +393,20 @@ func (s *ClusterScope) NetworkSpec() network.NetworkSpec {
 			SetNetwork: s.setNetwork,
 		}
 	}
-	return network.NetworkSpec{
-		ID:         s.StackitCluster.Status.Network.ID,
-		Name:       s.StackitCluster.Name + "-network",
-		IPv4Prefix: network.DefaultNetworkPrefix,
-		Tags:       util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels),
-		Managed:    true,
-		SetNetwork: s.setNetwork,
+	spec := network.NetworkSpec{
+		ID:               s.StackitCluster.Status.Network.ID,
+		Name:             s.StackitCluster.Name + "-network",
+		Tags:             util.ClusterTags(s.StackitCluster.Name, s.StackitCluster.Namespace, s.StackitCluster.Spec.AdditionalLabels),
+		Managed:          true,
+		SetNetwork:       s.setNetwork,
+		IPv4PrefixLength: s.StackitCluster.Spec.Network.PrefixLength,
 	}
+	if s.StackitCluster.Spec.Network.Prefix != "" {
+		spec.IPv4Prefix = s.StackitCluster.Spec.Network.Prefix
+	} else if spec.IPv4PrefixLength == nil {
+		spec.IPv4Prefix = network.DefaultNetworkPrefix
+	}
+	return spec
 }
 
 func (s *ClusterScope) BootstrapTargetIP() string {
