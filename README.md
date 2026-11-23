@@ -1,5 +1,5 @@
 <p align="center">
-<img src="https://raw.githubusercontent.com/kubernetes-sigs/cluster-api/refs/heads/main/docs/logos/kubernetes-cluster-logos_final-02.svg" height="150px"><a href="https://stackit.com/"><img height="150px" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
+<img src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/CAPSTK.svg" height="150px"><a href="https://stackit.com/"><img height="150px" src="https://raw.githubusercontent.com/stackitcloud/cluster-api-provider-stackit/refs/heads/main/docs/src/STACKIT_Logo_RGB_Regular_Navyblue-MZ.svg" alt="STACKIT - A Brand By Schwarz Digits"></a>
 </p>
 
 <p align="center">
@@ -67,8 +67,8 @@ Check out the [Quick Start](docs/src/quick-start.md) for launching a cluster on 
 - [x] [ClusterClass Topology](https://cluster-api.sigs.k8s.io/tasks/experimental-features/cluster-class/)
 - [x] Support various Linux Distributions (tested with [Ubuntu and Flatcar](docs/src/topics/images.md))
 - [x] Release distribution via OCI Images and Manifests
-- [ ] Manage the bootstrapping of networks, security groups and vm instances.
-  - [ ] Deploys Kubernetes control planes into private subnets with a separate bastion server.
+- [X] Manage the bootstrapping of networks, security groups and vm instances.
+  - [X] Deploys Kubernetes control planes into private subnets with a separate bastion server.
 - [ ] [SKE](https://stackit.com/de/produkte/runtime/stackit-kubernetes-engine) support
 
 ------
