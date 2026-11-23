@@ -93,8 +93,8 @@ Wait until the locally built provider is ready:
 
 ```sh
 kubectl rollout status \
-  --namespace cluster-api-provider-stackit-system \
-  deployment/cluster-api-provider-stackit-controller-manager
+  --namespace capstk-system \
+  deployment/capstk-controller-manager
 ```
 
 ## Configure STACKIT and create a workload cluster
@@ -184,7 +184,7 @@ If resources persist after several minutes:
    kubectl logs -n capi-system deployment/capi-controller-manager -c manager --tail=100
 
    # STACKIT provider controller
-   kubectl logs -n cluster-api-provider-stackit-system deployment/cluster-api-provider-stackit-controller-manager --tail=100
+   kubectl logs -n capstk-system deployment/capstk-controller-manager --tail=100
    ```
 
 3. If a `StackitMachine` cannot finish deletion and blocks its parent resources, you can remove its finalizer:

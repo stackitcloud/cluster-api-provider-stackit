@@ -130,9 +130,9 @@ Tilt should deploy:
 Verify the provider pod:
 
 ```sh
-kubectl get pods -n cluster-api-provider-stackit-system
-kubectl logs -n cluster-api-provider-stackit-system \
-  deployment/cluster-api-provider-stackit-controller-manager \
+kubectl get pods -n capstk-system
+kubectl logs -n capstk-system \
+  deployment/capstk-controller-manager \
   -c manager
 ```
 

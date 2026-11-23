@@ -39,16 +39,16 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "cluster-api-provider-stackit-system"
+const namespace = "capstk-system"
 
 // serviceAccountName created for the project
-const serviceAccountName = "cluster-api-provider-stackit-controller-manager"
+const serviceAccountName = "capstk-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "cluster-api-provider-stackit-controller-manager-metrics-service"
+const metricsServiceName = "capstk-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "cluster-api-provider-stackit-metrics-binding"
+const metricsRoleBindingName = "capstk-metrics-binding"
 
 const stackitE2EMachineType = "c2i.2"
 
@@ -96,10 +96,10 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 
 		By("restarting the controller-manager to pick up the freshly loaded image")
-		cmd = exec.Command("kubectl", "rollout", "restart", "deployment/cluster-api-provider-stackit-controller-manager", "-n", namespace)
+		cmd = exec.Command("kubectl", "rollout", "restart", "deployment/capstk-controller-manager", "-n", namespace)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to restart the controller-manager")
-		cmd = exec.Command("kubectl", "rollout", "status", "deployment/cluster-api-provider-stackit-controller-manager", "-n", namespace, "--timeout=5m")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/capstk-controller-manager", "-n", namespace, "--timeout=5m")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "controller-manager did not roll out")
 	})
@@ -206,7 +206,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=cluster-api-provider-stackit-metrics-reader",
+				"--clusterrole=capstk-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
 			_, err := utils.Run(cmd)
@@ -245,7 +245,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("waiting for the webhook service endpoints to be ready")
 			verifyWebhookEndpointsReady := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "endpointslices.discovery.k8s.io", "-n", namespace,
-					"-l", "kubernetes.io/service-name=cluster-api-provider-stackit-webhook-service",
+					"-l", "kubernetes.io/service-name=capstk-webhook-service",
 					"-o", "jsonpath={range .items[*]}{range .endpoints[*]}{.addresses[*]}{end}{end}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Webhook endpoints should exist")
@@ -256,7 +256,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the mutating webhook server is ready")
 			verifyMutatingWebhookReady := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "mutatingwebhookconfigurations.admissionregistration.k8s.io",
-					"cluster-api-provider-stackit-mutating-webhook-configuration",
+					"capstk-mutating-webhook-configuration",
 					"-o", "jsonpath={.webhooks[0].clientConfig.caBundle}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "MutatingWebhookConfiguration should exist")
@@ -267,7 +267,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the validating webhook server is ready")
 			verifyValidatingWebhookReady := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "validatingwebhookconfigurations.admissionregistration.k8s.io",
-					"cluster-api-provider-stackit-validating-webhook-configuration",
+					"capstk-validating-webhook-configuration",
 					"-o", "jsonpath={.webhooks[0].clientConfig.caBundle}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "ValidatingWebhookConfiguration should exist")
@@ -349,7 +349,7 @@ var _ = Describe("Manager", Ordered, func() {
 			verifyCAInjection := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get",
 					"mutatingwebhookconfigurations.admissionregistration.k8s.io",
-					"cluster-api-provider-stackit-mutating-webhook-configuration",
+					"capstk-mutating-webhook-configuration",
 					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
 				mwhOutput, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
@@ -363,7 +363,7 @@ var _ = Describe("Manager", Ordered, func() {
 			verifyCAInjection := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get",
 					"validatingwebhookconfigurations.admissionregistration.k8s.io",
-					"cluster-api-provider-stackit-validating-webhook-configuration",
+					"capstk-validating-webhook-configuration",
 					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
 				vwhOutput, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
