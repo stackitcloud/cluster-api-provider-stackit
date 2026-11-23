@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-<a href="https://godoc.org/github.com/stackitcloud/cluster-api-provider-stackit"><img src="https://godoc.org/github.com/stackitcloud/cluster-api-provider-stackit?status.svg"></a>
+<a href="https://pkg.go.dev/github.com/stackitcloud/cluster-api-provider-stackit"><img src="https://pkg.go.dev/badge/github.com/stackitcloud/cluster-api-provider-stackit.svg" alt="Go Reference"></a>
 <img alt="GitHub release" src="https://img.shields.io/github/v/release/stackitcloud/cluster-api-provider-stackit">
 </p>
 
@@ -36,19 +36,19 @@ Use `make serve-book` to serve the book locally from this repository.
 ## Install with clusterctl
 
 Create `clusterctl.yaml` with the published release URL. Replace `<version>`
-with the release tag you want to install.
+with the release tag you want to install (e.g. `v0.1.0-alpha.5`).
 
 ```yaml
 providers:
   - name: stackit
-    url: https://github.com/stackitcloud/cluster-api-provider-stackit/releases/download/v<version>/infrastructure-components.yaml
+    url: https://github.com/stackitcloud/cluster-api-provider-stackit/releases/download/<version>/infrastructure-components.yaml
     type: InfrastructureProvider
 ```
 
 Install the provider:
 
 ```sh
-clusterctl init --config clusterctl.yaml --infrastructure stackit:v<version>
+clusterctl init --config clusterctl.yaml --infrastructure stackit:<version>
 ```
 
 ## Launching a Kubernetes cluster on STACKIT
@@ -61,22 +61,24 @@ Check out the [Quick Start](docs/src/quick-start.md) for launching a cluster on 
 - [x] Doesn't use SSH for bootstrapping nodes.
 - [x] Installs only the minimal components to bootstrap a control plane and workers.
 - [x] Supports control planes and worker nodes on STACKIT VM instances.
-- [x] Manages the bootstrapping of security groups and vm instances (networks are excluded for now).
-- [x] [Optional Bastion hosts](docs/src/topics/accessing-vm-instances.md) for easier access of control plane or worker nodes
-- [x] Tested Kubernetes Lifecycle (Scaling, Kubernetes Upgrades), see [E2E-Tests](docs/src/development/testing.md)
-- [x] [ClusterClass Topology](https://cluster-api.sigs.k8s.io/tasks/experimental-features/cluster-class/)
-- [x] Support various Linux Distributions (tested with [Ubuntu and Flatcar](docs/src/topics/images.md))
-- [x] Release distribution via OCI Images and Manifests
-- [X] Manage the bootstrapping of networks, security groups and vm instances.
-  - [X] Deploys Kubernetes control planes into private subnets with a separate bastion server.
-- [ ] [SKE](https://stackit.com/de/produkte/runtime/stackit-kubernetes-engine) support
+- [x] Manage the bootstrapping of networks (managed dedicated network or existing network), security groups, and VM instances.
+  - [x] Deploys Kubernetes control planes into private subnets with an optional bastion server.
+- [x] Provider-managed STACKIT Load Balancer for the Kubernetes API server.
+- [x] [Optional Bastion hosts](docs/src/topics/accessing-vm-instances.md) for easier access of control plane or worker nodes.
+- [x] Support for [Failure Domains and Availability Zones](docs/src/topics/failure-domains.md).
+- [x] Automated node health remediation via MachineHealthCheck.
+- [x] Tested Kubernetes Lifecycle (Scaling, Kubernetes Upgrades), see [E2E-Tests](docs/src/development/testing.md).
+- [x] [ClusterClass Topology](https://cluster-api.sigs.k8s.io/tasks/experimental-features/cluster-class/).
+- [x] Support various Linux Distributions (tested with [Ubuntu and Flatcar](docs/src/topics/images.md)).
+- [x] Release distribution via OCI Images and Manifests.
+- [ ] [SKE](https://stackit.com/de/produkte/runtime/stackit-kubernetes-engine) support.
 
 ------
 
 ## Compatibility with Cluster API and Kubernetes Versions
 
 This provider's versions are compatible with the following versions of Cluster API
-and support all Kubernetes versions that is supported by its compatible Cluster API version:
+and supports all Kubernetes versions that are supported by its compatible Cluster API version:
 
 |                          | Cluster API v1alpha4 (v0.4) | Cluster API v1beta1 | Cluster API v1beta2 |
 | ------------------------ | :-------------------------: | :-----------------: | :-----------------: |
