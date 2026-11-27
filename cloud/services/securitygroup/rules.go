@@ -157,6 +157,11 @@ func (p Protocol) normalize() Protocol {
 
 func (r Rule) normalize() Rule {
 	r.Protocol = r.Protocol.normalize()
+	if r.IPRange != "" {
+		if prefix, err := netip.ParsePrefix(r.IPRange); err == nil {
+			r.IPRange = prefix.Masked().String()
+		}
+	}
 	return r
 }
 
@@ -196,7 +201,7 @@ func hasRule(rules []iaas.SecurityGroupRule, desired Rule) bool {
 func ruleFromSDK(in iaas.SecurityGroupRule) Rule {
 	var ruleProtocol Protocol
 	if protocol, ok := in.GetProtocolOk(); ok {
-		ruleProtocol = Protocol(protocol.GetName()).normalize()
+		ruleProtocol = Protocol(protocol.GetName())
 	}
 	var portMin, portMax int64
 	if portRange, ok := in.GetPortRangeOk(); ok {
@@ -210,5 +215,5 @@ func ruleFromSDK(in iaas.SecurityGroupRule) Rule {
 		PortMax:               portMax,
 		IPRange:               in.GetIpRange(),
 		RemoteSecurityGroupID: in.GetRemoteSecurityGroupId(),
-	}
+	}.normalize()
 }
