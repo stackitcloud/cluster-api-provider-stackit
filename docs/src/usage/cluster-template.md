@@ -45,7 +45,7 @@ kubectl apply -f "${CLUSTER_NAME}.yaml"
 
 ## Deploying with a Managed Network
 
-When using `templates/cluster-template-managed-network.yaml`, `STACKIT_NETWORK_ID` is omitted. CAPSTK automatically provisions a dedicated `/24` network during `StackitCluster` reconciliation and publishes its ID to `StackitCluster.status.network.id`.
+When using `templates/cluster-template-managed-network.yaml`, `STACKIT_NETWORK_ID` is omitted. CAPSTK automatically provisions a dedicated network (customizable via `STACKIT_NETWORK_PREFIX`, defaulting to `10.0.0.0/24`) during `StackitCluster` reconciliation and publishes its ID and prefixes to `StackitCluster.status.network`.
 
 Render and apply the cluster:
 

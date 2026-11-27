@@ -74,12 +74,29 @@ type StackitClusterSpec struct {
 }
 
 // StackitClusterNetworkSpec references the network for a StackitCluster.
+// +kubebuilder:validation:XValidation:rule="!has(self.id) || (!has(self.prefix) && !has(self.prefixLength))",message="id cannot be combined with prefix or prefixLength"
+// +kubebuilder:validation:XValidation:rule="!has(self.prefix) || !has(self.prefixLength)",message="prefix and prefixLength are mutually exclusive"
 type StackitClusterNetworkSpec struct {
 	// id is the STACKIT network ID.
 	// Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F-]{36}$`
 	// +optional
 	ID string `json:"id,omitempty"`
+
+	// prefix is the IPv4 CIDR block used when creating a managed network (e.g. "10.0.0.0/24").
+	// Defaults to "10.0.0.0/24" if neither id, prefix, nor prefixLength is specified.
+	// Mutually exclusive with id and prefixLength.
+	// +kubebuilder:validation:Format=cidr
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+
+	// prefixLength is the subnet mask size (e.g. 24 for a /24) when letting STACKIT IPAM
+	// allocate a prefix dynamically from the project's Network Area.
+	// Mutually exclusive with id and prefix.
+	// +kubebuilder:validation:Minimum=8
+	// +kubebuilder:validation:Maximum=29
+	// +optional
+	PrefixLength *int32 `json:"prefixLength,omitempty"`
 }
 
 // StackitAPIServerLoadBalancerSpec configures an optional load balancer for
@@ -229,6 +246,9 @@ type StackitNetworkStatus struct {
 	// managed indicates whether the network is managed (created and owned) by CAPSTK.
 	// +optional
 	Managed bool `json:"managed,omitempty"`
+	// ipv4Prefixes is the list of IPv4 prefixes allocated to the network.
+	// +optional
+	IPv4Prefixes []string `json:"ipv4Prefixes,omitempty"`
 }
 
 // Condition types maintained by the StackitClusterReconciler.

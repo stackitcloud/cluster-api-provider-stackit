@@ -245,7 +245,28 @@ spec:
                               Omitting the network ID provisions a dedicated managed STACKIT network for the cluster.
                             pattern: ^[0-9a-fA-F-]{36}$
                             type: string
+                          prefix:
+                            description: |-
+                              prefix is the IPv4 CIDR block used when creating a managed network (e.g. "10.0.0.0/24").
+                              Defaults to "10.0.0.0/24" if neither id, prefix, nor prefixLength is specified.
+                              Mutually exclusive with id and prefixLength.
+                            format: cidr
+                            type: string
+                          prefixLength:
+                            description: |-
+                              prefixLength is the subnet mask size (e.g. 24 for a /24) when letting STACKIT IPAM
+                              allocate a prefix dynamically from the project's Network Area.
+                              Mutually exclusive with id and prefix.
+                            format: int32
+                            maximum: 29
+                            minimum: 8
+                            type: integer
                         type: object
+                        x-kubernetes-validations:
+                        - message: id cannot be combined with prefix or prefixLength
+                          rule: '!has(self.id) || (!has(self.prefix) && !has(self.prefixLength))'
+                        - message: prefix and prefixLength are mutually exclusive
+                          rule: '!has(self.prefix) || !has(self.prefixLength)'
                       projectID:
                         description: projectID is the STACKIT project that owns the
                           cluster infrastructure.
